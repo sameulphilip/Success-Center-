@@ -2,9 +2,95 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { PaymentStatus, PayoutStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
+function startOfDay(d = new Date()) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function endOfDay(d = new Date()) {
+  const x = new Date(d);
+  x.setHours(23, 59, 59, 999);
+  return x;
+}
+
 @Injectable()
 export class FinanceService {
   constructor(private readonly prisma: PrismaService) {}
+
+  /** KPIs aligned with dashboard collection / outstanding math. */
+  async summary() {
+    const today = new Date();
+    const start = startOfDay(today);
+    const end = endOfDay(today);
+    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+
+    const [
+      paymentsTodayAgg,
+      paymentsMonthAgg,
+      paymentsAllAgg,
+      outstandingInvoices,
+      invoiceCount,
+      paymentCount,
+    ] = await Promise.all([
+      this.prisma.payment.aggregate({
+        where: { paidAt: { gte: start, lte: end } },
+        _sum: { amount: true },
+        _count: true,
+      }),
+      this.prisma.payment.aggregate({
+        where: { paidAt: { gte: monthStart, lte: end } },
+        _sum: { amount: true },
+        _count: true,
+      }),
+      this.prisma.payment.aggregate({
+        _sum: { amount: true },
+        _count: true,
+      }),
+      this.prisma.invoice.findMany({
+        where: {
+          status: {
+            in: [
+              PaymentStatus.PENDING,
+              PaymentStatus.PARTIAL,
+              PaymentStatus.OVERDUE,
+            ],
+          },
+        },
+        select: {
+          studentId: true,
+          feeAmount: true,
+          discount: true,
+          extras: true,
+          paidAmount: true,
+        },
+      }),
+      this.prisma.invoice.count(),
+      this.prisma.payment.count(),
+    ]);
+
+    const outstandingAmount = outstandingInvoices.reduce((sum, inv) => {
+      const due =
+        Number(inv.feeAmount) -
+        Number(inv.discount) +
+        Number(inv.extras) -
+        Number(inv.paidAmount);
+      return sum + Math.max(due, 0);
+    }, 0);
+
+    return {
+      collectedToday: Number(paymentsTodayAgg._sum.amount || 0),
+      collectedMonth: Number(paymentsMonthAgg._sum.amount || 0),
+      collectedAll: Number(paymentsAllAgg._sum.amount || 0),
+      paymentsTodayCount: paymentsTodayAgg._count,
+      paymentsMonthCount: paymentsMonthAgg._count,
+      paymentCount,
+      invoiceCount,
+      outstandingAmount,
+      outstandingStudents: new Set(outstandingInvoices.map((i) => i.studentId))
+        .size,
+    };
+  }
 
   listInvoices(status?: PaymentStatus) {
     return this.prisma.invoice.findMany({
@@ -77,12 +163,169 @@ export class FinanceService {
     });
   }
 
-  listPayments() {
-    return this.prisma.payment.findMany({
-      include: { student: true, invoice: true },
-      orderBy: { paidAt: 'desc' },
-      take: 200,
+  /**
+   * Unified receipts ledger with Arabic reason labels
+   * (booking forms, class attendance, general collection).
+   */
+  async listPayments() {
+    const [payments, sessions] = await Promise.all([
+      this.prisma.payment.findMany({
+        include: {
+          student: true,
+          invoice: { include: { group: { include: { subject: true } } } },
+        },
+        orderBy: { paidAt: 'desc' },
+        take: 200,
+      }),
+      this.prisma.sessionEntry.findMany({
+        where: { payStatus: 'CONFIRMED' },
+        include: {
+          student: true,
+          session: {
+            include: {
+              teacher: true,
+              subject: true,
+            },
+          },
+        },
+        orderBy: { confirmedAt: 'desc' },
+        take: 150,
+      }),
+    ]);
+
+    const bkReceipts = payments
+      .map((p) => p.receiptNumber)
+      .filter((r) => r.startsWith('BK-'));
+    const bookings = bkReceipts.length
+      ? await this.prisma.bookingSubmission.findMany({
+          where: { receiptNumber: { in: bkReceipts } },
+          select: {
+            receiptNumber: true,
+            form: { select: { title: true, gradeLabel: true, slug: true } },
+          },
+        })
+      : [];
+    const bookingByReceipt = new Map(
+      bookings
+        .filter((b) => b.receiptNumber)
+        .map((b) => [b.receiptNumber as string, b]),
+    );
+
+    const paymentRows = payments.map((p) => {
+      const booking = bookingByReceipt.get(p.receiptNumber);
+      const { reason, reasonDetail } = this.describePaymentReason(
+        p,
+        booking?.form,
+      );
+      return {
+        id: p.id,
+        source: 'PAYMENT' as const,
+        student: p.student,
+        receiptNumber: p.receiptNumber,
+        amount: p.amount,
+        method: p.method,
+        paidAt: p.paidAt,
+        note: p.note,
+        reason,
+        reasonDetail,
+      };
     });
+
+    const sessionRows = sessions.map((e) => {
+      const teacherName = e.session.teacher
+        ? `${e.session.teacher.firstName} ${
+            e.session.teacher.lastName === '-'
+              ? ''
+              : e.session.teacher.lastName
+          }`.trim()
+        : '';
+      const subject =
+        e.session.subject?.nameAr ||
+        e.session.subject?.nameEn ||
+        e.session.title ||
+        'حصة';
+      const detail = [subject, teacherName].filter(Boolean).join(' · ');
+      return {
+        id: e.id,
+        source: 'SESSION' as const,
+        student: e.student,
+        receiptNumber: e.receiptNumber,
+        amount: e.amount,
+        method: e.method,
+        paidAt: e.confirmedAt || e.createdAt,
+        note: e.note,
+        reason: 'حضور حصة',
+        reasonDetail: detail || e.note || '—',
+      };
+    });
+
+    return [...paymentRows, ...sessionRows]
+      .sort(
+        (a, b) =>
+          new Date(b.paidAt).getTime() - new Date(a.paidAt).getTime(),
+      )
+      .slice(0, 250);
+  }
+
+  private describePaymentReason(
+    p: {
+      receiptNumber: string;
+      note: string | null;
+      invoice?: {
+        note: string | null;
+        group?: {
+          name: string;
+          subject?: { nameAr: string; nameEn: string } | null;
+        } | null;
+      } | null;
+    },
+    form?: { title: string; gradeLabel: string; slug: string } | null,
+  ): { reason: string; reasonDetail: string } {
+    const receipt = p.receiptNumber || '';
+    const invNote = p.invoice?.note || '';
+    const note = p.note || '';
+    const blob = `${receipt} ${invNote} ${note}`.toLowerCase();
+
+    if (form || receipt.startsWith('BK-') || blob.includes('حجز')) {
+      const detail = form
+        ? `${form.title}${form.gradeLabel ? ` · ${form.gradeLabel}` : ''}`
+        : invNote
+            .replace(/^استمارة حجز\s*·\s*/i, '')
+            .replace(/^حجز استمارة\s*/i, '')
+            .replace(/\s*·\s*كاش\s*$/i, '')
+            .trim() ||
+          note ||
+          'استمارة';
+      return { reason: 'استمارة حجز', reasonDetail: detail };
+    }
+
+    if (p.invoice?.group) {
+      const subject =
+        p.invoice.group.subject?.nameAr ||
+        p.invoice.group.subject?.nameEn ||
+        '';
+      return {
+        reason: 'اشتراك مجموعة',
+        reasonDetail: [p.invoice.group.name, subject]
+          .filter(Boolean)
+          .join(' · '),
+      };
+    }
+
+    if (receipt.startsWith('ON-') || blob.includes('online')) {
+      return { reason: 'كود أونلاين', reasonDetail: note || invNote || '—' };
+    }
+    if (receipt.startsWith('HN-') || blob.includes('مذكرة')) {
+      return { reason: 'مذكرة / ملزمة', reasonDetail: note || invNote || '—' };
+    }
+    if (receipt.startsWith('RM-') || blob.includes('قاعة')) {
+      return { reason: 'إيجار قاعة', reasonDetail: note || invNote || '—' };
+    }
+
+    return {
+      reason: 'تحصيل',
+      reasonDetail: note || invNote || 'تحصيل عام',
+    };
   }
 
   async computeTeacherPayout(

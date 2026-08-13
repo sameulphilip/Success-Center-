@@ -1,348 +1,179 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AppShell } from '@/components/AppShell';
 import { PageHeader } from '@/components/PageHeader';
-import {
-  EmptyState,
-  FieldLabel,
-  ListRow,
-  PageHero,
-  SectionCard,
-} from '@/components/ui';
+import { EmptyState, PageHero, SectionCard } from '@/components/ui';
 import { api } from '@/lib/api';
 
-function dueOf(inv: any) {
-  return (
-    Number(inv.feeAmount) -
-    Number(inv.discount) +
-    Number(inv.extras) -
-    Number(inv.paidAmount)
-  );
+function money(n: number) {
+  return `${Math.round(Number(n) || 0).toLocaleString('en-EG')} ج.م`;
 }
 
+type FinanceSummary = {
+  collectedToday: number;
+  collectedMonth: number;
+  collectedAll: number;
+  paymentsTodayCount: number;
+  paymentsMonthCount: number;
+  paymentCount: number;
+  invoiceCount: number;
+  outstandingAmount: number;
+  outstandingStudents: number;
+};
+
+type ReceiptRow = {
+  id: string;
+  source: 'PAYMENT' | 'SESSION';
+  student?: { firstName?: string; lastName?: string };
+  receiptNumber: string;
+  amount: string | number;
+  method?: string;
+  paidAt?: string;
+  reason: string;
+  reasonDetail?: string;
+};
+
+const reasonBadge: Record<string, string> = {
+  'استمارة حجز': 'badge-navy',
+  'حضور حصة': 'badge-ok',
+  'اشتراك مجموعة': 'badge-gold',
+  تحصيل: 'badge-warn',
+};
+
 export default function FinancePage() {
-  const [invoices, setInvoices] = useState<any[]>([]);
-  const [payments, setPayments] = useState<any[]>([]);
-  const [payouts, setPayouts] = useState<any[]>([]);
-  const [teachers, setTeachers] = useState<any[]>([]);
-  const [payForm, setPayForm] = useState({
-    studentId: '',
-    invoiceId: '',
-    amount: 0,
-  });
-  const [payoutForm, setPayoutForm] = useState({
-    teacherId: '',
-    periodStart: new Date(new Date().getFullYear(), new Date().getMonth(), 1)
-      .toISOString()
-      .slice(0, 10),
-    periodEnd: new Date().toISOString().slice(0, 10),
-    deductions: 0,
-  });
+  const [payments, setPayments] = useState<ReceiptRow[]>([]);
+  const [summary, setSummary] = useState<FinanceSummary | null>(null);
 
   async function load() {
-    const [i, p, po, t] = await Promise.all([
-      api<any[]>('/finance/invoices'),
-      api<any[]>('/finance/payments'),
-      api<any[]>('/finance/payouts'),
-      api<any[]>('/teachers'),
+    const [p, s] = await Promise.all([
+      api<ReceiptRow[]>('/finance/payments'),
+      api<FinanceSummary>('/finance/summary'),
     ]);
-    setInvoices(i);
     setPayments(p);
-    setPayouts(po);
-    setTeachers(t);
+    setSummary(s);
   }
 
   useEffect(() => {
     load().catch(console.error);
   }, []);
 
-  async function recordPayment(e: FormEvent) {
-    e.preventDefault();
-    await api('/finance/payments', {
-      method: 'POST',
-      body: JSON.stringify(payForm),
-    });
-    await load();
-  }
-
-  async function computePayout(e: FormEvent) {
-    e.preventDefault();
-    await api('/finance/payouts', {
-      method: 'POST',
-      body: JSON.stringify(payoutForm),
-    });
-    await load();
-  }
-
-  async function computePayoutFromProfit(e: FormEvent) {
-    e.preventDefault();
-    await api('/finance/payouts/from-profit', {
-      method: 'POST',
-      body: JSON.stringify(payoutForm),
-    });
-    await load();
-  }
-
-  async function markPayoutPaid(id: string, gross: number, paid: number, deductions: number) {
-    const remaining = Math.max(Number(gross) - Number(deductions) - Number(paid), 0);
-    if (remaining <= 0) return;
-    await api(`/finance/payouts/${id}/pay`, {
-      method: 'POST',
-      body: JSON.stringify({ amount: remaining }),
-    });
-    await load();
-  }
-
-  const outstanding = useMemo(
-    () =>
-      invoices.reduce((s, inv) => s + Math.max(dueOf(inv), 0), 0),
-    [invoices],
-  );
-  const collected = useMemo(
-    () => payments.reduce((s, p) => s + Number(p.amount || 0), 0),
-    [payments],
-  );
-
   return (
     <AppShell>
       <PageHeader
         title="الحسابات والمدفوعات"
-        subtitle="اشتراكات الطلاب ومستحقات المدرسين"
+        subtitle="سجل التحصيل الكاش — الإيصالات"
       />
       <PageHero
         eyebrow="FINANCE"
-        title="التحصيل والمستحقات"
-        subtitle="اختر فاتورة لتسجيل دفعة، أو احتسب مستحقات المدرس"
+        title="سجل التحصيل"
+        subtitle="كل خدمة بتتدفع قبل ما تقدَّم — الإيصال يوضح السبب (استمارة / حضور / …)"
         metrics={[
           {
-            label: 'المتحصل',
-            value: Math.round(collected).toLocaleString('en-EG'),
+            label: 'تحصيل اليوم',
+            value: money(summary?.collectedToday ?? 0),
             highlight: true,
           },
           {
-            label: 'المتأخرات',
-            value: Math.round(outstanding).toLocaleString('en-EG'),
+            label: 'تحصيل الشهر',
+            value: money(summary?.collectedMonth ?? 0),
           },
-          { label: 'فواتير', value: invoices.length },
-          { label: 'إيصالات', value: payments.length },
+          {
+            label: 'إجمالي المتحصل',
+            value: money(summary?.collectedAll ?? 0),
+          },
+          {
+            label: 'عدد الإيصالات',
+            value: summary?.paymentCount ?? payments.length,
+          },
         ]}
       />
 
-      <div className="grid gap-4 xl:grid-cols-2">
-        <SectionCard
-          title="فواتير الطلاب"
-          subtitle="اضغط فاتورة لتعبئة نموذج الدفع"
-          badge={<span className="badge-warn">{invoices.length}</span>}
-        >
-          <div className="space-y-2 max-h-80 overflow-auto">
-            {invoices.map((inv) => {
-              const due = dueOf(inv);
-              return (
-                <ListRow
-                  key={inv.id}
-                  active={payForm.invoiceId === inv.id}
-                  onClick={() =>
-                    setPayForm({
-                      studentId: inv.studentId,
-                      invoiceId: inv.id,
-                      amount: Math.max(due, 0),
-                    })
-                  }
-                  title={`${inv.student.firstName} ${inv.student.lastName}`}
-                  subtitle={`${inv.group?.name || 'فاتورة'} · ${inv.status}`}
-                  trailing={
-                    <span className="font-extrabold text-navy tabular-nums">
-                      {due.toLocaleString('en-EG')}
-                    </span>
-                  }
-                />
-              );
-            })}
-            {!invoices.length ? <EmptyState>لا توجد فواتير</EmptyState> : null}
-          </div>
-        </SectionCard>
-
-        <SectionCard title="تسجيل دفعة" subtitle="يصدر إيصالاً تلقائياً">
-          <form onSubmit={recordPayment} className="space-y-3">
-            <FieldLabel label="معرف الطالب">
-              <input
-                className="field"
-                value={payForm.studentId}
-                onChange={(e) =>
-                  setPayForm({ ...payForm, studentId: e.target.value })
-                }
-                required
-              />
-            </FieldLabel>
-            <FieldLabel label="معرف الفاتورة">
-              <input
-                className="field"
-                value={payForm.invoiceId}
-                onChange={(e) =>
-                  setPayForm({ ...payForm, invoiceId: e.target.value })
-                }
-              />
-            </FieldLabel>
-            <FieldLabel label="المبلغ">
-              <input
-                type="number"
-                className="field"
-                value={payForm.amount}
-                onChange={(e) =>
-                  setPayForm({ ...payForm, amount: Number(e.target.value) })
-                }
-                required
-              />
-            </FieldLabel>
-            <button className="btn-primary w-full">إصدار إيصال</button>
-          </form>
-        </SectionCard>
-
-        <SectionCard title="آخر الإيصالات">
-          <div className="overflow-x-auto">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>الطالب</th>
-                  <th>الإيصال</th>
-                  <th>المبلغ</th>
-                </tr>
-              </thead>
-              <tbody>
-                {payments.slice(0, 12).map((p) => (
-                  <tr key={p.id}>
-                    <td className="font-semibold">
-                      {p.student.firstName} {p.student.lastName}
-                    </td>
-                    <td className="font-mono text-xs">{p.receiptNumber}</td>
-                    <td className="font-bold tabular-nums">
-                      {Number(p.amount).toLocaleString('en-EG')}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {!payments.length ? <EmptyState>لا توجد إيصالات</EmptyState> : null}
-          </div>
-        </SectionCard>
-
-        <div className="space-y-4">
-          <SectionCard title="حساب مستحقات مدرس">
-            <form onSubmit={computePayout} className="space-y-3">
-              <FieldLabel label="المدرس">
-                <select
-                  className="field"
-                  value={payoutForm.teacherId}
-                  onChange={(e) =>
-                    setPayoutForm({ ...payoutForm, teacherId: e.target.value })
-                  }
-                  required
-                >
-                  <option value="">اختر المدرس</option>
-                  {teachers.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.firstName} {t.lastName}
-                    </option>
-                  ))}
-                </select>
-              </FieldLabel>
-              <div className="grid grid-cols-2 gap-2">
-                <FieldLabel label="من">
-                  <input
-                    type="date"
-                    className="field"
-                    value={payoutForm.periodStart}
-                    onChange={(e) =>
-                      setPayoutForm({
-                        ...payoutForm,
-                        periodStart: e.target.value,
-                      })
-                    }
-                  />
-                </FieldLabel>
-                <FieldLabel label="إلى">
-                  <input
-                    type="date"
-                    className="field"
-                    value={payoutForm.periodEnd}
-                    onChange={(e) =>
-                      setPayoutForm({
-                        ...payoutForm,
-                        periodEnd: e.target.value,
-                      })
-                    }
-                  />
-                </FieldLabel>
+      <SectionCard
+        title="الإيصالات"
+        subtitle="سبب كل إيصال: استمارة حجز، حضور حصة، أو تحصيل آخر"
+        badge={
+          <span className="badge-ok">
+            {summary?.paymentCount ?? payments.length}
+          </span>
+        }
+      >
+        <div className="space-y-3 md:hidden">
+          {payments.map((p) => (
+            <article
+              key={`${p.source}-${p.id}`}
+              className="rounded-xl border border-mist bg-sand/40 p-3 space-y-1.5"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <p className="font-bold text-navy text-sm">
+                  {p.student?.firstName} {p.student?.lastName}
+                </p>
+                <span className={reasonBadge[p.reason] || 'badge-warn'}>
+                  {p.reason}
+                </span>
               </div>
-              <button className="btn-accent w-full">احتساب من الحضور</button>
-              <button
-                type="button"
-                className="btn-primary w-full"
-                onClick={(e) => void computePayoutFromProfit(e as any)}
-              >
-                احتساب من الربحية
-              </button>
-            </form>
-          </SectionCard>
-
-          <SectionCard title="مستحقات المدرسين">
-            <ul className="space-y-2 text-sm">
-              {payouts.map((p) => {
-                const net =
-                  Number(p.grossAmount) - Number(p.deductions || 0);
-                const remaining = Math.max(net - Number(p.paidAmount || 0), 0);
-                return (
-                  <li
-                    key={p.id}
-                    className="rounded-xl bg-sand px-3 py-2.5 space-y-2"
-                  >
-                    <div className="flex justify-between gap-2">
-                      <div>
-                        <p className="font-semibold text-navy">
-                          {p.teacher.firstName} {p.teacher.lastName}
-                        </p>
-                        <p className="text-xs text-navy/50">
-                          {Number(p.rate) > 0
-                            ? `${p.sessionsCount} حصة × ${Number(p.rate)}`
-                            : `${p.sessionsCount} عملية ربحية`}{' '}
-                          · {p.status}
-                        </p>
-                      </div>
-                      <span className="font-extrabold text-navy tabular-nums">
-                        {Number(p.grossAmount).toLocaleString('en-EG')}
-                      </span>
-                    </div>
-                    {remaining > 0 ? (
-                      <button
-                        type="button"
-                        className="btn-ghost text-xs w-full"
-                        onClick={() =>
-                          void markPayoutPaid(
-                            p.id,
-                            p.grossAmount,
-                            p.paidAmount,
-                            p.deductions,
-                          )
-                        }
-                      >
-                        تسجيل صرف كامل ({remaining.toLocaleString('en-EG')} EGP)
-                      </button>
-                    ) : (
-                      <p className="text-[11px] text-emerald-700 font-semibold">
-                        تم الصرف
-                      </p>
-                    )}
-                  </li>
-                );
-              })}
-              {!payouts.length ? (
-                <EmptyState>لا توجد مستحقات محسوبة</EmptyState>
-              ) : null}
-            </ul>
-          </SectionCard>
+              <p className="text-xs text-navy/65">{p.reasonDetail || '—'}</p>
+              <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-navy/50">
+                <span className="font-mono">{p.receiptNumber}</span>
+                <span>{p.method || 'CASH'}</span>
+                <span>
+                  {p.paidAt
+                    ? new Date(p.paidAt).toLocaleString('ar-EG')
+                    : '—'}
+                </span>
+              </div>
+              <p className="font-extrabold tabular-nums text-navy">
+                {Number(p.amount).toLocaleString('en-EG')} ج.م
+              </p>
+            </article>
+          ))}
+          {!payments.length ? <EmptyState>لا توجد إيصالات</EmptyState> : null}
         </div>
-      </div>
+
+        <div className="table-scroll hidden md:block">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>الطالب</th>
+                <th>السبب</th>
+                <th>التفاصيل</th>
+                <th>الإيصال</th>
+                <th>الطريقة</th>
+                <th>التاريخ</th>
+                <th>المبلغ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {payments.map((p) => (
+                <tr key={`${p.source}-${p.id}`}>
+                  <td className="font-semibold">
+                    {p.student?.firstName} {p.student?.lastName}
+                  </td>
+                  <td>
+                    <span className={reasonBadge[p.reason] || 'badge-warn'}>
+                      {p.reason}
+                    </span>
+                  </td>
+                  <td className="text-sm text-navy/70 max-w-[220px]">
+                    {p.reasonDetail || '—'}
+                  </td>
+                  <td className="font-mono text-xs">{p.receiptNumber}</td>
+                  <td className="text-xs text-navy/60">{p.method || 'CASH'}</td>
+                  <td className="text-xs text-navy/55 tabular-nums">
+                    {p.paidAt
+                      ? new Date(p.paidAt).toLocaleString('ar-EG')
+                      : '—'}
+                  </td>
+                  <td className="font-bold tabular-nums">
+                    {Number(p.amount).toLocaleString('en-EG')}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!payments.length ? <EmptyState>لا توجد إيصالات</EmptyState> : null}
+        </div>
+      </SectionCard>
     </AppShell>
   );
 }

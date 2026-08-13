@@ -295,10 +295,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         ) : null}
 
-        <main className="p-3 sm:p-6 lg:p-8 animate-rise flex-1 overflow-x-hidden">
+        <main className="p-3 sm:p-6 lg:p-8 animate-rise flex-1 overflow-x-hidden min-w-0 w-full">
           {children}
         </main>
-        <footer className="border-t border-mist px-3 sm:px-6 lg:px-8 py-3 flex justify-center bg-white/40">
+        <footer className="border-t border-mist px-3 sm:px-6 lg:px-8 py-3 flex justify-center bg-white/40 safe-area-pad">
           <PoweredByCowdlly variant="dark" />
         </footer>
       </div>

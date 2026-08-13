@@ -250,7 +250,7 @@ export default function ReportsPage() {
 
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
             <SectionCard title="حسب المدرس">
-              <div className="overflow-x-auto max-h-96">
+              <div className="table-scroll max-h-96">
                 <table className="data-table">
                   <thead>
                     <tr>
@@ -299,7 +299,7 @@ export default function ReportsPage() {
             </SectionCard>
 
             <SectionCard title="حسب المادة">
-              <div className="overflow-x-auto max-h-96">
+              <div className="table-scroll max-h-96">
                 <table className="data-table">
                   <thead>
                     <tr>
@@ -327,7 +327,7 @@ export default function ReportsPage() {
             </SectionCard>
 
             <SectionCard title="حسب القاعة (تأجير)">
-              <div className="overflow-x-auto max-h-96">
+              <div className="table-scroll max-h-96">
                 <table className="data-table">
                   <thead>
                     <tr>
@@ -415,7 +415,7 @@ export default function ReportsPage() {
 
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
             <SectionCard title="آخر المدفوعات">
-              <div className="overflow-x-auto max-h-96">
+              <div className="table-scroll max-h-96">
                 <table className="data-table">
                   <thead>
                     <tr>
@@ -447,7 +447,7 @@ export default function ReportsPage() {
             </SectionCard>
 
             <SectionCard title="المتأخرون في الدفع">
-              <div className="overflow-x-auto max-h-96">
+              <div className="table-scroll max-h-96">
                 <table className="data-table">
                   <thead>
                     <tr>
@@ -508,7 +508,7 @@ export default function ReportsPage() {
 
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
             <SectionCard title="أكثر الطلاب غيابًا">
-              <div className="overflow-x-auto max-h-96">
+              <div className="table-scroll max-h-96">
                 <table className="data-table">
                   <thead>
                     <tr>

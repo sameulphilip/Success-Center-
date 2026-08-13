@@ -94,9 +94,9 @@ export default function StudentsPage() {
           subtitle="اضغط على الاسم لفتح الملف والـ QR"
           badge={<span className="badge-navy">{students.length}</span>}
         >
-          <div className="mb-4 flex gap-2">
+          <div className="mb-4 flex flex-col sm:flex-row gap-2">
             <input
-              className="field mt-0 flex-1"
+              className="field !mt-0 flex-1 min-w-0"
               placeholder="بحث بالاسم أو الهاتف..."
               value={q}
               onChange={(e) => setQ(e.target.value)}
@@ -104,11 +104,15 @@ export default function StudentsPage() {
                 if (e.key === 'Enter') void load();
               }}
             />
-            <button type="button" onClick={() => void load()} className="btn-primary">
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="btn-primary shrink-0"
+            >
               بحث
             </button>
           </div>
-          <div className="overflow-x-auto">
+          <div className="table-scroll">
             <table className="data-table">
               <thead>
                 <tr>

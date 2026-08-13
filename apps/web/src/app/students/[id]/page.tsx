@@ -74,10 +74,14 @@ export default function StudentDetailPage() {
             title={`${student.firstName} ${student.lastName}`}
             subtitle={`${student.gradeLevel?.nameAr || '—'} · ${student.studentUid}`}
             metrics={[
-              { label: 'مجموعات', value: student.enrollments?.length || 0, highlight: true },
+              {
+                label: 'استمارة الحجز',
+                value: student.formFeePaid ? 'مدفوعة' : 'غير مدفوعة',
+                highlight: !!student.formFeePaid,
+              },
+              { label: 'مجموعات', value: student.enrollments?.length || 0 },
               { label: 'حضور', value: present },
               { label: 'غياب', value: absent },
-              { label: 'فواتير', value: student.invoices?.length || 0 },
             ]}
           />
 
@@ -112,6 +116,105 @@ export default function StudentDetailPage() {
                 </div>
               </SectionCard>
 
+              <SectionCard
+                title="استمارة الحجز"
+                subtitle="حالة دفع استمارة التسجيل في السنتر"
+                badge={
+                  student.formFeePaid ? (
+                    <span className="badge-ok">تم الدفع</span>
+                  ) : (
+                    <span className="badge-warn">غير مدفوعة</span>
+                  )
+                }
+              >
+                {(student.bookingSubmissions || []).length ? (
+                  <ul className="space-y-3 text-sm">
+                    {student.bookingSubmissions.map((b: any) => (
+                      <li
+                        key={b.id}
+                        className="rounded-xl border border-mist bg-sand/60 px-3 py-3 space-y-2"
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div>
+                            <p className="font-bold text-navy">
+                              {b.form?.title || 'استمارة حجز'}
+                            </p>
+                            <p className="text-xs text-navy/50 mt-0.5">
+                              {b.form?.gradeLabel || '—'}
+                              {b.form?.academicYear
+                                ? ` · ${b.form.academicYear}`
+                                : ''}
+                            </p>
+                          </div>
+                          <span
+                            className={
+                              b.status === 'PAID'
+                                ? 'badge-ok'
+                                : b.status === 'CANCELLED'
+                                  ? 'badge-warn'
+                                  : 'badge-navy'
+                            }
+                          >
+                            {b.status === 'PAID'
+                              ? 'مدفوعة'
+                              : b.status === 'CANCELLED'
+                                ? 'ملغاة'
+                                : 'بانتظار الدفع'}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-navy/65">
+                          <span>
+                            المبلغ:{' '}
+                            <strong className="tabular-nums text-navy">
+                              {Number(b.totalAmount || 0).toLocaleString(
+                                'en-EG',
+                              )}{' '}
+                              ج.م
+                            </strong>
+                          </span>
+                          {b.receiptNumber ? (
+                            <span className="font-mono">
+                              إيصال: {b.receiptNumber}
+                            </span>
+                          ) : null}
+                          {b.paidAt ? (
+                            <span>
+                              تاريخ الدفع:{' '}
+                              {new Date(b.paidAt).toLocaleDateString('ar-EG')}
+                            </span>
+                          ) : null}
+                          {b.paymentMethod ? (
+                            <span>
+                              الطريقة:{' '}
+                              {b.paymentMethod === 'VODAFONE_CASH'
+                                ? 'فودافون كاش'
+                                : 'كاش'}
+                              {b.vodafoneTxn ? ` · ${b.vodafoneTxn}` : ''}
+                            </span>
+                          ) : null}
+                        </div>
+                        {b.selections?.length ? (
+                          <div className="flex flex-wrap gap-1.5 pt-1">
+                            {b.selections.map((sel: any, i: number) => (
+                              <span
+                                key={i}
+                                className="rounded-lg bg-white border border-mist px-2 py-0.5 text-[11px] text-navy/80"
+                                title={sel.offering?.subjectName}
+                              >
+                                {sel.offering?.teacherName}
+                                {sel.offering?.isOnline ? ' · Online' : ''}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <EmptyState>لا توجد استمارة حجز مرتبطة بهذا الطالب</EmptyState>
+                )}
+              </SectionCard>
+
               <SectionCard title="المجموعات">
                 <ul className="space-y-2 text-sm">
                   {student.enrollments?.map((e: any) => (
@@ -131,36 +234,40 @@ export default function StudentDetailPage() {
                 </ul>
               </SectionCard>
 
-              <SectionCard title="المدفوعات والفواتير">
+              <SectionCard title="الإيصالات">
                 <ul className="space-y-2 text-sm">
-                  {student.invoices?.map((inv: any) => {
-                    const due =
-                      Number(inv.feeAmount) -
-                      Number(inv.discount) +
-                      Number(inv.extras) -
-                      Number(inv.paidAmount);
-                    return (
-                      <li
-                        key={inv.id}
-                        className="flex justify-between gap-3 rounded-xl border border-mist px-3 py-2.5"
-                      >
-                        <span>
-                          {inv.group?.name || 'فاتورة'} · {inv.status}
-                        </span>
-                        <span className="font-bold tabular-nums">
-                          {due.toLocaleString('en-EG')}
-                        </span>
-                      </li>
-                    );
-                  })}
-                  {!student.invoices?.length ? (
-                    <EmptyState>لا توجد فواتير</EmptyState>
+                  {(student.payments || []).map((p: any) => (
+                    <li
+                      key={p.id}
+                      className="flex justify-between gap-3 rounded-xl border border-mist px-3 py-2.5"
+                    >
+                      <div className="min-w-0">
+                        <p className="font-semibold text-navy truncate">
+                          {p.note ||
+                            (String(p.receiptNumber || '').startsWith('BK-')
+                              ? 'استمارة حجز'
+                              : 'تحصيل')}
+                        </p>
+                        <p className="text-[11px] font-mono text-navy/45 mt-0.5">
+                          {p.receiptNumber}
+                          {p.paidAt
+                            ? ` · ${new Date(p.paidAt).toLocaleDateString('ar-EG')}`
+                            : ''}
+                        </p>
+                      </div>
+                      <span className="font-bold tabular-nums shrink-0">
+                        {Number(p.amount).toLocaleString('en-EG')}
+                      </span>
+                    </li>
+                  ))}
+                  {!student.payments?.length ? (
+                    <EmptyState>لا توجد إيصالات</EmptyState>
                   ) : null}
                 </ul>
               </SectionCard>
 
               <SectionCard title="آخر الحضور">
-                <div className="overflow-x-auto">
+                <div className="table-scroll">
                   <table className="data-table">
                     <thead>
                       <tr>

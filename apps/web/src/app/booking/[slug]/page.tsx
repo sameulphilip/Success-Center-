@@ -247,7 +247,7 @@ export default function PublicBookingPage() {
                 {(result.nextSteps?.length
                   ? result.nextSteps
                   : [
-                      'ادفع كاش في السنتر واستلم الإيصال',
+                      'ادفع في السنتر كاش أو فودافون كاش واستلم الإيصال',
                       'بعد تأكيد الدفع هيتفتح حسابك تلقائي برقم موبايلك',
                       'سجّل دخول كطالب وعيّن كلمة المرور أول مرة',
                     ]
@@ -264,8 +264,8 @@ export default function PublicBookingPage() {
                 بعد الدفع — دخول برقم الموبايل
               </a>
               <p className="text-[11px] text-navy/45">
-                لو لسه ما دفعتش، الاستقبال لازم يضغط «تم الدفع كاش» الأول عشان
-                الحساب يتفتح.
+                لو لسه ما دفعتش، الاستقبال لازم يأكد الدفع (كاش أو فودافون كاش)
+                الأول عشان الحساب يتفتح.
               </p>
             </div>
 
@@ -380,22 +380,22 @@ export default function PublicBookingPage() {
               </p>
             ) : (
               <p className="text-xs text-navy/50 px-1">
-                الدفع كاش فقط داخل السنتر. بعد التسجيل توجّه للاستقبال لاستلام
-                الإيصال.
+                الدفع داخل السنتر كاش أو فودافون كاش. بعد التسجيل توجّه
+                للاستقبال لاستلام الإيصال.
               </p>
             )}
 
-            <div className="fixed inset-x-0 bottom-0 z-20 border-t border-mist bg-white/95 backdrop-blur px-4 py-3">
+            <div className="fixed inset-x-0 bottom-0 z-20 border-t border-mist bg-white/95 backdrop-blur px-4 py-3 safe-area-pad">
               <div className="mx-auto flex max-w-3xl items-center justify-between gap-3">
-                <div>
+                <div className="min-w-0">
                   <p className="text-[11px] text-navy/45">سعر الاستمارة</p>
-                  <p className="text-lg font-extrabold text-navy tabular-nums">
+                  <p className="text-base sm:text-lg font-extrabold text-navy tabular-nums">
                     {formFee.toLocaleString('en-EG')} ج.م
                   </p>
                 </div>
                 <button
                   type="submit"
-                  className="btn-accent min-w-[140px]"
+                  className="btn-accent shrink-0 px-4 sm:min-w-[140px]"
                   disabled={submitting || selected.size === 0}
                 >
                   {submitting ? 'جاري التسجيل…' : 'تسجيل الحجز'}

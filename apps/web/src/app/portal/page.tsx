@@ -489,7 +489,7 @@ export default function StudentPortalPage() {
           </SectionCard>
 
           <SectionCard className="lg:col-span-2" title="مدفوعات الحصص عند الباب">
-            <div className="overflow-x-auto">
+            <div className="table-scroll">
               <table className="data-table">
                 <thead>
                   <tr>
@@ -539,7 +539,7 @@ export default function StudentPortalPage() {
               </span>
             }
           >
-            <div className="overflow-x-auto">
+            <div className="table-scroll">
               <table className="data-table">
                 <thead>
                   <tr>
@@ -588,7 +588,7 @@ export default function StudentPortalPage() {
           </SectionCard>
 
           <SectionCard className="lg:col-span-2" title="الدرجات">
-            <div className="overflow-x-auto">
+            <div className="table-scroll">
               <table className="data-table">
                 <thead>
                   <tr>

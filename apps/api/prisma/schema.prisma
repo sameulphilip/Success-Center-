@@ -508,21 +508,24 @@ model BookingOffering {
 }
 
 model BookingSubmission {
-  id            String             @id @default(cuid())
-  formId        String
-  form          BookingForm        @relation(fields: [formId], references: [id], onDelete: Cascade)
-  studentName   String
-  studentPhone  String
-  parentPhone   String
-  status        BookingStatus      @default(SUBMITTED)
-  totalAmount   Decimal            @default(0) @db.Decimal(12, 2)
-  receiptNumber String?            @unique
-  paidAt        DateTime?
-  studentId     String?
-  notes         String?
-  selections    BookingSelection[]
-  createdAt     DateTime           @default(now())
-  updatedAt     DateTime           @updatedAt
+  id             String             @id @default(cuid())
+  formId         String
+  form           BookingForm        @relation(fields: [formId], references: [id], onDelete: Cascade)
+  studentName    String
+  studentPhone   String
+  parentPhone    String
+  status         BookingStatus      @default(SUBMITTED)
+  totalAmount    Decimal            @default(0) @db.Decimal(12, 2)
+  receiptNumber  String?            @unique
+  paidAt         DateTime?
+  /** CASH | VODAFONE_CASH */
+  paymentMethod  String?
+  vodafoneTxn    String?
+  studentId      String?
+  notes          String?
+  selections     BookingSelection[]
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
 
   @@index([formId, status])
   @@index([studentPhone])

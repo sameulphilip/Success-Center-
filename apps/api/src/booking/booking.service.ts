@@ -21,13 +21,42 @@ import {
 export class BookingService {
   constructor(private readonly prisma: PrismaService) {}
 
-  listForms() {
-    return this.prisma.bookingForm.findMany({
-      include: {
-        _count: { select: { offerings: true, submissions: true } },
+  async listForms() {
+    const [forms, statusGroups] = await Promise.all([
+      this.prisma.bookingForm.findMany({
+        include: {
+          _count: { select: { offerings: true, submissions: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.bookingSubmission.groupBy({
+        by: ['formId', 'status'],
+        _count: { _all: true },
+      }),
+    ]);
+
+    const byForm = new Map<
+      string,
+      { PAID: number; SUBMITTED: number; CANCELLED: number }
+    >();
+    for (const g of statusGroups) {
+      const cur = byForm.get(g.formId) || {
+        PAID: 0,
+        SUBMITTED: 0,
+        CANCELLED: 0,
+      };
+      cur[g.status] = g._count._all;
+      byForm.set(g.formId, cur);
+    }
+
+    return forms.map((f) => ({
+      ...f,
+      statusCounts: byForm.get(f.id) || {
+        PAID: 0,
+        SUBMITTED: 0,
+        CANCELLED: 0,
       },
-      orderBy: { createdAt: 'desc' },
-    });
+    }));
   }
 
   async getFormAdmin(id: string) {
@@ -254,11 +283,80 @@ export class BookingService {
     });
   }
 
+  private teacherDisplayName(t: {
+    firstName: string;
+    lastName: string;
+  }): string {
+    return `${t.firstName} ${t.lastName === '-' ? '' : t.lastName}`.trim();
+  }
+
+  /** Require an existing Teacher from the teachers list; link to form grade. */
+  private async ensureTeacherForOffering(
+    gradeLabel: string,
+    teacherId?: string,
+  ): Promise<{ teacherId: string; teacherName: string }> {
+    if (!teacherId?.trim()) {
+      throw new BadRequestException(
+        'يجب اختيار مدرس من قائمة المدرسين. سجّل المدرس أولاً من صفحة المدرسين.',
+      );
+    }
+    const existing = await this.prisma.teacher.findFirst({
+      where: { id: teacherId, isActive: true },
+    });
+    if (!existing) {
+      throw new BadRequestException(
+        'المدرس غير موجود في القائمة. سجّله أولاً من صفحة المدرسين.',
+      );
+    }
+
+    const gradeLevelId = await this.resolveGradeLevelId(this.prisma, gradeLabel);
+    if (gradeLevelId) {
+      await this.prisma.teacherGradeLevel.upsert({
+        where: {
+          teacherId_gradeLevelId: {
+            teacherId: existing.id,
+            gradeLevelId,
+          },
+        },
+        create: { teacherId: existing.id, gradeLevelId },
+        update: {},
+      });
+    }
+
+    return {
+      teacherId: existing.id,
+      teacherName: this.teacherDisplayName(existing),
+    };
+  }
+
+  private async resolveSubjectIdByName(
+    subjectName: string,
+  ): Promise<string | null> {
+    const name = subjectName.trim();
+    if (!name) return null;
+    const fold = (s: string) =>
+      s
+        .replace(/\s+/g, '')
+        .replace(/[أإآ]/g, 'ا')
+        .replace(/ة/g, 'ه')
+        .replace(/ى/g, 'ي')
+        .toLowerCase();
+    const target = fold(name);
+    const subjects = await this.prisma.subject.findMany({
+      select: { id: true, nameAr: true, nameEn: true },
+    });
+    const hit = subjects.find(
+      (s) => fold(s.nameAr) === target || fold(s.nameEn) === target,
+    );
+    return hit?.id ?? null;
+  }
+
   async upsertOffering(
     formId: string,
     data: {
       id?: string;
-      teacherName: string;
+      teacherId: string;
+      subjectId?: string;
       subjectName: string;
       isOnline?: boolean;
       feeAmount?: number;
@@ -268,36 +366,42 @@ export class BookingService {
     },
   ) {
     const form = await this.getFormAdmin(formId);
-    let offering;
+    const subjectName = (data.subjectName || '').trim();
+    if (!subjectName) {
+      throw new BadRequestException('المادة مطلوبة');
+    }
+
+    const { teacherId, teacherName } = await this.ensureTeacherForOffering(
+      form.gradeLabel,
+      data.teacherId,
+    );
+
+    let subjectId = data.subjectId || null;
+    if (!subjectId) {
+      subjectId = await this.resolveSubjectIdByName(subjectName);
+    }
+
+    const payload = {
+      teacherName,
+      subjectName,
+      teacherId,
+      subjectId,
+      isOnline: data.isOnline ?? false,
+      feeAmount: data.feeAmount ?? 0,
+      pageNumber: data.pageNumber ?? 1,
+      sortOrder: data.sortOrder ?? 0,
+      isActive: data.isActive ?? true,
+    };
+
     if (data.id) {
-      offering = await this.prisma.bookingOffering.update({
+      return this.prisma.bookingOffering.update({
         where: { id: data.id },
-        data: {
-          teacherName: data.teacherName,
-          subjectName: data.subjectName,
-          isOnline: data.isOnline ?? false,
-          feeAmount: data.feeAmount ?? 0,
-          pageNumber: data.pageNumber ?? 1,
-          sortOrder: data.sortOrder ?? 0,
-          isActive: data.isActive ?? true,
-        },
-      });
-    } else {
-      offering = await this.prisma.bookingOffering.create({
-        data: {
-          formId,
-          teacherName: data.teacherName,
-          subjectName: data.subjectName,
-          isOnline: data.isOnline ?? false,
-          feeAmount: data.feeAmount ?? 0,
-          pageNumber: data.pageNumber ?? 1,
-          sortOrder: data.sortOrder ?? 0,
-          isActive: data.isActive ?? true,
-        },
+        data: payload,
       });
     }
-    await this.linkTeachersToGrade(form.gradeLabel, [data.teacherName]);
-    return offering;
+    return this.prisma.bookingOffering.create({
+      data: { formId, ...payload },
+    });
   }
 
   async deleteOffering(offeringId: string) {
@@ -305,18 +409,28 @@ export class BookingService {
     return { ok: true };
   }
 
-  listSubmissions(formId?: string, status?: BookingStatus) {
+  listSubmissions(formId?: string, status?: BookingStatus, phone?: string) {
+    const phoneQ = (phone || '').replace(/\D/g, '');
     return this.prisma.bookingSubmission.findMany({
       where: {
         ...(formId ? { formId } : {}),
         ...(status ? { status } : {}),
+        ...(phoneQ
+          ? {
+              OR: [
+                { studentPhone: { contains: phoneQ } },
+                { parentPhone: { contains: phoneQ } },
+              ],
+            }
+          : {}),
       },
       include: {
         form: true,
         selections: { include: { offering: true } },
       },
       orderBy: { createdAt: 'desc' },
-      take: 300,
+      // When scoped to one form, return the full list; otherwise keep a safe cap.
+      take: phoneQ ? 150 : formId ? 2000 : 500,
     });
   }
 
@@ -399,7 +513,29 @@ export class BookingService {
     };
   }
 
-  async markPaid(submissionId: string, note?: string) {
+  async markPaid(
+    submissionId: string,
+    opts?:
+      | string
+      | {
+          note?: string;
+          method?: 'CASH' | 'VODAFONE_CASH';
+          vodafoneTxn?: string;
+        },
+  ) {
+    const options =
+      typeof opts === 'string'
+        ? { note: opts, method: 'CASH' as const }
+        : opts || {};
+    const method =
+      options.method === 'VODAFONE_CASH' ? 'VODAFONE_CASH' : 'CASH';
+    const vodafoneTxn = (options.vodafoneTxn || '').trim();
+    if (method === 'VODAFONE_CASH' && !vodafoneTxn) {
+      throw new BadRequestException('رقم عملية فودافون كاش مطلوب');
+    }
+    const note = options.note;
+    const methodLabel = method === 'VODAFONE_CASH' ? 'فودافون كاش' : 'كاش';
+
     const submission = await this.prisma.bookingSubmission.findUnique({
       where: { id: submissionId },
       include: {
@@ -499,13 +635,17 @@ export class BookingService {
       }
 
       const amount = Number(submission.totalAmount);
+      const bookingLabel = `استمارة حجز · ${submission.form.title}${
+        submission.form.gradeLabel ? ` · ${submission.form.gradeLabel}` : ''
+      }`;
+
       const invoice = await tx.invoice.create({
         data: {
           studentId: student.id,
           feeAmount: amount,
           paidAmount: amount,
           status: PaymentStatus.PAID,
-          note: `حجز استمارة ${submission.form.slug} · كاش`,
+          note: `${bookingLabel} · ${methodLabel}`,
         },
       });
 
@@ -514,9 +654,13 @@ export class BookingService {
           studentId: student.id,
           invoiceId: invoice.id,
           amount,
-          method: 'CASH',
+          method,
           receiptNumber,
-          note: note || `تأكيد دفع حجز ${submission.id}`,
+          note:
+            note?.trim() ||
+            (method === 'VODAFONE_CASH'
+              ? `${bookingLabel} · فودافون كاش · ${vodafoneTxn}`
+              : bookingLabel),
         },
       });
 
@@ -586,6 +730,8 @@ export class BookingService {
           paidAt: new Date(),
           receiptNumber,
           studentId: student.id,
+          paymentMethod: method,
+          vodafoneTxn: method === 'VODAFONE_CASH' ? vodafoneTxn : null,
           notes: note || submission.notes,
         },
         include: {
@@ -595,6 +741,116 @@ export class BookingService {
       });
 
       return { ...updated, portalAccount };
+    });
+  }
+
+  async updateSubmission(
+    id: string,
+    data: {
+      studentName?: string;
+      studentPhone?: string;
+      parentPhone?: string;
+      notes?: string | null;
+      totalAmount?: number;
+      offeringIds?: string[];
+    },
+  ) {
+    const submission = await this.prisma.bookingSubmission.findUnique({
+      where: { id },
+      include: {
+        form: { include: { offerings: { where: { isActive: true } } } },
+        selections: true,
+      },
+    });
+    if (!submission) throw new NotFoundException('الحجز غير موجود');
+    if (submission.status === BookingStatus.CANCELLED) {
+      throw new BadRequestException('لا يمكن تعديل حجز ملغي');
+    }
+
+    const studentName =
+      data.studentName != null
+        ? String(data.studentName).trim()
+        : submission.studentName;
+    if (!studentName) throw new BadRequestException('اسم الطالب مطلوب');
+
+    const studentPhone =
+      data.studentPhone != null
+        ? normalizePhone(String(data.studentPhone))
+        : submission.studentPhone;
+    const parentPhone =
+      data.parentPhone != null
+        ? normalizePhone(String(data.parentPhone))
+        : submission.parentPhone;
+    if (!isValidMobile(studentPhone)) {
+      throw new BadRequestException('موبايل الطالب غير صالح');
+    }
+    if (!isValidMobile(parentPhone)) {
+      throw new BadRequestException('موبايل ولي الأمر غير صالح');
+    }
+
+    let totalAmount = Number(submission.totalAmount);
+    if (data.totalAmount != null && !Number.isNaN(Number(data.totalAmount))) {
+      totalAmount = Number(data.totalAmount);
+      if (totalAmount < 0) {
+        throw new BadRequestException('المبلغ غير صالح');
+      }
+    }
+
+    let offeringIds = data.offeringIds;
+    if (offeringIds) {
+      const allowed = new Set(submission.form.offerings.map((o) => o.id));
+      offeringIds = [...new Set(offeringIds.filter((oid) => allowed.has(oid)))];
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      if (offeringIds) {
+        await tx.bookingSelection.deleteMany({
+          where: { submissionId: id },
+        });
+        if (offeringIds.length) {
+          await tx.bookingSelection.createMany({
+            data: offeringIds.map((offeringId) => ({
+              submissionId: id,
+              offeringId,
+              feeAmount: 0,
+            })),
+          });
+        }
+      }
+
+      await tx.bookingSubmission.update({
+        where: { id },
+        data: {
+          studentName,
+          studentPhone,
+          parentPhone,
+          totalAmount,
+          ...(data.notes !== undefined ? { notes: data.notes } : {}),
+        },
+      });
+
+      // Keep linked student in sync when already paid
+      if (submission.status === BookingStatus.PAID && submission.studentId) {
+        const parts = studentName.split(/\s+/);
+        const firstName = parts[0] || studentName;
+        const lastName = parts.slice(1).join(' ') || '—';
+        await tx.student.update({
+          where: { id: submission.studentId },
+          data: {
+            firstName,
+            lastName,
+            phone: studentPhone,
+          },
+        });
+      }
+    });
+
+    return this.prisma.bookingSubmission.findUnique({
+      where: { id },
+      include: {
+        form: true,
+        selections: { include: { offering: true } },
+      },
     });
   }
 
@@ -609,6 +865,118 @@ export class BookingService {
     return this.prisma.bookingSubmission.update({
       where: { id },
       data: { status: BookingStatus.CANCELLED },
+    });
+  }
+
+  /**
+   * Hard-delete a booking submission (admin only).
+   * For paid bookings: also removes linked payment, invoice, and the student
+   * (with related records) when no other bookings remain for that student.
+   */
+  async deleteSubmission(id: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const submission = await tx.bookingSubmission.findUnique({
+        where: { id },
+      });
+      if (!submission) throw new NotFoundException('الحجز غير موجود');
+
+      // Booking payment + invoice (by receipt / note)
+      if (submission.receiptNumber) {
+        const payment = await tx.payment.findUnique({
+          where: { receiptNumber: submission.receiptNumber },
+        });
+        if (payment) {
+          await tx.payment.delete({ where: { id: payment.id } });
+          if (payment.invoiceId) {
+            await tx.invoice.delete({ where: { id: payment.invoiceId } });
+          }
+        }
+      }
+      const notePayments = await tx.payment.findMany({
+        where: { note: { contains: submission.id } },
+        select: { id: true, invoiceId: true },
+      });
+      for (const p of notePayments) {
+        await tx.payment.delete({ where: { id: p.id } });
+        if (p.invoiceId) {
+          const still = await tx.payment.count({
+            where: { invoiceId: p.invoiceId },
+          });
+          if (still === 0) {
+            await tx.invoice.delete({ where: { id: p.invoiceId } });
+          }
+        }
+      }
+
+      const studentId = submission.studentId;
+      await tx.bookingSubmission.delete({ where: { id } });
+
+      if (!studentId) {
+        return { ok: true as const, deletedStudent: false };
+      }
+
+      const otherBookings = await tx.bookingSubmission.count({
+        where: { studentId },
+      });
+      if (otherBookings > 0) {
+        return { ok: true as const, deletedStudent: false };
+      }
+
+      // Wipe student ops data linked to this booking student
+      await tx.payment.deleteMany({ where: { studentId } });
+      await tx.invoice.deleteMany({ where: { studentId } });
+      await tx.grade.deleteMany({ where: { studentId } });
+      await tx.attendanceRecord.deleteMany({ where: { studentId } });
+      await tx.studentBlock.deleteMany({ where: { studentId } });
+      await tx.onlineCodeSale.deleteMany({ where: { studentId } });
+      await tx.handoutSale.deleteMany({ where: { studentId } });
+
+      const entries = await tx.sessionEntry.findMany({
+        where: { studentId },
+        select: { id: true },
+      });
+      if (entries.length) {
+        const entryIds = entries.map((e) => e.id);
+        await tx.sessionRefund.deleteMany({
+          where: { entryId: { in: entryIds } },
+        });
+        await tx.sessionEntry.deleteMany({ where: { studentId } });
+      }
+
+      await tx.enrollment.deleteMany({ where: { studentId } });
+
+      const student = await tx.student.findUnique({
+        where: { id: studentId },
+        include: { parents: true },
+      });
+      if (!student) {
+        return { ok: true as const, deletedStudent: false };
+      }
+
+      const parentIds = student.parents.map((p) => p.parentId);
+      const userId = student.userId;
+
+      await tx.studentParent.deleteMany({ where: { studentId } });
+      await tx.student.delete({ where: { id: studentId } });
+
+      if (userId) {
+        await tx.user.delete({ where: { id: userId } }).catch(() => null);
+      }
+
+      for (const parentId of parentIds) {
+        const stillLinked = await tx.studentParent.count({
+          where: { parentId },
+        });
+        if (stillLinked > 0) continue;
+        const parent = await tx.parent.findUnique({ where: { id: parentId } });
+        if (!parent) continue;
+        await tx.parent.delete({ where: { id: parentId } });
+        if (parent.userId) {
+          await tx.user.delete({ where: { id: parent.userId } }).catch(() => null);
+        }
+      }
+
+      return { ok: true as const, deletedStudent: true };
     });
   }
 

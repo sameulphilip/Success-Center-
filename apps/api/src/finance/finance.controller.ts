@@ -16,6 +16,11 @@ import { Roles } from '../auth/roles.decorator';
 export class FinanceController {
   constructor(private readonly finance: FinanceService) {}
 
+  @Get('summary')
+  summary() {
+    return this.finance.summary();
+  }
+
   @Get('invoices')
   invoices(@Query('status') status?: PaymentStatus) {
     return this.finance.listInvoices(status);

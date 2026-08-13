@@ -30,19 +30,33 @@ export function PageHero({
             'radial-gradient(500px 220px at 100% 0%, rgba(201,150,18,0.28), transparent 55%), radial-gradient(420px 200px at 0% 100%, rgba(2,132,199,0.22), transparent 50%)',
         }}
       />
-      <div className="relative flex flex-wrap items-end justify-between gap-4">
-        <div className="min-w-0">
+      <div className="relative flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
+        <div className="min-w-0 w-full sm:w-auto sm:flex-1">
           <p className="text-xs tracking-[0.22em] text-gold font-bold">
             {eyebrow}
           </p>
-          <h2 className="mt-1 text-xl sm:text-2xl font-extrabold">{title}</h2>
+          <h2 className="mt-1 text-xl sm:text-2xl font-extrabold break-words">
+            {title}
+          </h2>
           {subtitle ? (
             <p className="mt-1 text-sm text-white/65 max-w-2xl">{subtitle}</p>
           ) : null}
-          {actions ? <div className="mt-4 flex flex-wrap gap-2">{actions}</div> : null}
+          {actions ? (
+            <div className="mt-4 flex flex-col xs:flex-row flex-wrap gap-2 page-actions sm:flex-row">
+              {actions}
+            </div>
+          ) : null}
         </div>
         {metrics?.length ? (
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+          <div
+            className={`w-full grid gap-2 sm:gap-3 text-center ${
+              metrics.length >= 4
+                ? 'grid-cols-2 sm:grid-cols-4'
+                : metrics.length === 3
+                  ? 'grid-cols-3'
+                  : 'grid-cols-2'
+            }`}
+          >
             {metrics.map((m, i) => {
               const tones = [
                 'from-gold/25 to-gold/5',
@@ -53,11 +67,13 @@ export function PageHero({
               return (
                 <div
                   key={m.label}
-                  className={`rounded-xl bg-gradient-to-b ${tones[i % tones.length]} border border-white/10 px-3 py-2 min-w-[92px] backdrop-blur-[2px]`}
+                  className={`rounded-xl bg-gradient-to-b ${tones[i % tones.length]} border border-white/10 px-2 py-2 sm:px-3 backdrop-blur-[2px] min-w-0`}
                 >
-                  <p className="text-[11px] text-white/60">{m.label}</p>
+                  <p className="text-[10px] sm:text-[11px] text-white/60 truncate">
+                    {m.label}
+                  </p>
                   <p
-                    className={`text-xl font-extrabold tabular-nums ${
+                    className={`text-base sm:text-xl font-extrabold tabular-nums break-all ${
                       m.highlight ? 'text-gold' : 'text-white'
                     }`}
                   >
@@ -89,19 +105,23 @@ export function SectionCard({
   className?: string;
 }) {
   return (
-    <section className={`panel p-5 ${className}`}>
+    <section className={`panel p-4 sm:p-5 ${className}`}>
       {(title || action || badge) && (
-        <div className="mb-4 flex items-start justify-between gap-3">
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
-            {title ? <h3 className="section-title">{title}</h3> : null}
+            <div className="flex items-center gap-2 flex-wrap">
+              {title ? <h3 className="section-title">{title}</h3> : null}
+              {badge}
+            </div>
             {subtitle ? (
               <p className="text-xs text-navy/45 mt-1">{subtitle}</p>
             ) : null}
           </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {badge}
-            {action}
-          </div>
+          {action ? (
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:w-auto min-w-0">
+              {action}
+            </div>
+          ) : null}
         </div>
       )}
       {children}

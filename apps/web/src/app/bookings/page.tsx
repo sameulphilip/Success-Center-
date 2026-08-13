@@ -10,7 +10,17 @@ import {
   PageHero,
   SectionCard,
 } from '@/components/ui';
-import { api } from '@/lib/api';
+import { AppDialog, type DialogTone } from '@/components/AppDialog';
+import { api, getStoredUser } from '@/lib/api';
+
+type DialogState = {
+  title?: string;
+  message: string;
+  tone?: DialogTone;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  onConfirm?: () => void;
+} | null;
 
 type Offering = {
   id: string;
@@ -34,6 +44,11 @@ type FormRow = {
   defaultFee: string | number;
   notes?: string | null;
   _count?: { offerings: number; submissions: number };
+  statusCounts?: {
+    PAID: number;
+    SUBMITTED: number;
+    CANCELLED: number;
+  };
   offerings?: Offering[];
 };
 
@@ -42,20 +57,33 @@ type Submission = {
   studentName: string;
   studentPhone: string;
   parentPhone: string;
+  notes?: string | null;
   status: 'SUBMITTED' | 'PAID' | 'CANCELLED';
   totalAmount: string | number;
   receiptNumber?: string | null;
   paidAt?: string | null;
+  paymentMethod?: 'CASH' | 'VODAFONE_CASH' | string | null;
+  vodafoneTxn?: string | null;
   createdAt: string;
   form: { id: string; title: string; slug: string };
+  formId?: string;
   selections: {
     feeAmount: string | number;
+    offeringId?: string;
     offering: {
+      id?: string;
       teacherName: string;
       subjectName: string;
       isOnline: boolean;
     };
   }[];
+};
+
+type PayMethod = 'CASH' | 'VODAFONE_CASH';
+
+const payMethodLabel: Record<string, string> = {
+  CASH: 'كاش',
+  VODAFONE_CASH: 'فودافون كاش',
 };
 
 type SharePack = {
@@ -77,12 +105,43 @@ export default function BookingsAdminPage() {
   const [selectedFormId, setSelectedFormId] = useState('');
   const [formDetail, setFormDetail] = useState<FormRow | null>(null);
   const [statusFilter, setStatusFilter] = useState('');
+  const [phoneSearch, setPhoneSearch] = useState('');
+  const [phoneQuery, setPhoneQuery] = useState('');
   const [busy, setBusy] = useState('');
-  const [error, setError] = useState('');
+  const [dialog, setDialog] = useState<DialogState>(null);
+  const [payDialog, setPayDialog] = useState<{
+    id: string;
+    studentName: string;
+    method: PayMethod;
+    vodafoneTxn: string;
+  } | null>(null);
+  const [teachers, setTeachers] = useState<
+    {
+      id: string;
+      firstName: string;
+      lastName: string;
+      subjects?: { subject?: { id: string; nameAr: string; nameEn: string } }[];
+    }[]
+  >([]);
+  const [subjects, setSubjects] = useState<
+    { id: string; nameAr: string; nameEn: string }[]
+  >([]);
   const [offeringForm, setOfferingForm] = useState({
-    teacherName: '',
+    teacherId: '',
+    subjectId: '',
     subjectName: '',
     isOnline: false,
+  });
+  const [editingSubmission, setEditingSubmission] = useState<Submission | null>(
+    null,
+  );
+  const [editForm, setEditForm] = useState({
+    studentName: '',
+    studentPhone: '',
+    parentPhone: '',
+    totalAmount: 0,
+    notes: '',
+    offeringIds: [] as string[],
   });
   const [createForm, setCreateForm] = useState({
     slug: 'g3-2026-2027',
@@ -122,6 +181,39 @@ export default function BookingsAdminPage() {
   }
   const [share, setShare] = useState<SharePack | null>(null);
   const [copied, setCopied] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  function notify(
+    message: string,
+    tone: DialogTone = 'error',
+    title?: string,
+  ) {
+    setDialog({
+      message,
+      tone,
+      title,
+      confirmLabel: 'حسناً',
+    });
+  }
+
+  function askConfirm(
+    message: string,
+    onConfirm: () => void,
+    title = 'تأكيد',
+  ) {
+    setDialog({
+      message,
+      title,
+      tone: 'danger',
+      confirmLabel: 'تأكيد',
+      cancelLabel: 'رجوع',
+      onConfirm,
+    });
+  }
+
+  function teacherLabel(t: { firstName: string; lastName: string }) {
+    return `${t.firstName} ${t.lastName === '-' ? '' : t.lastName}`.trim();
+  }
 
   async function loadForms() {
     const list = await api<FormRow[]>('/booking/forms');
@@ -129,10 +221,24 @@ export default function BookingsAdminPage() {
     if (!selectedFormId && list[0]) setSelectedFormId(list[0].id);
   }
 
-  async function loadSubmissions(formId?: string, status?: string) {
+  async function loadTeacherCatalog() {
+    const [t, s] = await Promise.all([
+      api<typeof teachers>('/teachers'),
+      api<typeof subjects>('/catalog/subjects'),
+    ]);
+    setTeachers(t);
+    setSubjects(s);
+  }
+
+  async function loadSubmissions(
+    formId?: string,
+    status?: string,
+    phone?: string,
+  ) {
     const q = new URLSearchParams();
     if (formId) q.set('formId', formId);
     if (status) q.set('status', status);
+    if (phone?.trim()) q.set('phone', phone.trim());
     const path = `/booking/submissions${q.toString() ? `?${q}` : ''}`;
     setSubmissions(await api<Submission[]>(path));
   }
@@ -163,13 +269,17 @@ export default function BookingsAdminPage() {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      setError('تعذر نسخ الرابط');
+      notify('تعذر نسخ الرابط');
     }
   }
 
   async function refresh() {
     await loadForms();
-    await loadSubmissions(selectedFormId || undefined, statusFilter || undefined);
+    await loadSubmissions(
+      selectedFormId || undefined,
+      statusFilter || undefined,
+      phoneQuery || undefined,
+    );
     if (selectedFormId) await loadDetail(selectedFormId);
   }
 
@@ -178,30 +288,53 @@ export default function BookingsAdminPage() {
       window.location.href = '/login';
       return;
     }
-    loadForms().catch((e) => setError(e.message));
+    setIsAdmin(getStoredUser()?.role === 'SUPER_ADMIN');
+    Promise.all([loadForms(), loadTeacherCatalog()]).catch((e) =>
+      notify(e.message),
+    );
   }, []);
 
   useEffect(() => {
     if (!selectedFormId) return;
     Promise.all([
       loadDetail(selectedFormId),
-      loadSubmissions(selectedFormId, statusFilter || undefined),
-    ]).catch((e) => setError(e.message));
-  }, [selectedFormId, statusFilter]);
+      loadSubmissions(
+        selectedFormId,
+        statusFilter || undefined,
+        phoneQuery || undefined,
+      ),
+    ]).catch((e) => notify(e.message));
+  }, [selectedFormId, statusFilter, phoneQuery]);
 
-  const pendingCount = useMemo(
-    () => submissions.filter((s) => s.status === 'SUBMITTED').length,
-    [submissions],
+  const selectedFormMeta = useMemo(
+    () => forms.find((f) => f.id === selectedFormId) || null,
+    [forms, selectedFormId],
   );
-  const paidCount = useMemo(
-    () => submissions.filter((s) => s.status === 'PAID').length,
-    [submissions],
-  );
+  const pendingCount = useMemo(() => {
+    if (selectedFormMeta?.statusCounts) {
+      return selectedFormMeta.statusCounts.SUBMITTED || 0;
+    }
+    return forms.reduce(
+      (n, f) => n + (f.statusCounts?.SUBMITTED || 0),
+      0,
+    );
+  }, [forms, selectedFormMeta]);
+  const paidCount = useMemo(() => {
+    if (selectedFormMeta?.statusCounts) {
+      return selectedFormMeta.statusCounts.PAID || 0;
+    }
+    return forms.reduce((n, f) => n + (f.statusCounts?.PAID || 0), 0);
+  }, [forms, selectedFormMeta]);
+  const totalBookingsCount = useMemo(() => {
+    if (selectedFormMeta?._count?.submissions != null) {
+      return selectedFormMeta._count.submissions;
+    }
+    return forms.reduce((n, f) => n + (f._count?.submissions || 0), 0);
+  }, [forms, selectedFormMeta]);
 
   async function createBookingForm(e: FormEvent) {
     e.preventDefault();
     setBusy('create');
-    setError('');
     try {
       const created = await api<FormRow>('/booking/forms', {
         method: 'POST',
@@ -213,7 +346,7 @@ export default function BookingsAdminPage() {
       await loadForms();
       setSelectedFormId(created.id);
     } catch (err: any) {
-      setError(err.message || 'فشل إنشاء الاستمارة');
+      notify(err.message || 'فشل إنشاء الاستمارة');
     } finally {
       setBusy('');
     }
@@ -229,7 +362,7 @@ export default function BookingsAdminPage() {
       });
       await refresh();
     } catch (err: any) {
-      setError(err.message);
+      notify(err.message);
     } finally {
       setBusy('');
     }
@@ -245,7 +378,7 @@ export default function BookingsAdminPage() {
       });
       await refresh();
     } catch (err: any) {
-      setError(err.message);
+      notify(err.message);
     } finally {
       setBusy('');
     }
@@ -256,43 +389,88 @@ export default function BookingsAdminPage() {
     if (!formDetail) return;
     setBusy('offering');
     try {
+      if (!offeringForm.teacherId) {
+        notify('اختَر مدرسًا من قائمة المدرسين');
+        return;
+      }
+      const subjectName =
+        offeringForm.subjectName.trim() ||
+        subjects.find((s) => s.id === offeringForm.subjectId)?.nameAr ||
+        '';
+      if (!subjectName) {
+        notify('اختَر أو اكتب اسم المادة');
+        return;
+      }
+
       await api(`/booking/forms/${formDetail.id}/offerings`, {
         method: 'POST',
-        body: JSON.stringify(offeringForm),
+        body: JSON.stringify({
+          teacherId: offeringForm.teacherId,
+          subjectId: offeringForm.subjectId || undefined,
+          subjectName,
+          isOnline: offeringForm.isOnline,
+        }),
       });
       setOfferingForm({
-        teacherName: '',
+        teacherId: '',
+        subjectId: '',
         subjectName: '',
         isOnline: false,
       });
-      await loadDetail(formDetail.id);
-      await loadForms();
+      await Promise.all([
+        loadDetail(formDetail.id),
+        loadForms(),
+        loadTeacherCatalog(),
+      ]);
     } catch (err: any) {
-      setError(err.message);
+      notify(err.message);
     } finally {
       setBusy('');
     }
   }
 
   async function removeOffering(id: string) {
-    if (!confirm('حذف هذا المدرس من الاستمارة؟')) return;
-    setBusy(`del-${id}`);
-    try {
-      await api(`/booking/offerings/${id}`, { method: 'DELETE' });
-      if (formDetail) await loadDetail(formDetail.id);
-      await loadForms();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setBusy('');
-    }
+    askConfirm('حذف هذا المدرس من الاستمارة؟', () => {
+      void (async () => {
+        setBusy(`del-${id}`);
+        try {
+          await api(`/booking/offerings/${id}`, { method: 'DELETE' });
+          if (formDetail) await loadDetail(formDetail.id);
+          await loadForms();
+          notify('تم حذف المدرس من الاستمارة', 'success');
+        } catch (err: any) {
+          notify(err.message);
+        } finally {
+          setBusy('');
+        }
+      })();
+    });
   }
 
-  async function markPaid(id: string) {
+  function openPayDialog(id: string, studentName: string, method: PayMethod) {
+    if (method === 'CASH') {
+      askConfirm(
+        `تأكيد استلام دفع كاش من «${studentName}»؟`,
+        () => {
+          void markPaid(id, 'CASH');
+        },
+        'دفع كاش',
+      );
+      return;
+    }
+    setPayDialog({ id, studentName, method, vodafoneTxn: '' });
+  }
+
+  async function markPaid(
+    id: string,
+    method: PayMethod,
+    vodafoneTxn?: string,
+  ) {
     setBusy(`paid-${id}`);
     try {
       const res = await api<{
         receiptNumber?: string;
+        paymentMethod?: string;
         portalAccount?: {
           phone: string;
           mustSetPassword: boolean;
@@ -300,38 +478,144 @@ export default function BookingsAdminPage() {
         } | null;
       }>(`/booking/submissions/${id}/mark-paid`, {
         method: 'POST',
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          method,
+          vodafoneTxn: vodafoneTxn || undefined,
+        }),
       });
+      const methodAr = payMethodLabel[method] || method;
       if (res.portalAccount?.created) {
-        setError('');
-        alert(
-          `تم الدفع وإنشاء حساب الطالب.\nالدخول برقم: ${res.portalAccount.phone}\nأول مرة يعيّن كلمة المرور بنفسه.`,
+        notify(
+          `تم الدفع (${methodAr}) وإنشاء حساب الطالب.\nالدخول برقم: ${res.portalAccount.phone}\nأول مرة يعيّن كلمة المرور بنفسه.`,
+          'success',
+          'تم الدفع',
         );
       } else if (res.portalAccount) {
-        alert(
-          `تم الدفع. حساب الموبايل ${res.portalAccount.phone} موجود بالفعل.`,
+        notify(
+          `تم الدفع (${methodAr}). حساب الموبايل ${res.portalAccount.phone} موجود بالفعل.`,
+          'success',
+          'تم الدفع',
         );
+      } else {
+        notify(`تم تأكيد الدفع · ${methodAr}`, 'success', 'تم الدفع');
       }
-      await loadSubmissions(selectedFormId || undefined, statusFilter || undefined);
+      await loadSubmissions(
+        selectedFormId || undefined,
+        statusFilter || undefined,
+        phoneQuery || undefined,
+      );
       await loadForms();
     } catch (err: any) {
-      setError(err.message);
+      notify(err.message);
     } finally {
       setBusy('');
     }
   }
 
-  async function cancelSubmission(id: string) {
-    if (!confirm('إلغاء هذا الحجز؟')) return;
-    setBusy(`cancel-${id}`);
+  function deleteSubmission(id: string, studentName?: string) {
+    if (!isAdmin) {
+      notify('مسح طلب الحجز متاح لمدير النظام فقط');
+      return;
+    }
+    askConfirm(
+      `مسح استمارة «${studentName || 'الطالب'}» من طلبات الحجز نهائيًا؟\n\nلو الحجز مدفوع، هيتشال كمان الإيصال والفاتورة والطالب المرتبط لو مفيش حجوزات تانية.`,
+      () => {
+        void (async () => {
+          setBusy(`del-sub-${id}`);
+          try {
+            const res = await api<{ ok: boolean; deletedStudent?: boolean }>(
+              `/booking/submissions/${id}`,
+              { method: 'DELETE' },
+            );
+            if (editingSubmission?.id === id) setEditingSubmission(null);
+            await Promise.all([
+              loadSubmissions(
+                selectedFormId || undefined,
+                statusFilter || undefined,
+                phoneQuery || undefined,
+              ),
+              loadForms(),
+            ]);
+            notify(
+              res.deletedStudent
+                ? 'تم مسح الحجز والطالب وكل ما يرتبط بهما'
+                : 'تم مسح طلب الحجز',
+              'success',
+              'تم المسح',
+            );
+          } catch (err: any) {
+            notify(err.message);
+          } finally {
+            setBusy('');
+          }
+        })();
+      },
+      'مسح نهائي',
+    );
+  }
+
+  function startEditSubmission(s: Submission) {
+    setEditingSubmission(s);
+    setEditForm({
+      studentName: s.studentName || '',
+      studentPhone: s.studentPhone || '',
+      parentPhone: s.parentPhone || '',
+      totalAmount: Number(s.totalAmount || 0),
+      notes: s.notes || '',
+      offeringIds: (s.selections || [])
+        .map((x) => x.offeringId || x.offering?.id)
+        .filter((id): id is string => !!id),
+    });
+  }
+
+  function cancelEditSubmission() {
+    setEditingSubmission(null);
+  }
+
+  async function saveSubmissionEdit(e: FormEvent) {
+    e.preventDefault();
+    if (!editingSubmission) return;
+    setBusy('edit-sub');
     try {
-      await api(`/booking/submissions/${id}/cancel`, { method: 'POST' });
-      await loadSubmissions(selectedFormId || undefined, statusFilter || undefined);
+      await api(`/booking/submissions/${editingSubmission.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          studentName: editForm.studentName,
+          studentPhone: editForm.studentPhone,
+          parentPhone: editForm.parentPhone,
+          totalAmount: editForm.totalAmount,
+          notes: editForm.notes || null,
+          offeringIds: editForm.offeringIds,
+        }),
+      });
+      setEditingSubmission(null);
+      await loadSubmissions(
+        selectedFormId || undefined,
+        statusFilter || undefined,
+        phoneQuery || undefined,
+      );
     } catch (err: any) {
-      setError(err.message);
+      notify(err.message || 'فشل تعديل الحجز');
     } finally {
       setBusy('');
     }
+  }
+
+  function runPhoneSearch(e?: FormEvent) {
+    e?.preventDefault();
+    setPhoneQuery(phoneSearch.trim());
+  }
+
+  function toggleEditOffering(id: string) {
+    setEditForm((prev) => {
+      const has = prev.offeringIds.includes(id);
+      return {
+        ...prev,
+        offeringIds: has
+          ? prev.offeringIds.filter((x) => x !== id)
+          : [...prev.offeringIds, id],
+      };
+    });
   }
 
   return (
@@ -345,7 +629,11 @@ export default function BookingsAdminPage() {
         title="الحجز والدفع في السنتر"
         subtitle="الطالب يسجّل أونلاين، والاستقبال يؤكّد الدفع كاش ويصدر الإيصال"
         metrics={[
-          { label: 'استمارات', value: forms.length, highlight: true },
+          {
+            label: selectedFormMeta ? 'إجمالي الحجوزات' : 'استمارات',
+            value: selectedFormMeta ? totalBookingsCount : forms.length,
+            highlight: true,
+          },
           { label: 'بانتظار الدفع', value: pendingCount },
           { label: 'مدفوع', value: paidCount },
           {
@@ -374,12 +662,6 @@ export default function BookingsAdminPage() {
           ) : null
         }
       />
-
-      {error ? (
-        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-          {error}
-        </div>
-      ) : null}
 
       <div className="grid gap-4 xl:grid-cols-[280px_1fr]">
         <SectionCard title="الاستمارات" subtitle="اختر استمارة لإدارتها">
@@ -571,7 +853,7 @@ export default function BookingsAdminPage() {
                 </div>
               ) : null}
 
-              <div className="overflow-auto max-h-72 mb-4">
+              <div className="table-scroll max-h-72 mb-4">
                 <table className="data-table">
                   <thead>
                     <tr>
@@ -608,34 +890,79 @@ export default function BookingsAdminPage() {
 
               <form
                 onSubmit={addOffering}
-                className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 border-t border-mist pt-4"
+                className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6 border-t border-mist pt-4"
               >
-                <FieldLabel label="المدرس">
-                  <input
-                    className="field"
-                    required
-                    value={offeringForm.teacherName}
-                    onChange={(e) =>
-                      setOfferingForm({
-                        ...offeringForm,
-                        teacherName: e.target.value,
-                      })
-                    }
-                  />
-                </FieldLabel>
-                <FieldLabel label="المادة">
-                  <input
-                    className="field"
-                    required
-                    value={offeringForm.subjectName}
-                    onChange={(e) =>
-                      setOfferingForm({
-                        ...offeringForm,
-                        subjectName: e.target.value,
-                      })
-                    }
-                  />
-                </FieldLabel>
+                <div className="lg:col-span-2">
+                  <FieldLabel label="المدرس">
+                    <select
+                      className="field"
+                      required
+                      value={offeringForm.teacherId}
+                      onChange={(e) => {
+                        const teacherId = e.target.value;
+                        const t = teachers.find((x) => x.id === teacherId);
+                        const firstSub = t?.subjects?.[0]?.subject;
+                        setOfferingForm((f) => ({
+                          ...f,
+                          teacherId,
+                          subjectId: firstSub?.id || f.subjectId,
+                          subjectName: firstSub?.nameAr || f.subjectName,
+                        }));
+                      }}
+                    >
+                      <option value="">اختر من قائمة المدرسين…</option>
+                      {teachers.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {teacherLabel(t)}
+                        </option>
+                      ))}
+                    </select>
+                  </FieldLabel>
+                </div>
+
+                <div className="lg:col-span-2">
+                  <FieldLabel label="المادة">
+                    <select
+                      className="field"
+                      value={offeringForm.subjectId}
+                      onChange={(e) => {
+                        const subjectId = e.target.value;
+                        const s = subjects.find((x) => x.id === subjectId);
+                        setOfferingForm((f) => ({
+                          ...f,
+                          subjectId,
+                          subjectName: s?.nameAr || '',
+                        }));
+                      }}
+                    >
+                      <option value="">من الكتالوج…</option>
+                      {subjects.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.nameAr}
+                        </option>
+                      ))}
+                    </select>
+                  </FieldLabel>
+                </div>
+                <div className="lg:col-span-1">
+                  <FieldLabel label="أو اكتب المادة">
+                    <input
+                      className="field"
+                      placeholder="اختياري إن اخترت من فوق"
+                      value={
+                        offeringForm.subjectId ? '' : offeringForm.subjectName
+                      }
+                      disabled={!!offeringForm.subjectId}
+                      onChange={(e) =>
+                        setOfferingForm({
+                          ...offeringForm,
+                          subjectId: '',
+                          subjectName: e.target.value,
+                        })
+                      }
+                    />
+                  </FieldLabel>
+                </div>
                 <label className="flex items-center gap-2 text-sm text-navy/70 pt-6">
                   <input
                     type="checkbox"
@@ -649,14 +976,17 @@ export default function BookingsAdminPage() {
                   />
                   Online
                 </label>
-                <div className="pt-6">
+                <div className="pt-6 lg:col-span-6">
                   <button
                     type="submit"
-                    className="btn-primary w-full"
+                    className="btn-primary"
                     disabled={busy === 'offering'}
                   >
-                    إضافة مدرس
+                    إضافة مدرس للاستمارة
                   </button>
+                  <p className="mt-2 text-xs text-navy/45">
+                    لازم يكون المدرس متسجّل أولاً من صفحة المدرسين.
+                  </p>
                 </div>
               </form>
             </SectionCard>
@@ -668,10 +998,41 @@ export default function BookingsAdminPage() {
 
           <SectionCard
             title="طلبات الحجز"
-            subtitle="تأكيد الدفع الكاش يُنشئ الطالب والفاتورة والإيصال"
-            action={
+            subtitle="تأكيد الدفع يُنشئ الطالب والإيصال · كاش أو فودافون كاش"
+          >
+            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+              <form
+                onSubmit={runPhoneSearch}
+                className="flex flex-1 items-stretch gap-1 min-w-0"
+              >
+                <input
+                  className="field !mt-0 flex-1 min-w-0"
+                  placeholder="بحث بالموبايل"
+                  value={phoneSearch}
+                  onChange={(e) => setPhoneSearch(e.target.value)}
+                  inputMode="tel"
+                />
+                <button
+                  type="submit"
+                  className="btn-ghost text-xs px-3 shrink-0"
+                >
+                  بحث
+                </button>
+                {phoneQuery ? (
+                  <button
+                    type="button"
+                    className="btn-ghost text-xs px-3 shrink-0"
+                    onClick={() => {
+                      setPhoneSearch('');
+                      setPhoneQuery('');
+                    }}
+                  >
+                    مسح
+                  </button>
+                ) : null}
+              </form>
               <select
-                className="field w-auto"
+                className="field !mt-0 w-full sm:w-auto"
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
               >
@@ -680,9 +1041,246 @@ export default function BookingsAdminPage() {
                 <option value="PAID">تم الدفع</option>
                 <option value="CANCELLED">ملغي</option>
               </select>
-            }
-          >
-            <div className="overflow-auto">
+            </div>
+            {editingSubmission && editingSubmission.status !== 'CANCELLED' ? (
+              <form
+                onSubmit={saveSubmissionEdit}
+                className="mb-4 rounded-xl border border-sky/30 bg-sky/5 p-4 space-y-3"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p className="font-bold text-navy text-sm">
+                    تعديل حجز: {editingSubmission.studentName}
+                  </p>
+                  <button
+                    type="button"
+                    className="btn-ghost text-xs px-2 py-1"
+                    onClick={cancelEditSubmission}
+                  >
+                    إغلاق
+                  </button>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <FieldLabel label="اسم الطالب">
+                    <input
+                      className="field"
+                      value={editForm.studentName}
+                      onChange={(e) =>
+                        setEditForm({
+                          ...editForm,
+                          studentName: e.target.value,
+                        })
+                      }
+                      required
+                    />
+                  </FieldLabel>
+                  <FieldLabel label="المبلغ">
+                    <input
+                      type="number"
+                      min={0}
+                      className="field"
+                      value={editForm.totalAmount}
+                      onChange={(e) =>
+                        setEditForm({
+                          ...editForm,
+                          totalAmount: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </FieldLabel>
+                  <FieldLabel label="موبايل الطالب">
+                    <input
+                      className="field"
+                      value={editForm.studentPhone}
+                      onChange={(e) =>
+                        setEditForm({
+                          ...editForm,
+                          studentPhone: e.target.value,
+                        })
+                      }
+                      required
+                    />
+                  </FieldLabel>
+                  <FieldLabel label="موبايل ولي الأمر">
+                    <input
+                      className="field"
+                      value={editForm.parentPhone}
+                      onChange={(e) =>
+                        setEditForm({
+                          ...editForm,
+                          parentPhone: e.target.value,
+                        })
+                      }
+                      required
+                    />
+                  </FieldLabel>
+                </div>
+                <FieldLabel label="ملاحظات">
+                  <input
+                    className="field"
+                    value={editForm.notes}
+                    onChange={(e) =>
+                      setEditForm({ ...editForm, notes: e.target.value })
+                    }
+                  />
+                </FieldLabel>
+                <div>
+                  <p className="text-sm font-medium text-navy/80 mb-2">
+                    المدرسين المختارين
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-2 max-h-48 overflow-auto">
+                    {(formDetail?.offerings || [])
+                      .filter((o) => o.isActive !== false)
+                      .map((o) => (
+                        <label
+                          key={o.id}
+                          className="flex items-center gap-2 rounded-lg bg-white border border-mist px-3 py-2 text-sm"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={editForm.offeringIds.includes(o.id)}
+                            onChange={() => toggleEditOffering(o.id)}
+                          />
+                          <span>
+                            <span className="font-semibold text-navy">
+                              {o.teacherName}
+                            </span>
+                            <span className="text-navy/45 text-xs ms-1">
+                              ({o.subjectName})
+                            </span>
+                          </span>
+                        </label>
+                      ))}
+                    {!formDetail?.offerings?.length ? (
+                      <p className="text-xs text-navy/45">
+                        لا يوجد مدرسون في الاستمارة
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+                <button
+                  type="submit"
+                  className="btn-primary"
+                  disabled={busy === 'edit-sub'}
+                >
+                  {busy === 'edit-sub' ? 'جاري الحفظ…' : 'حفظ التعديلات'}
+                </button>
+              </form>
+            ) : null}
+
+            {/* Mobile cards */}
+            <div className="space-y-3 md:hidden">
+              {submissions.map((s) => (
+                <article
+                  key={s.id}
+                  className={`rounded-xl border border-mist bg-white p-3 space-y-2 ${
+                    editingSubmission?.id === s.id ? 'ring-2 ring-sky/30' : ''
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-bold text-navy">{s.studentName}</p>
+                      <p className="text-[11px] text-navy/40">
+                        {new Date(s.createdAt).toLocaleString('ar-EG')}
+                      </p>
+                    </div>
+                    <span
+                      className={
+                        s.status === 'PAID'
+                          ? 'badge-ok'
+                          : s.status === 'CANCELLED'
+                            ? 'badge-warn'
+                            : 'badge-navy'
+                      }
+                    >
+                      {statusLabel[s.status] || s.status}
+                    </span>
+                  </div>
+                  <div className="text-xs text-navy/70 space-y-0.5">
+                    <p>طالب: {s.studentPhone}</p>
+                    <p>ولي أمر: {s.parentPhone}</p>
+                    <p className="font-bold tabular-nums text-navy text-sm">
+                      {Number(s.totalAmount).toLocaleString('en-EG')} ج.م
+                    </p>
+                    {s.status === 'PAID' && s.paymentMethod ? (
+                      <p>
+                        {payMethodLabel[s.paymentMethod] || s.paymentMethod}
+                        {s.vodafoneTxn ? ` · ${s.vodafoneTxn}` : ''}
+                      </p>
+                    ) : null}
+                    {s.receiptNumber ? (
+                      <p className="font-mono text-navy/45">{s.receiptNumber}</p>
+                    ) : null}
+                  </div>
+                  {s.selections?.length ? (
+                    <div className="flex flex-wrap gap-1">
+                      {s.selections.map((x, i) => (
+                        <span
+                          key={`${x.offering.teacherName}-${i}`}
+                          className="badge-navy"
+                        >
+                          {x.offering.teacherName}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    {s.status !== 'CANCELLED' ? (
+                      <button
+                        type="button"
+                        className="btn-ghost text-xs px-2 py-2"
+                        onClick={() => startEditSubmission(s)}
+                      >
+                        تعديل
+                      </button>
+                    ) : null}
+                    {isAdmin ? (
+                      <button
+                        type="button"
+                        className="btn-ghost text-xs px-2 py-2 text-red-700"
+                        disabled={busy === `del-sub-${s.id}`}
+                        onClick={() => deleteSubmission(s.id, s.studentName)}
+                      >
+                        مسح
+                      </button>
+                    ) : null}
+                    {s.status === 'SUBMITTED' ? (
+                      <>
+                        <button
+                          type="button"
+                          className="btn-accent text-xs px-2 py-2"
+                          disabled={busy === `paid-${s.id}`}
+                          onClick={() =>
+                            openPayDialog(s.id, s.studentName, 'CASH')
+                          }
+                        >
+                          كاش
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-primary text-xs px-2 py-2"
+                          disabled={busy === `paid-${s.id}`}
+                          onClick={() =>
+                            openPayDialog(
+                              s.id,
+                              s.studentName,
+                              'VODAFONE_CASH',
+                            )
+                          }
+                        >
+                          فودافون كاش
+                        </button>
+                      </>
+                    ) : null}
+                  </div>
+                </article>
+              ))}
+              {!submissions.length ? (
+                <EmptyState>لا توجد طلبات لهذه الاستمارة</EmptyState>
+              ) : null}
+            </div>
+
+            {/* Desktop table */}
+            <div className="table-scroll hidden md:block">
               <table className="data-table">
                 <thead>
                   <tr>
@@ -696,7 +1294,12 @@ export default function BookingsAdminPage() {
                 </thead>
                 <tbody>
                   {submissions.map((s) => (
-                    <tr key={s.id}>
+                    <tr
+                      key={s.id}
+                      className={
+                        editingSubmission?.id === s.id ? 'bg-sky/5' : undefined
+                      }
+                    >
                       <td>
                         <p className="font-semibold">{s.studentName}</p>
                         <p className="text-[11px] text-navy/40 font-mono">
@@ -744,27 +1347,62 @@ export default function BookingsAdminPage() {
                             {s.receiptNumber}
                           </p>
                         ) : null}
+                        {s.status === 'PAID' && s.paymentMethod ? (
+                          <p className="text-[11px] mt-1 text-navy/60">
+                            {payMethodLabel[s.paymentMethod] || s.paymentMethod}
+                            {s.vodafoneTxn ? ` · ${s.vodafoneTxn}` : ''}
+                          </p>
+                        ) : null}
                       </td>
-                      <td className="space-y-1">
+                      <td className="space-y-1 min-w-[120px]">
+                        {s.status !== 'CANCELLED' ? (
+                          <button
+                            type="button"
+                            className="btn-ghost text-xs px-2 py-1 w-full !min-h-0"
+                            onClick={() => startEditSubmission(s)}
+                          >
+                            تعديل
+                          </button>
+                        ) : null}
                         {s.status === 'SUBMITTED' ? (
                           <>
                             <button
                               type="button"
-                              className="btn-accent text-xs px-2 py-1 w-full"
+                              className="btn-accent text-xs px-2 py-1 w-full !min-h-0"
                               disabled={busy === `paid-${s.id}`}
-                              onClick={() => markPaid(s.id)}
+                              onClick={() =>
+                                openPayDialog(s.id, s.studentName, 'CASH')
+                              }
                             >
-                              تم الدفع كاش
+                              كاش
                             </button>
                             <button
                               type="button"
-                              className="btn-ghost text-xs px-2 py-1 w-full"
-                              disabled={busy === `cancel-${s.id}`}
-                              onClick={() => cancelSubmission(s.id)}
+                              className="btn-primary text-xs px-2 py-1 w-full !min-h-0"
+                              disabled={busy === `paid-${s.id}`}
+                              onClick={() =>
+                                openPayDialog(
+                                  s.id,
+                                  s.studentName,
+                                  'VODAFONE_CASH',
+                                )
+                              }
                             >
-                              إلغاء
+                              فودافون كاش
                             </button>
                           </>
+                        ) : null}
+                        {isAdmin ? (
+                          <button
+                            type="button"
+                            className="btn-ghost text-xs px-2 py-1 w-full text-red-700 !min-h-0"
+                            disabled={busy === `del-sub-${s.id}`}
+                            onClick={() =>
+                              deleteSubmission(s.id, s.studentName)
+                            }
+                          >
+                            مسح
+                          </button>
                         ) : null}
                       </td>
                     </tr>
@@ -778,6 +1416,60 @@ export default function BookingsAdminPage() {
           </SectionCard>
         </div>
       </div>
+
+      <AppDialog
+        open={!!dialog}
+        title={dialog?.title}
+        message={dialog?.message || ''}
+        tone={dialog?.tone || 'info'}
+        confirmLabel={dialog?.confirmLabel || 'حسناً'}
+        cancelLabel={dialog?.cancelLabel}
+        onConfirm={dialog?.onConfirm}
+        onClose={() => setDialog(null)}
+      />
+
+      <AppDialog
+        open={!!payDialog}
+        title="فودافون كاش"
+        message={
+          payDialog
+            ? `تأكيد دفع استمارة «${payDialog.studentName}» بفودافون كاش`
+            : ''
+        }
+        tone="info"
+        confirmLabel="تأكيد الدفع"
+        cancelLabel="رجوع"
+        onConfirm={() => {
+          const snapshot = payDialog;
+          if (!snapshot) return;
+          const txn = snapshot.vodafoneTxn.trim();
+          if (!txn) {
+            queueMicrotask(() => {
+              setPayDialog(snapshot);
+              notify('اكتب رقم عملية فودافون كاش');
+            });
+            return;
+          }
+          void markPaid(snapshot.id, 'VODAFONE_CASH', txn);
+        }}
+        onClose={() => setPayDialog(null)}
+      >
+        {payDialog ? (
+          <label className="mt-3 block text-sm font-medium text-navy/80">
+            رقم العملية
+            <input
+              className="field"
+              autoFocus
+              inputMode="numeric"
+              placeholder="مثال: 1234567890"
+              value={payDialog.vodafoneTxn}
+              onChange={(e) =>
+                setPayDialog({ ...payDialog, vodafoneTxn: e.target.value })
+              }
+            />
+          </label>
+        ) : null}
+      </AppDialog>
     </AppShell>
   );
 }

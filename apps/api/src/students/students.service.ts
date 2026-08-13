@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { normalizePhone } from '../common/phone.util';
 
 @Injectable()
 export class StudentsService {
@@ -83,7 +84,52 @@ export class StudentsService {
       },
     });
     if (!student) throw new NotFoundException('Student not found');
-    return student;
+
+    const phoneVariants = new Set<string>();
+    if (student.phone?.trim()) phoneVariants.add(student.phone.trim());
+    const normalized = student.phone ? normalizePhone(student.phone) : '';
+    if (normalized) phoneVariants.add(normalized);
+
+    const bookingSubmissions = await this.prisma.bookingSubmission.findMany({
+      where: {
+        OR: [
+          { studentId: id },
+          ...[...phoneVariants].map((studentPhone) => ({ studentPhone })),
+        ],
+      },
+      include: {
+        form: {
+          select: {
+            id: true,
+            title: true,
+            gradeLabel: true,
+            academicYear: true,
+            slug: true,
+          },
+        },
+        selections: {
+          include: {
+            offering: {
+              select: {
+                teacherName: true,
+                subjectName: true,
+                isOnline: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const paidBooking = bookingSubmissions.find((b) => b.status === 'PAID');
+
+    return {
+      ...student,
+      bookingSubmissions,
+      formFeePaid: !!paidBooking,
+      paidBooking: paidBooking || null,
+    };
   }
 
   async create(data: {

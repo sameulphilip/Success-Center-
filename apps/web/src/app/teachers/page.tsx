@@ -156,7 +156,7 @@ export default function TeachersPage() {
           title="قائمة المدرسين"
           badge={<span className="badge-navy">{teachers.length}</span>}
         >
-          <div className="overflow-x-auto">
+          <div className="table-scroll">
             <table className="data-table">
               <thead>
                 <tr>

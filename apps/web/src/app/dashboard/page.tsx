@@ -654,7 +654,7 @@ export default function DashboardPage() {
             <h3 className="section-title">آخر المدفوعات</h3>
             <span className="badge-gold">إيصالات</span>
           </div>
-          <div className="overflow-x-auto">
+          <div className="table-scroll">
             <table className="data-table">
               <thead>
                 <tr>

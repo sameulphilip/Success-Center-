@@ -88,7 +88,8 @@ export class BookingController {
     @Body()
     body: {
       id?: string;
-      teacherName: string;
+      teacherId: string;
+      subjectId?: string;
       subjectName: string;
       isOnline?: boolean;
       feeAmount?: number;
@@ -110,19 +111,51 @@ export class BookingController {
   listSubmissions(
     @Query('formId') formId?: string,
     @Query('status') status?: BookingStatus,
+    @Query('phone') phone?: string,
   ) {
-    return this.booking.listSubmissions(formId, status);
+    return this.booking.listSubmissions(formId, status, phone);
   }
 
   @Post('submissions/:id/mark-paid')
-  markPaid(@Param('id') id: string, @Body() body: { note?: string }) {
-    return this.booking.markPaid(id, body?.note);
+  markPaid(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      note?: string;
+      method?: 'CASH' | 'VODAFONE_CASH';
+      vodafoneTxn?: string;
+    },
+  ) {
+    return this.booking.markPaid(id, body || {});
   }
 
   @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER, RoleCode.RECEPTION)
+  @Patch('submissions/:id')
+  updateSubmission(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      studentName?: string;
+      studentPhone?: string;
+      parentPhone?: string;
+      notes?: string | null;
+      totalAmount?: number;
+      offeringIds?: string[];
+    },
+  ) {
+    return this.booking.updateSubmission(id, body);
+  }
+
+  @Roles(RoleCode.SUPER_ADMIN)
   @Post('submissions/:id/cancel')
   cancel(@Param('id') id: string) {
     return this.booking.cancelSubmission(id);
+  }
+
+  @Roles(RoleCode.SUPER_ADMIN)
+  @Delete('submissions/:id')
+  deleteSubmission(@Param('id') id: string) {
+    return this.booking.deleteSubmission(id);
   }
 
   @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER, RoleCode.RECEPTION)
