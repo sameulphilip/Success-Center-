@@ -1,0 +1,21 @@
+{
+  "name": "center-erp",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "db:generate": "pnpm --filter @center-erp/api prisma:generate",
+    "db:migrate": "pnpm --filter @center-erp/api prisma:migrate",
+    "db:seed": "pnpm --filter @center-erp/api prisma:seed",
+    "db:studio": "pnpm --filter @center-erp/api prisma:studio",
+    "deploy:up": "docker compose -f docker-compose.prod.yml up -d --build",
+    "deploy:down": "docker compose -f docker-compose.prod.yml down",
+    "deploy:logs": "docker compose -f docker-compose.prod.yml logs -f --tail=200"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2"
+  }
+}

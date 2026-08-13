@@ -1,0 +1,621 @@
+'use client';
+
+import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { AppShell } from '@/components/AppShell';
+import { PageHeader } from '@/components/PageHeader';
+import {
+  AlertBanner,
+  EmptyState,
+  PageHero,
+  SectionCard,
+} from '@/components/ui';
+import { api, getStoredUser } from '@/lib/api';
+
+const DAY_AR = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+
+const STATUS_AR: Record<string, string> = {
+  PRESENT: 'حاضر',
+  ABSENT: 'غائب',
+  LATE: 'متأخر',
+  EXCUSED: 'بعذر',
+};
+
+const SOURCE_AR: Record<string, string> = {
+  MANUAL: 'يدوي',
+  QR_STUDENT: 'QR',
+  QR_GATE: 'بوابة',
+  NFC_CARD: 'NFC',
+};
+
+const PAY_STATUS_AR: Record<string, string> = {
+  CONFIRMED: 'مؤكد',
+  PENDING_CONFIRM: 'بانتظار التأكيد',
+  REFUNDED: 'مسترجع',
+};
+
+function formatDate(value?: string | null) {
+  if (!value) return '—';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('ar-EG', {
+    weekday: 'short',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return '—';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString('ar-EG', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
+}
+
+function childStats(student: any) {
+  const rows = student?.attendance || [];
+  const present = rows.filter(
+    (a: any) => a.status === 'PRESENT' || a.status === 'LATE',
+  ).length;
+  const absent = rows.filter((a: any) => a.status === 'ABSENT').length;
+  const overdue = (student?.invoices || []).reduce((sum: number, inv: any) => {
+    const due =
+      Number(inv.feeAmount) -
+      Number(inv.discount) +
+      Number(inv.extras) -
+      Number(inv.paidAmount);
+    return sum + Math.max(due, 0);
+  }, 0);
+  const doorPaid = (student?.sessionEntries || [])
+    .filter((e: any) => e.payStatus === 'CONFIRMED')
+    .reduce((sum: number, e: any) => sum + Number(e.amount), 0);
+  return {
+    present,
+    absent,
+    overdue,
+    doorPaid,
+    blocks: student?.blocks?.length || 0,
+    groups: student?.enrollments?.length || 0,
+  };
+}
+
+export default function StudentPortalPage() {
+  const router = useRouter();
+  const [students, setStudents] = useState<any[]>([]);
+  const [selectedId, setSelectedId] = useState('');
+  const [qr, setQr] = useState<any>(null);
+  const [error, setError] = useState('');
+  const [role, setRole] = useState('');
+
+  useEffect(() => {
+    const user = getStoredUser();
+    if (!user) {
+      router.replace('/login');
+      return;
+    }
+    if (user.role !== 'STUDENT' && user.role !== 'PARENT') {
+      router.replace('/dashboard');
+      return;
+    }
+    setRole(user.role);
+
+    (async () => {
+      try {
+        const list = await api<any[]>('/students/mine/children');
+        if (!list.length) {
+          setError('لا توجد بيانات طالب مرتبطة بالحساب');
+          return;
+        }
+        setStudents(list);
+        const preferred =
+          list.find((s) => s.id === user.studentId)?.id || list[0].id;
+        setSelectedId(preferred);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'فشل التحميل');
+      }
+    })();
+  }, [router]);
+
+  const student = useMemo(
+    () => students.find((s) => s.id === selectedId) || students[0] || null,
+    [students, selectedId],
+  );
+
+  const family = useMemo(() => {
+    if (role !== 'PARENT') return null;
+    return students.map((s) => ({
+      id: s.id,
+      name: `${s.firstName} ${s.lastName}`,
+      grade: s.gradeLevel?.nameAr || '—',
+      ...childStats(s),
+    }));
+  }, [role, students]);
+
+  const familyTotals = useMemo(() => {
+    if (!family?.length) return null;
+    return family.reduce(
+      (acc, c) => ({
+        present: acc.present + c.present,
+        absent: acc.absent + c.absent,
+        overdue: acc.overdue + c.overdue,
+        doorPaid: acc.doorPaid + c.doorPaid,
+        blocks: acc.blocks + c.blocks,
+      }),
+      { present: 0, absent: 0, overdue: 0, doorPaid: 0, blocks: 0 },
+    );
+  }, [family]);
+
+  useEffect(() => {
+    if (!student?.id) {
+      setQr(null);
+      return;
+    }
+
+    const path =
+      role === 'STUDENT' ? '/qr/mine' : `/qr/students/${student.id}`;
+
+    api<any>(path)
+      .then(setQr)
+      .catch(() => setQr(null));
+  }, [student?.id, role]);
+
+  const attendanceStats = useMemo(() => childStats(student), [student]);
+
+  const isParent = role === 'PARENT';
+
+  return (
+    <AppShell>
+      <PageHeader
+        title={
+          isParent
+            ? 'بوابة ولي الأمر'
+            : student
+              ? `مرحباً ${student.firstName} ${student.lastName}`
+              : 'بوابة الطالب'
+        }
+        subtitle={
+          isParent
+            ? 'متابعة كل الأبناء · الحضور · المدفوعات · كروت QR'
+            : 'بياناتك الكاملة · الحضور · كارت QR'
+        }
+      />
+
+      {error ? <AlertBanner>{error}</AlertBanner> : null}
+
+      {!student && !error ? (
+        <p className="text-navy/50">جاري التحميل...</p>
+      ) : null}
+
+      {isParent && familyTotals ? (
+        <PageHero
+          eyebrow="PARENT PORTAL"
+          title="ملخص الأسرة"
+          subtitle={`${students.length} أبناء مرتبطين بحسابك`}
+          metrics={[
+            {
+              label: 'حضور مجمّع',
+              value: familyTotals.present,
+              highlight: true,
+            },
+            { label: 'غياب مجمّع', value: familyTotals.absent },
+            {
+              label: 'متأخرات',
+              value: Math.round(familyTotals.overdue).toLocaleString('en-EG'),
+            },
+            {
+              label: 'مدفوع عند الباب',
+              value: Math.round(familyTotals.doorPaid).toLocaleString('en-EG'),
+            },
+          ]}
+        />
+      ) : student ? (
+        <PageHero
+          eyebrow="STUDENT PORTAL"
+          title={`${student.firstName} ${student.lastName}`}
+          subtitle="بياناتك · حضورك · كارت QR · الدرجات والمدفوعات"
+          metrics={[
+            {
+              label: 'حضور',
+              value: attendanceStats.present,
+              highlight: true,
+            },
+            { label: 'غياب', value: attendanceStats.absent },
+            {
+              label: 'مجموعات',
+              value: attendanceStats.groups,
+            },
+            { label: 'درجات', value: student.grades?.length || 0 },
+          ]}
+        />
+      ) : null}
+
+      {isParent && family?.length ? (
+        <SectionCard className="mb-4" title="الأبناء">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {family.map((c) => {
+              const active = c.id === student?.id;
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => setSelectedId(c.id)}
+                  className={`rounded-2xl border px-4 py-3 text-right transition ${
+                    active
+                      ? 'border-gold bg-gold/10 shadow-sm'
+                      : 'border-mist bg-white hover:border-navy/20'
+                  }`}
+                >
+                  <p className="font-extrabold text-navy">{c.name}</p>
+                  <p className="text-xs text-navy/45 mt-1">{c.grade}</p>
+                  <div className="mt-3 grid grid-cols-3 gap-2 text-[11px]">
+                    <span className="rounded-lg bg-emerald-50 px-2 py-1 text-emerald-800">
+                      حضور {c.present}
+                    </span>
+                    <span className="rounded-lg bg-red-50 px-2 py-1 text-red-700">
+                      غياب {c.absent}
+                    </span>
+                    <span className="rounded-lg bg-sand px-2 py-1 text-navy">
+                      مجموعات {c.groups}
+                    </span>
+                  </div>
+                  {c.blocks > 0 ? (
+                    <p className="mt-2 text-[11px] font-bold text-red-700">
+                      عليه حظر نشط
+                    </p>
+                  ) : null}
+                  {c.overdue > 0 ? (
+                    <p className="mt-1 text-[11px] text-amber-800">
+                      متأخرات:{' '}
+                      {Math.round(c.overdue).toLocaleString('en-EG')} EGP
+                    </p>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        </SectionCard>
+      ) : students.length > 1 ? (
+        <div className="mb-4 flex flex-wrap gap-2">
+          {students.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => setSelectedId(s.id)}
+              className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+                s.id === student?.id
+                  ? 'bg-navy text-white'
+                  : 'bg-white text-navy border border-mist'
+              }`}
+            >
+              {s.firstName} {s.lastName}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {student ? (
+        <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+          {(student.blocks || []).length ? (
+            <div className="lg:col-span-2">
+              <AlertBanner>
+                حظر نشط:{' '}
+                {student.blocks
+                  .map((b: any) =>
+                    b.scope === 'CENTER'
+                      ? `السنتر كله — ${b.reason}`
+                      : `مدرس ${b.teacher?.firstName || ''} ${b.teacher?.lastName || ''} — ${b.reason}`,
+                  )
+                  .join(' · ')}
+              </AlertBanner>
+            </div>
+          ) : null}
+
+          <SectionCard className="lg:col-span-2" title="الملف الشخصي وكارت QR">
+            <div className="grid gap-6 md:grid-cols-[1fr_auto] items-start">
+              <div>
+                <h2 className="text-xl font-extrabold text-navy">
+                  {student.firstName} {student.lastName}
+                </h2>
+                <div className="mt-4 grid gap-2 sm:grid-cols-2 text-sm text-navy/80">
+                  <p>
+                    <span className="text-navy/45">الصف:</span>{' '}
+                    {student.gradeLevel?.nameAr || '—'}
+                  </p>
+                  <p>
+                    <span className="text-navy/45">الهاتف:</span>{' '}
+                    {student.phone || '—'}
+                  </p>
+                  <p>
+                    <span className="text-navy/45">البريد:</span>{' '}
+                    {student.email || '—'}
+                  </p>
+                  <p>
+                    <span className="text-navy/45">الحالة:</span>{' '}
+                    {student.isActive ? 'نشط' : 'غير نشط'}
+                  </p>
+                  <p className="sm:col-span-2 font-mono text-xs text-navy/50">
+                    UID: {student.studentUid}
+                  </p>
+                  {student.notes ? (
+                    <p className="sm:col-span-2">
+                      <span className="text-navy/45">ملاحظات:</span>{' '}
+                      {student.notes}
+                    </p>
+                  ) : null}
+                </div>
+
+                {(student.parents || []).length ? (
+                  <div className="mt-4">
+                    <p className="text-xs font-bold text-navy/45 mb-2">
+                      أولياء الأمور
+                    </p>
+                    <ul className="space-y-1 text-sm">
+                      {student.parents.map((p: any) => (
+                        <li key={`${p.parentId}-${p.relation}`}>
+                          {p.parent?.firstName} {p.parent?.lastName}
+                          {p.parent?.phone ? ` · ${p.parent.phone}` : ''}
+                          <span className="text-navy/40"> ({p.relation})</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                <div className="mt-5 flex flex-wrap gap-3 text-sm">
+                  <span className="rounded-xl bg-sand px-3 py-2">
+                    حضور مسجّل:{' '}
+                    <strong className="text-navy">
+                      {attendanceStats.present + attendanceStats.absent}
+                    </strong>
+                  </span>
+                  <span className="rounded-xl bg-emerald-50 px-3 py-2 text-emerald-800">
+                    حاضر: <strong>{attendanceStats.present}</strong>
+                  </span>
+                  <span className="rounded-xl bg-red-50 px-3 py-2 text-red-700">
+                    غياب: <strong>{attendanceStats.absent}</strong>
+                  </span>
+                </div>
+              </div>
+
+              <div className="justify-self-center rounded-2xl border border-mist bg-sand p-4 text-center min-w-[200px]">
+                <p className="text-xs font-bold tracking-wide text-navy/50 mb-3">
+                  كارت QR {isParent ? 'للابن' : 'الخاص بك'}
+                </p>
+                {qr?.qrDataUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={qr.qrDataUrl}
+                    alt="Student QR"
+                    className="mx-auto h-44 w-44 rounded-xl bg-white p-2 border border-mist"
+                  />
+                ) : (
+                  <div className="mx-auto h-44 w-44 rounded-xl bg-white border border-dashed border-mist grid place-items-center text-xs text-navy/40">
+                    جاري تحميل QR...
+                  </div>
+                )}
+                <p className="mt-3 font-mono text-[11px] text-navy/55 break-all">
+                  {qr?.studentUid || student.studentUid}
+                </p>
+                {qr?.nfcText ? (
+                  <p className="mt-1 text-[11px] text-navy/40 font-mono break-all">
+                    NFC: {qr.nfcText}
+                  </p>
+                ) : null}
+                <p className="mt-2 text-[11px] text-navy/45">
+                  امسح هذا الكود عند الدخول للسنتر
+                </p>
+              </div>
+            </div>
+          </SectionCard>
+
+          <SectionCard title="المجموعات والجدول">
+            <ul className="space-y-3 text-sm">
+              {(student.enrollments || []).map((e: any) => (
+                <li key={e.id} className="rounded-xl bg-sand px-3 py-3">
+                  <p className="font-semibold text-navy">
+                    {e.group?.subject?.nameAr ||
+                      e.group?.subject?.nameEn ||
+                      'مادة'}{' '}
+                    — {e.group?.name}
+                  </p>
+                  <p className="text-navy/55 mt-1">
+                    المدرس: {e.group?.teacher?.firstName}{' '}
+                    {e.group?.teacher?.lastName}
+                  </p>
+                  <p className="text-navy/55">
+                    القاعة: {e.group?.classroom?.name || '—'}
+                  </p>
+                  {(e.group?.scheduleSlots || []).length ? (
+                    <ul className="mt-2 space-y-1 text-xs text-navy/60">
+                      {e.group.scheduleSlots.map((s: any) => (
+                        <li key={s.id}>
+                          {DAY_AR[s.dayOfWeek] || s.dayOfWeek} · {s.startTime} –{' '}
+                          {s.endTime}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-2 text-xs text-navy/40">لا يوجد جدول بعد</p>
+                  )}
+                </li>
+              ))}
+              {!student.enrollments?.length ? (
+                <li className="text-navy/45">لا توجد مجموعات</li>
+              ) : null}
+            </ul>
+          </SectionCard>
+
+          <SectionCard title="المدفوعات والفواتير">
+            <ul className="space-y-2 text-sm">
+              {(student.invoices || []).map((inv: any) => {
+                const due =
+                  Number(inv.feeAmount) -
+                  Number(inv.discount) +
+                  Number(inv.extras) -
+                  Number(inv.paidAmount);
+                return (
+                  <li
+                    key={inv.id}
+                    className="rounded-xl bg-sand px-3 py-2 space-y-1"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium">
+                        {inv.group?.name || 'فاتورة'} · {inv.status}
+                      </span>
+                      <span className="font-bold text-navy">
+                        {due.toLocaleString('en-EG')} EGP
+                      </span>
+                    </div>
+                    <p className="text-xs text-navy/45">
+                      المدفوع: {Number(inv.paidAmount).toLocaleString('en-EG')} ·
+                      الإجمالي:{' '}
+                      {(
+                        Number(inv.feeAmount) -
+                        Number(inv.discount) +
+                        Number(inv.extras)
+                      ).toLocaleString('en-EG')}
+                    </p>
+                  </li>
+                );
+              })}
+              {!student.invoices?.length ? (
+                <li className="text-navy/45">لا توجد فواتير</li>
+              ) : null}
+            </ul>
+          </SectionCard>
+
+          <SectionCard className="lg:col-span-2" title="مدفوعات الحصص عند الباب">
+            <div className="overflow-x-auto">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>التاريخ</th>
+                    <th>المدرس / المادة</th>
+                    <th>المبلغ</th>
+                    <th>الحالة</th>
+                    <th>دخول</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(student.sessionEntries || []).map((e: any) => (
+                    <tr key={e.id}>
+                      <td>{formatDate(e.session?.sessionDate)}</td>
+                      <td>
+                        {e.session?.teacher?.firstName}{' '}
+                        {e.session?.teacher?.lastName}
+                        {e.session?.subject?.nameAr
+                          ? ` · ${e.session.subject.nameAr}`
+                          : ''}
+                      </td>
+                      <td className="font-bold tabular-nums">
+                        {Number(e.amount).toLocaleString('en-EG')}
+                      </td>
+                      <td>{PAY_STATUS_AR[e.payStatus] || e.payStatus}</td>
+                      <td className="text-xs text-navy/55">
+                        {e.checkedInAt
+                          ? formatDateTime(e.checkedInAt)
+                          : 'لم يدخل بعد'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {!student.sessionEntries?.length ? (
+                <EmptyState>لا توجد مدفوعات حصص بعد</EmptyState>
+              ) : null}
+            </div>
+          </SectionCard>
+
+          <SectionCard
+            className="lg:col-span-2"
+            title="سجل الحضور"
+            badge={
+              <span className="text-xs text-navy/45">
+                آخر {Math.min(student.attendance?.length || 0, 100)} سجل
+              </span>
+            }
+          >
+            <div className="overflow-x-auto">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>التاريخ</th>
+                    <th>المجموعة</th>
+                    <th>الحالة</th>
+                    <th>المصدر</th>
+                    <th>وقت التسجيل</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(student.attendance || []).map((a: any) => (
+                    <tr key={a.id}>
+                      <td>{formatDate(a.session?.sessionDate)}</td>
+                      <td>
+                        {a.session?.group?.name || 'حصة'}
+                        {a.session?.group?.subject?.nameEn
+                          ? ` · ${a.session.group.subject.nameEn}`
+                          : ''}
+                      </td>
+                      <td>
+                        <span
+                          className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-bold ${
+                            a.status === 'PRESENT' || a.status === 'LATE'
+                              ? 'bg-emerald-50 text-emerald-800'
+                              : a.status === 'ABSENT'
+                                ? 'bg-red-50 text-red-700'
+                                : 'bg-sand text-navy'
+                          }`}
+                        >
+                          {STATUS_AR[a.status] || a.status}
+                        </span>
+                      </td>
+                      <td>{SOURCE_AR[a.source] || a.source}</td>
+                      <td className="text-xs text-navy/55">
+                        {formatDateTime(a.markedAt)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {!student.attendance?.length ? (
+                <p className="text-sm text-navy/45 py-4">لا يوجد سجل حضور بعد</p>
+              ) : null}
+            </div>
+          </SectionCard>
+
+          <SectionCard className="lg:col-span-2" title="الدرجات">
+            <div className="overflow-x-auto">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>الامتحان</th>
+                    <th>المادة</th>
+                    <th>التاريخ</th>
+                    <th>الدرجة</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(student.grades || []).map((g: any) => (
+                    <tr key={g.id}>
+                      <td>{g.exam?.title}</td>
+                      <td>{g.exam?.subject?.nameEn || '—'}</td>
+                      <td>{formatDate(g.exam?.examDate)}</td>
+                      <td className="font-bold">{Number(g.score)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {!student.grades?.length ? (
+                <p className="text-sm text-navy/45 py-4">لا توجد درجات بعد</p>
+              ) : null}
+            </div>
+          </SectionCard>
+        </div>
+      ) : null}
+    </AppShell>
+  );
+}

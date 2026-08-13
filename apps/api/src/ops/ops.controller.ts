@@ -1,0 +1,182 @@
+import {
+  Body,
+  Controller,
+  Get,
+  NotFoundException,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import {
+  BlockScope,
+  ClassSessionStatus,
+  OpsCheckInSource,
+  RefundReason,
+  RoleCode,
+  SessionPayMethod,
+} from '@prisma/client';
+import { OpsService } from './ops.service';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
+import { CurrentUser } from '../auth/current-user.decorator';
+
+@Controller('ops')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(
+  RoleCode.SUPER_ADMIN,
+  RoleCode.CENTER_MANAGER,
+  RoleCode.RECEPTION,
+  RoleCode.ACCOUNTANT,
+)
+export class OpsController {
+  constructor(private readonly ops: OpsService) {}
+
+  @Get('students/lookup')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER, RoleCode.RECEPTION)
+  async lookupStudent(
+    @Query('phone') phone?: string,
+    @Query('uid') uid?: string,
+  ) {
+    const student = await this.ops.findStudent({
+      phone,
+      studentUid: uid,
+    });
+    if (!student) throw new NotFoundException('الطالب غير موجود');
+    return student;
+  }
+
+  @Get('sessions')
+  list(@Query('status') status?: ClassSessionStatus) {
+    return this.ops.listSessions(status);
+  }
+
+  @Get('sessions/open')
+  listOpen() {
+    return this.ops.listOpenSessions();
+  }
+
+  @Get('sessions/:id')
+  get(@Param('id') id: string) {
+    return this.ops.getSession(id);
+  }
+
+  @Post('sessions')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER, RoleCode.RECEPTION)
+  open(
+    @Body()
+    body: {
+      teacherId: string;
+      subjectId?: string;
+      title?: string;
+      feeAmount: number;
+      teacherPercent: number;
+      notes?: string;
+      sessionDate?: string;
+    },
+    @CurrentUser() user: { userId: string },
+  ) {
+    return this.ops.openSession(body, user?.userId);
+  }
+
+  @Post('sessions/:id/pay')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER, RoleCode.RECEPTION)
+  pay(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      studentId?: string;
+      phone?: string;
+      studentUid?: string;
+      method: SessionPayMethod;
+      vodafoneTxn?: string;
+      amount?: number;
+      note?: string;
+    },
+    @CurrentUser() user: { userId: string },
+  ) {
+    return this.ops.collectPayment(id, body, user?.userId);
+  }
+
+  @Post('entries/:id/confirm')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER, RoleCode.RECEPTION)
+  confirm(
+    @Param('id') id: string,
+    @CurrentUser() user: { userId: string },
+  ) {
+    return this.ops.confirmPayment(id, user?.userId);
+  }
+
+  @Post('check-in')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER, RoleCode.RECEPTION)
+  checkIn(
+    @Body()
+    body: {
+      sessionId?: string;
+      studentId?: string;
+      phone?: string;
+      studentUid?: string;
+      qrPayload?: string;
+      source?: OpsCheckInSource;
+    },
+    @CurrentUser() user: { userId: string },
+  ) {
+    return this.ops.checkIn(
+      {
+        ...body,
+        source: body.source || OpsCheckInSource.MANUAL,
+      },
+      user?.userId,
+    );
+  }
+
+  @Post('sessions/:id/close')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER, RoleCode.RECEPTION)
+  close(
+    @Param('id') id: string,
+    @CurrentUser() user: { userId: string },
+  ) {
+    return this.ops.closeSession(id, user?.userId);
+  }
+
+  @Post('entries/:id/refund')
+  refund(
+    @Param('id') id: string,
+    @Body()
+    body: { amount?: number; reason: RefundReason; note?: string },
+    @CurrentUser() user: { userId: string; role: string },
+  ) {
+    return this.ops.refund(id, body, {
+      userId: user.userId,
+      role: user.role,
+    });
+  }
+
+  @Get('blocks')
+  blocks() {
+    return this.ops.listBlocks();
+  }
+
+  @Post('blocks')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER, RoleCode.RECEPTION)
+  createBlock(
+    @Body()
+    body: {
+      studentId: string;
+      scope: BlockScope;
+      teacherId?: string;
+      reason: string;
+    },
+    @CurrentUser() user: { userId: string },
+  ) {
+    return this.ops.createBlock(body, user?.userId);
+  }
+
+  @Patch('blocks/:id/deactivate')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  deactivate(@Param('id') id: string) {
+    return this.ops.deactivateBlock(id);
+  }
+}

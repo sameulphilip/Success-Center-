@@ -1,0 +1,2 @@
+export const SMS_PROVIDER = 'SMS_PROVIDER';
+export const WHATSAPP_PROVIDER = 'WHATSAPP_PROVIDER';

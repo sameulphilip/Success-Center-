@@ -1,0 +1,86 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: success-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-center}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-center_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-center_erp}
+    ports:
+      # bind localhost only — nginx fronts the public domain
+      - "127.0.0.1:${POSTGRES_PORT:-5435}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-center} -d ${POSTGRES_DB:-center_erp}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: success-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: success-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # لازم يتعبّى في .env — شوف .env.production.example
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      JWT_SECRET: ${JWT_SECRET:-change-me-to-a-long-random-secret}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-1d}
+      JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-7d}
+      API_PORT: 3001
+      CENTER_NAME: ${CENTER_NAME:-Success}
+      WHATSAPP_PROVIDER: ${WHATSAPP_PROVIDER:-console}
+      SMS_PROVIDER: ${SMS_PROVIDER:-console}
+      WHATSAPP_TOKEN: ${WHATSAPP_TOKEN:-}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
+      WHATSAPP_API_VERSION: ${WHATSAPP_API_VERSION:-v21.0}
+      WHATSAPP_TEMPLATE_NAME: ${WHATSAPP_TEMPLATE_NAME:-}
+      WHATSAPP_TEMPLATE_LANG: ${WHATSAPP_TEMPLATE_LANG:-ar}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_WHATSAPP_FROM: ${TWILIO_WHATSAPP_FROM:-}
+      DEVICE_API_KEY: ${DEVICE_API_KEY:-success-device-key-change-me}
+      DEFAULT_CHECKIN_GROUP_ID: ${DEFAULT_CHECKIN_GROUP_ID:-}
+      OVERDUE_REMINDERS_ENABLED: ${OVERDUE_REMINDERS_ENABLED:-true}
+    ports:
+      - "127.0.0.1:${API_PORT:-3201}:3001"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001/api}
+        NEXT_PUBLIC_CHECKIN_API_URL: ${NEXT_PUBLIC_CHECKIN_API_URL:-http://localhost:3001/api/check-in}
+        NEXT_PUBLIC_DEVICE_API_KEY: ${NEXT_PUBLIC_DEVICE_API_KEY:-success-device-key-change-me}
+    container_name: success-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3200}:3000"
+
+volumes:
+  postgres_data:
+  redis_data:
