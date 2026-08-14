@@ -389,10 +389,10 @@ async function main() {
     await prisma.bookingForm.create({
       data: {
         slug: g2Slug,
-        title: 'استمارة حجز الصف الثاني الثانوي',
+        title: 'استمارة حجز الصف الثاني الثانوي - بكالوريا',
         subtitle: 'تسجيل ورقي / دفع كاش في السنتر',
         academicYear: '2026-2027',
-        gradeLabel: 'الثاني الثانوي',
+        gradeLabel: 'الثاني الثانوي - بكالوريا',
         defaultFee: 0,
         isPublished: true,
         notes: 'مستورد من كشف ورقي أو تسجيل يدوي',

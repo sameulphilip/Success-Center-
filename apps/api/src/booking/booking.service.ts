@@ -21,6 +21,128 @@ import {
 export class BookingService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /** Next Excel/paper serial «م» for a form (max + 1, or 1). */
+  async nextFormSerial(formId: string, preferred?: number | null) {
+    if (preferred != null && Number.isFinite(Number(preferred))) {
+      const n = Math.floor(Number(preferred));
+      if (n > 0) {
+        const taken = await this.prisma.bookingSubmission.findFirst({
+          where: { formId, formSerial: n },
+          select: { id: true },
+        });
+        if (!taken) return n;
+      }
+    }
+    const agg = await this.prisma.bookingSubmission.aggregate({
+      where: { formId, formSerial: { not: null } },
+      _max: { formSerial: true },
+    });
+    return (agg._max.formSerial || 0) + 1;
+  }
+
+  /**
+   * Apply sheet serials by phone (normalized).
+   * Skips conflicts; returns match stats.
+   */
+  async syncFormSerials(
+    rows: Array<{
+      studentPhone: string;
+      formSlug?: string;
+      grade?: string;
+      formSerial: number;
+    }>,
+  ) {
+    const results: Array<{
+      phone: string;
+      serial: number;
+      ok: boolean;
+      message: string;
+    }> = [];
+
+    for (const row of rows) {
+      const phone = normalizePhone(String(row.studentPhone || ''));
+      const serial = Math.floor(Number(row.formSerial));
+      if (!phone || !serial || serial < 1) {
+        results.push({
+          phone: String(row.studentPhone || ''),
+          serial,
+          ok: false,
+          message: 'بيانات ناقصة',
+        });
+        continue;
+      }
+      try {
+        const slug = this.resolveFormSlug(row.formSlug || row.grade);
+        const form = await this.prisma.bookingForm.findUnique({
+          where: { slug },
+        });
+        if (!form) {
+          results.push({
+            phone,
+            serial,
+            ok: false,
+            message: `استمارة غير موجودة: ${slug}`,
+          });
+          continue;
+        }
+        const sub = await this.prisma.bookingSubmission.findFirst({
+          where: { formId: form.id, studentPhone: phone },
+          orderBy: { createdAt: 'asc' },
+        });
+        if (!sub) {
+          results.push({
+            phone,
+            serial,
+            ok: false,
+            message: 'لا يوجد حجز لهذا الموبايل',
+          });
+          continue;
+        }
+        if (sub.formSerial === serial) {
+          results.push({
+            phone,
+            serial,
+            ok: true,
+            message: 'نفس الرقم موجود',
+          });
+          continue;
+        }
+        const clash = await this.prisma.bookingSubmission.findFirst({
+          where: {
+            formId: form.id,
+            formSerial: serial,
+            NOT: { id: sub.id },
+          },
+          select: { id: true },
+        });
+        if (clash) {
+          results.push({
+            phone,
+            serial,
+            ok: false,
+            message: 'الرقم مستخدم لحجز آخر',
+          });
+          continue;
+        }
+        await this.prisma.bookingSubmission.update({
+          where: { id: sub.id },
+          data: { formSerial: serial },
+        });
+        results.push({ phone, serial, ok: true, message: 'تم الربط' });
+      } catch (e) {
+        results.push({
+          phone,
+          serial,
+          ok: false,
+          message: e instanceof Error ? e.message : 'فشل',
+        });
+      }
+    }
+
+    const ok = results.filter((r) => r.ok).length;
+    return { total: results.length, ok, failed: results.length - ok, results };
+  }
+
   async listForms() {
     const [forms, statusGroups] = await Promise.all([
       this.prisma.bookingForm.findMany({
@@ -428,7 +550,7 @@ export class BookingService {
         form: true,
         selections: { include: { offering: true } },
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ formSerial: 'desc' }, { createdAt: 'desc' }],
       // When scoped to one form, return the full list; otherwise keep a safe cap.
       take: phoneQ ? 150 : formId ? 2000 : 500,
     });
@@ -475,9 +597,12 @@ export class BookingService {
       feeAmount: 0,
     }));
 
+    const formSerial = await this.nextFormSerial(form.id);
+
     const submission = await this.prisma.bookingSubmission.create({
       data: {
         formId: form.id,
+        formSerial,
         studentName: name,
         studentPhone,
         parentPhone,
@@ -496,6 +621,7 @@ export class BookingService {
 
     return {
       id: submission.id,
+      formSerial: submission.formSerial,
       status: submission.status,
       totalAmount,
       studentPhone: studentPhone,
@@ -995,12 +1121,19 @@ export class BookingService {
     ) {
       candidates = ['الثالث الثانوي', 'الصف الثالث الثانوي', 'الصف الثاني عشر'];
     } else if (
+      label.includes('بكالوريا') ||
       label.includes('ثاني') ||
       label.includes('الحادي عشر') ||
       label.includes('grade 11') ||
       /\b11\b/.test(label)
     ) {
-      candidates = ['الثاني الثانوي', 'الصف الثاني الثانوي', 'الصف الحادي عشر'];
+      candidates = [
+        'الثاني الثانوي',
+        'الصف الثاني الثانوي',
+        'الثاني الثانوي - بكالوريا',
+        'الصف الثاني الثانوي - بكالوريا',
+        'الصف الحادي عشر',
+      ];
     } else if (
       label.includes('أول') ||
       label.includes('العاشر') ||
@@ -1073,7 +1206,7 @@ export class BookingService {
       .map((o) => o.id);
   }
 
-  /** Ensure G2/G3 paper forms exist (idempotent). */
+  /** Ensure G2/G3 paper forms exist and sheet teachers stay in sync. */
   async ensurePaperForms() {
     const year = '2026-2027';
     const specs = [
@@ -1085,8 +1218,8 @@ export class BookingService {
       },
       {
         slug: 'g2-2026-2027',
-        title: 'استمارة حجز الصف الثاني الثانوي',
-        gradeLabel: 'الثاني الثانوي',
+        title: 'استمارة حجز الصف الثاني الثانوي - بكالوريا',
+        gradeLabel: 'الثاني الثانوي - بكالوريا',
         offerings: G2_BOOKING_OFFERINGS,
       },
     ];
@@ -1120,14 +1253,94 @@ export class BookingService {
           },
           include: { offerings: true },
         });
+      } else {
+        form = await this.prisma.bookingForm.update({
+          where: { id: form.id },
+          data: {
+            title: spec.title,
+            gradeLabel: spec.gradeLabel,
+            academicYear: year,
+          },
+          include: { offerings: true },
+        });
+        await this.syncFormOfferings(form.id, spec.offerings);
+        form = await this.prisma.bookingForm.findUnique({
+          where: { id: form.id },
+          include: { offerings: true },
+        });
       }
-      const names = (form.offerings?.length
-        ? form.offerings.map((o) => o.teacherName)
-        : spec.offerings.map((o) => o.teacherName)
+      const names = (
+        form?.offerings?.length
+          ? form.offerings.filter((o) => o.isActive).map((o) => o.teacherName)
+          : spec.offerings.map((o) => o.teacherName)
       ).filter(Boolean);
       await this.linkTeachersToGrade(spec.gradeLabel, names);
     }
     return this.listForms();
+  }
+
+  /** Upsert sheet offerings; deactivate removed ones (keep history/selections). */
+  private async syncFormOfferings(
+    formId: string,
+    desired: typeof G2_BOOKING_OFFERINGS,
+  ) {
+    const existing = await this.prisma.bookingOffering.findMany({
+      where: { formId },
+    });
+    const fold = (s: string) =>
+      (s || '')
+        .replace(/\s+/g, '')
+        .replace(/[أإآ]/g, 'ا')
+        .replace(/ة/g, 'ه')
+        .replace(/ى/g, 'ي')
+        .toLowerCase();
+    const keyOf = (teacher: string, subject: string) =>
+      `${fold(teacher)}|${fold(subject)}`;
+
+    const usedIds = new Set<string>();
+    for (const o of desired) {
+      const key = keyOf(o.teacherName, o.subjectName);
+      const hit = existing.find(
+        (e) =>
+          !usedIds.has(e.id) && keyOf(e.teacherName, e.subjectName) === key,
+      );
+      if (hit) {
+        usedIds.add(hit.id);
+        await this.prisma.bookingOffering.update({
+          where: { id: hit.id },
+          data: {
+            teacherName: o.teacherName,
+            subjectName: o.subjectName,
+            isOnline: o.isOnline ?? false,
+            pageNumber: o.pageNumber,
+            sortOrder: o.sortOrder,
+            isActive: true,
+          },
+        });
+      } else {
+        const created = await this.prisma.bookingOffering.create({
+          data: {
+            formId,
+            teacherName: o.teacherName,
+            subjectName: o.subjectName,
+            isOnline: o.isOnline ?? false,
+            pageNumber: o.pageNumber,
+            sortOrder: o.sortOrder,
+            feeAmount: 0,
+            isActive: true,
+          },
+        });
+        usedIds.add(created.id);
+      }
+    }
+
+    const stale = existing.filter((e) => !usedIds.has(e.id) && e.isActive);
+    if (stale.length) {
+      await this.prisma.bookingOffering.updateMany({
+        where: { id: { in: stale.map((s) => s.id) } },
+        data: { isActive: false },
+      });
+    }
   }
 
   /**
@@ -1144,6 +1357,7 @@ export class BookingService {
       notes?: string;
       feeAmount?: number;
       teachers?: string;
+      formSerial?: number;
     }>,
     opts?: { dryRun?: boolean },
   ) {
@@ -1233,6 +1447,22 @@ export class BookingService {
               });
             }
           }
+          if (
+            existingPaid.formSerial == null &&
+            row.formSerial != null &&
+            Number(row.formSerial) > 0
+          ) {
+            const serial = await this.nextFormSerial(
+              form.id,
+              Number(row.formSerial),
+            );
+            if (serial === Math.floor(Number(row.formSerial))) {
+              await this.prisma.bookingSubmission.update({
+                where: { id: existingPaid.id },
+                data: { formSerial: serial },
+              });
+            }
+          }
           results.push({
             row: rowNum,
             ok: true,
@@ -1246,9 +1476,15 @@ export class BookingService {
           continue;
         }
 
+        const formSerial = await this.nextFormSerial(
+          form.id,
+          row.formSerial != null ? Number(row.formSerial) : null,
+        );
+
         const submission = await this.prisma.bookingSubmission.create({
           data: {
             formId: form.id,
+            formSerial,
             studentName,
             studentPhone,
             parentPhone,

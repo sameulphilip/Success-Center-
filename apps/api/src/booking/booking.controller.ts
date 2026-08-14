@@ -180,6 +180,7 @@ export class BookingController {
         notes?: string;
         feeAmount?: number;
         teachers?: string;
+        formSerial?: number;
       }>;
     },
   ) {
@@ -187,5 +188,25 @@ export class BookingController {
       return { total: 0, ok: 0, failed: 0, results: [] };
     }
     return this.booking.importPaperRows(body.rows, { dryRun: body.dryRun });
+  }
+
+  /** Sync Excel «م» serials onto existing submissions by phone */
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  @Post('sync-serials')
+  syncSerials(
+    @Body()
+    body: {
+      rows: Array<{
+        studentPhone: string;
+        formSlug?: string;
+        grade?: string;
+        formSerial: number;
+      }>;
+    },
+  ) {
+    if (!body?.rows?.length) {
+      return { total: 0, ok: 0, failed: 0, results: [] };
+    }
+    return this.booking.syncFormSerials(body.rows);
   }
 }

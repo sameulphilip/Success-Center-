@@ -54,6 +54,7 @@ type FormRow = {
 
 type Submission = {
   id: string;
+  formSerial?: number | null;
   studentName: string;
   studentPhone: string;
   parentPhone: string;
@@ -160,9 +161,9 @@ export default function BookingsAdminPage() {
       title: 'استمارة حجز الصف الثالث الثانوي',
     },
     {
-      gradeLabel: 'الثاني الثانوي',
+      gradeLabel: 'الثاني الثانوي - بكالوريا',
       slug: 'g2-2026-2027',
-      title: 'استمارة حجز الصف الثاني الثانوي',
+      title: 'استمارة حجز الصف الثاني الثانوي - بكالوريا',
     },
   ] as const;
 
@@ -1178,7 +1179,14 @@ export default function BookingsAdminPage() {
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <p className="font-bold text-navy">{s.studentName}</p>
+                      <p className="font-bold text-navy">
+                        {s.formSerial != null ? (
+                          <span className="me-1.5 inline-block rounded-md bg-navy/10 px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-navy">
+                            م {s.formSerial}
+                          </span>
+                        ) : null}
+                        {s.studentName}
+                      </p>
                       <p className="text-[11px] text-navy/40">
                         {new Date(s.createdAt).toLocaleString('ar-EG')}
                       </p>
@@ -1284,6 +1292,7 @@ export default function BookingsAdminPage() {
               <table className="data-table">
                 <thead>
                   <tr>
+                    <th className="w-14">م</th>
                     <th>الطالب</th>
                     <th>الهواتف</th>
                     <th>الاختيارات</th>
@@ -1300,6 +1309,9 @@ export default function BookingsAdminPage() {
                         editingSubmission?.id === s.id ? 'bg-sky/5' : undefined
                       }
                     >
+                      <td className="tabular-nums font-bold text-navy/70">
+                        {s.formSerial ?? '—'}
+                      </td>
                       <td>
                         <p className="font-semibold">{s.studentName}</p>
                         <p className="text-[11px] text-navy/40 font-mono">

@@ -511,6 +511,8 @@ model BookingSubmission {
   id             String             @id @default(cuid())
   formId         String
   form           BookingForm        @relation(fields: [formId], references: [id], onDelete: Cascade)
+  /** Paper/Excel serial «م» — continues per form */
+  formSerial     Int?
   studentName    String
   studentPhone   String
   parentPhone    String
@@ -527,6 +529,7 @@ model BookingSubmission {
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
 
+  @@unique([formId, formSerial])
   @@index([formId, status])
   @@index([studentPhone])
 }
