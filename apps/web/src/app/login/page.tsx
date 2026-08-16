@@ -2,10 +2,11 @@
 
 import { FormEvent, Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import Image from 'next/image';
+import { BrandMark } from '@/components/BrandMark';
 import { Eye, EyeOff } from 'lucide-react';
 import { login, phoneLogin, phoneSetup, phoneStatus } from '@/lib/api';
 import { PoweredByCowdlly } from '@/components/PoweredByCowdlly';
+import { CENTER_NAME, FOUNDER_NAME } from '@/lib/brand';
 
 function PasswordField({
   value,
@@ -148,17 +149,7 @@ function LoginForm() {
       <section className="relative hidden lg:flex overflow-hidden brand-rail items-center justify-center p-12">
         <div className="absolute inset-0 opacity-[0.12] bg-[radial-gradient(circle_at_30%_20%,#d4a017,transparent_40%),radial-gradient(circle_at_80%_70%,#ffffff,transparent_35%)]" />
         <div className="relative z-10 max-w-md text-center animate-rise">
-          <Image
-            src="/success-logo.png"
-            alt="Success"
-            width={200}
-            height={200}
-            className="mx-auto rounded-full shadow-md"
-            priority
-          />
-          <p className="mt-3 text-xs tracking-[0.25em] text-amber-300 font-bold">
-            FUTURE BEGINS HERE
-          </p>
+          <BrandMark size="xl" layout="stack" invert showTagline />
           <p className="mt-6 text-white/70 leading-relaxed text-lg">
             الطلاب يدخلون برقم الموبايل بعد تأكيد دفع الاستمارة، والإدارة بالبريد.
           </p>
@@ -168,18 +159,12 @@ function LoginForm() {
       <section className="grid place-items-center p-6">
         <div className="w-full max-w-[420px] rounded-2xl border border-mist bg-white p-8 shadow-panel animate-rise">
           <div className="lg:hidden mb-5 flex justify-center">
-            <Image
-              src="/success-logo.png"
-              alt="Success"
-              width={100}
-              height={100}
-              className="rounded-full shadow-sm"
-              priority
-            />
+            <BrandMark size="lg" layout="stack" showTagline />
           </div>
           <p className="text-xs font-semibold tracking-[0.18em] text-gold uppercase">
-            Success
+            {CENTER_NAME}
           </p>
+          <p className="mt-1 text-sm font-semibold text-navy/70">{FOUNDER_NAME}</p>
           <h2 className="mt-2 text-2xl font-extrabold text-navy">تسجيل الدخول</h2>
 
           <div className="mt-5 grid grid-cols-2 gap-2 rounded-xl bg-sand p-1">

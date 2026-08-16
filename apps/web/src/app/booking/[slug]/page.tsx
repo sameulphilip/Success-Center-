@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { PoweredByCowdlly } from '@/components/PoweredByCowdlly';
+import { BrandMark } from '@/components/BrandMark';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
 
@@ -158,22 +159,7 @@ export default function PublicBookingPage() {
         />
         <div className="relative mx-auto max-w-3xl px-4 py-8 sm:py-10">
           <div className="flex items-center gap-4 animate-rise">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/success-logo.png"
-              alt="Success"
-              width={72}
-              height={72}
-              className="rounded-full bg-white p-1 shadow-lg object-contain"
-            />
-            <div>
-              <p className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-                Success
-              </p>
-              <p className="text-[11px] tracking-[0.28em] text-amber-300 uppercase mt-1">
-                Future Begins Here
-              </p>
-            </div>
+            <BrandMark size="lg" invert showTagline />
           </div>
           {form ? (
             <div className="mt-6 animate-rise" style={{ animationDelay: '80ms' }}>

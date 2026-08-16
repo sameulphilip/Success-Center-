@@ -11,6 +11,7 @@ import {
   SectionCard,
 } from '@/components/ui';
 import { api, getStoredUser } from '@/lib/api';
+import { CENTER_NAME } from '@/lib/brand';
 
 const DAY_AR = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
 
@@ -56,12 +57,48 @@ function formatDateTime(value?: string | null) {
   });
 }
 
+function isSessionAttended(e: any) {
+  return (
+    !!e?.checkedInAt ||
+    e?.payStatus === 'CONFIRMED' ||
+    e?.payStatus === 'PARTIALLY_REFUNDED'
+  );
+}
+
+function sessionTeacherName(e: any) {
+  return `${e?.session?.teacher?.firstName || ''} ${e?.session?.teacher?.lastName || ''}`.trim() || 'مدرس';
+}
+
+function sessionClassName(e: any) {
+  return e?.session?.subject?.nameAr || e?.session?.title || 'حصة';
+}
+
 function childStats(student: any) {
   const rows = student?.attendance || [];
   const present = rows.filter(
     (a: any) => a.status === 'PRESENT' || a.status === 'LATE',
   ).length;
   const absent = rows.filter((a: any) => a.status === 'ABSENT').length;
+  const sessionEntries = student?.sessionEntries || [];
+  const sessionPresent = sessionEntries.filter(isSessionAttended).length;
+  const sessionPaid = sessionEntries.filter(
+    (e: any) => e.payStatus === 'CONFIRMED' || e.payStatus === 'PARTIALLY_REFUNDED',
+  ).length;
+  const byTeacher: Record<
+    string,
+    { name: string; present: number; paid: number }
+  > = {};
+  for (const e of sessionEntries) {
+    const name = `${e.session?.teacher?.firstName || ''} ${e.session?.teacher?.lastName || ''}`.trim() || 'مدرس';
+    const key = e.session?.teacherId || name;
+    if (!byTeacher[key]) byTeacher[key] = { name, present: 0, paid: 0 };
+    if (isSessionAttended(e)) {
+      byTeacher[key].present += 1;
+    }
+    if (e.payStatus === 'CONFIRMED' || e.payStatus === 'PARTIALLY_REFUNDED') {
+      byTeacher[key].paid += 1;
+    }
+  }
   const overdue = (student?.invoices || []).reduce((sum: number, inv: any) => {
     const due =
       Number(inv.feeAmount) -
@@ -70,12 +107,15 @@ function childStats(student: any) {
       Number(inv.paidAmount);
     return sum + Math.max(due, 0);
   }, 0);
-  const doorPaid = (student?.sessionEntries || [])
+  const doorPaid = sessionEntries
     .filter((e: any) => e.payStatus === 'CONFIRMED')
     .reduce((sum: number, e: any) => sum + Number(e.amount), 0);
   return {
     present,
     absent,
+    sessionPresent,
+    sessionPaid,
+    sessionByTeacher: Object.values(byTeacher),
     overdue,
     doorPaid,
     blocks: student?.blocks?.length || 0,
@@ -141,11 +181,19 @@ export default function StudentPortalPage() {
       (acc, c) => ({
         present: acc.present + c.present,
         absent: acc.absent + c.absent,
+        sessionPresent: acc.sessionPresent + c.sessionPresent,
         overdue: acc.overdue + c.overdue,
         doorPaid: acc.doorPaid + c.doorPaid,
         blocks: acc.blocks + c.blocks,
       }),
-      { present: 0, absent: 0, overdue: 0, doorPaid: 0, blocks: 0 },
+      {
+        present: 0,
+        absent: 0,
+        sessionPresent: 0,
+        overdue: 0,
+        doorPaid: 0,
+        blocks: 0,
+      },
     );
   }, [family]);
 
@@ -203,6 +251,10 @@ export default function StudentPortalPage() {
                 value: familyTotals.present,
                 highlight: true,
               },
+              {
+                label: 'حصص جلسات',
+                value: familyTotals.sessionPresent,
+              },
               { label: 'غياب مجمّع', value: familyTotals.absent },
               {
                 label: 'متأخرات',
@@ -221,8 +273,12 @@ export default function StudentPortalPage() {
             subtitle="بياناتك · حضورك · كارت QR · الدرجات والمدفوعات"
             metrics={[
               {
-                label: 'حضور',
+                label: 'حضور مجموعات',
                 value: attendanceStats.present,
+              },
+              {
+                label: 'حصص جلسات',
+                value: attendanceStats.sessionPresent,
                 highlight: true,
               },
               { label: 'غياب', value: attendanceStats.absent },
@@ -230,7 +286,6 @@ export default function StudentPortalPage() {
                 label: 'مجموعات',
                 value: attendanceStats.groups,
               },
-              { label: 'درجات', value: student.grades?.length || 0 },
             ]}
           />
         ) : null}
@@ -258,11 +313,11 @@ export default function StudentPortalPage() {
                     <span className="rounded-lg bg-emerald-50 px-2 py-1 text-emerald-800">
                       حضور {c.present}
                     </span>
+                    <span className="rounded-lg bg-sky-50 px-2 py-1 text-sky-800">
+                      جلسات {c.sessionPresent}
+                    </span>
                     <span className="rounded-lg bg-red-50 px-2 py-1 text-red-700">
                       غياب {c.absent}
-                    </span>
-                    <span className="rounded-lg bg-sand px-2 py-1 text-navy">
-                      مجموعات {c.groups}
                     </span>
                   </div>
                   {c.blocks > 0 ? (
@@ -346,22 +401,22 @@ export default function StudentPortalPage() {
                 </div>
               )}
               <p className="mt-3 text-sm font-semibold text-navy">
-                {student.gradeLevel?.nameAr || 'طالب Success'}
+                {student.gradeLevel?.nameAr || `طالب ${CENTER_NAME}`}
               </p>
               <p className="mt-1 font-mono text-[11px] text-navy/40 tabular-nums">
                 {qr?.studentUid || student.studentUid}
               </p>
               <div className="mt-4 grid grid-cols-3 gap-2 w-full max-w-sm text-center text-[11px] sm:text-xs">
                 <div className="rounded-xl bg-emerald-50 px-2 py-2 text-emerald-800">
-                  <p className="opacity-70">حضور</p>
+                  <p className="opacity-70">حصص حضرتها</p>
                   <p className="font-extrabold text-sm tabular-nums">
-                    {attendanceStats.present}
+                    {attendanceStats.sessionPresent}
                   </p>
                 </div>
-                <div className="rounded-xl bg-red-50 px-2 py-2 text-red-700">
-                  <p className="opacity-70">غياب</p>
+                <div className="rounded-xl bg-sky-50 px-2 py-2 text-sky-800">
+                  <p className="opacity-70">حضور مجموعات</p>
                   <p className="font-extrabold text-sm tabular-nums">
-                    {attendanceStats.absent}
+                    {attendanceStats.present}
                   </p>
                 </div>
                 <div className="rounded-xl bg-sand px-2 py-2 text-navy">
@@ -372,6 +427,99 @@ export default function StudentPortalPage() {
                 </div>
               </div>
             </div>
+          </SectionCard>
+
+          <SectionCard
+            className="lg:col-span-2"
+            title="حضور الحصص"
+            badge={
+              <span className="badge-ok">
+                حضرت {attendanceStats.sessionPresent} حصة
+              </span>
+            }
+          >
+            {(() => {
+              const attended = (student.sessionEntries || []).filter(
+                isSessionAttended,
+              );
+              const latest = attended[0];
+              return (
+                <>
+                  {latest ? (
+                    <div className="mb-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                      <p className="text-[11px] font-bold text-emerald-800/70">
+                        آخر حصة
+                      </p>
+                      <p className="mt-0.5 text-lg font-extrabold text-emerald-950">
+                        حضرت · {sessionTeacherName(latest)} · {sessionClassName(latest)}
+                      </p>
+                      <p className="mt-1 text-xs text-emerald-800/70">
+                        {formatDate(latest.session?.sessionDate)}
+                        {latest.checkedInAt
+                          ? ` · ${formatDateTime(latest.checkedInAt)}`
+                          : ''}
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {attendanceStats.sessionByTeacher.length ? (
+                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 mb-3">
+                      {attendanceStats.sessionByTeacher.map((t) => (
+                        <div
+                          key={t.name}
+                          className="rounded-2xl border border-mist bg-sand/70 px-4 py-3"
+                        >
+                          <p className="font-extrabold text-navy">{t.name}</p>
+                          <p className="mt-1 text-sm text-navy/70">
+                            حضرت{' '}
+                            <strong className="tabular-nums">{t.present}</strong>{' '}
+                            حصة
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <EmptyState>لسه مفيش حصص مسجّلة — بعد الدفع هتظهر هنا</EmptyState>
+                  )}
+
+                  <ul className="space-y-2">
+                    {(student.sessionEntries || []).slice(0, 12).map((e: any) => {
+                      const attendedRow = isSessionAttended(e);
+                      return (
+                        <li
+                          key={e.id}
+                          className={`rounded-xl border px-3 py-2.5 text-sm ${
+                            attendedRow
+                              ? 'border-emerald-200 bg-emerald-50/70'
+                              : 'border-mist bg-sand/60'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="font-semibold text-navy">
+                                {sessionTeacherName(e)} · {sessionClassName(e)}
+                              </p>
+                              <p className="text-[11px] text-navy/45 mt-0.5">
+                                {formatDate(e.session?.sessionDate)}
+                              </p>
+                            </div>
+                            <span
+                              className={
+                                attendedRow
+                                  ? 'badge-ok shrink-0'
+                                  : 'badge-warn shrink-0'
+                              }
+                            >
+                              {attendedRow ? 'حضرت' : 'لم تدخل'}
+                            </span>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </>
+              );
+            })()}
           </SectionCard>
 
           <SectionCard title="بياناتك">
@@ -495,84 +643,6 @@ export default function StudentPortalPage() {
                 <li className="text-navy/45">لا توجد فواتير</li>
               ) : null}
             </ul>
-          </SectionCard>
-
-          <SectionCard className="lg:col-span-2" title="مدفوعات الحصص عند الباب">
-            <div className="space-y-2 md:hidden">
-              {(student.sessionEntries || []).map((e: any) => (
-                <article
-                  key={e.id}
-                  className="rounded-xl border border-mist bg-sand/60 px-3 py-2.5 text-sm"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="font-semibold text-navy truncate">
-                        {e.session?.teacher?.firstName}{' '}
-                        {e.session?.teacher?.lastName}
-                        {e.session?.subject?.nameAr
-                          ? ` · ${e.session.subject.nameAr}`
-                          : ''}
-                      </p>
-                      <p className="text-[11px] text-navy/45 mt-0.5">
-                        {formatDate(e.session?.sessionDate)}
-                      </p>
-                    </div>
-                    <p className="font-bold tabular-nums text-navy shrink-0">
-                      {Number(e.amount).toLocaleString('en-EG')}
-                    </p>
-                  </div>
-                  <p className="mt-1 text-[11px] text-navy/55">
-                    {PAY_STATUS_AR[e.payStatus] || e.payStatus}
-                    {' · '}
-                    {e.checkedInAt
-                      ? formatDateTime(e.checkedInAt)
-                      : 'لم يدخل بعد'}
-                  </p>
-                </article>
-              ))}
-              {!student.sessionEntries?.length ? (
-                <EmptyState>لا توجد مدفوعات حصص بعد</EmptyState>
-              ) : null}
-            </div>
-            <div className="table-scroll hidden md:block">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>التاريخ</th>
-                    <th>المدرس / المادة</th>
-                    <th>المبلغ</th>
-                    <th>الحالة</th>
-                    <th>دخول</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(student.sessionEntries || []).map((e: any) => (
-                    <tr key={e.id}>
-                      <td>{formatDate(e.session?.sessionDate)}</td>
-                      <td>
-                        {e.session?.teacher?.firstName}{' '}
-                        {e.session?.teacher?.lastName}
-                        {e.session?.subject?.nameAr
-                          ? ` · ${e.session.subject.nameAr}`
-                          : ''}
-                      </td>
-                      <td className="font-bold tabular-nums">
-                        {Number(e.amount).toLocaleString('en-EG')}
-                      </td>
-                      <td>{PAY_STATUS_AR[e.payStatus] || e.payStatus}</td>
-                      <td className="text-xs text-navy/55">
-                        {e.checkedInAt
-                          ? formatDateTime(e.checkedInAt)
-                          : 'لم يدخل بعد'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {!student.sessionEntries?.length ? (
-                <EmptyState>لا توجد مدفوعات حصص بعد</EmptyState>
-              ) : null}
-            </div>
           </SectionCard>
 
           <SectionCard

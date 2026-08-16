@@ -11,7 +11,8 @@ import {
   PageHero,
   SectionCard,
 } from '@/components/ui';
-import { api } from '@/lib/api';
+import { api, getStoredUser } from '@/lib/api';
+import { SessionGateScanner } from '@/components/SessionGateScanner';
 
 const STATUS_AR: Record<string, string> = {
   PRESENT: 'حاضر',
@@ -21,6 +22,8 @@ const STATUS_AR: Record<string, string> = {
 };
 
 export default function AttendancePage() {
+  const me = getStoredUser();
+  const isTeacher = me?.role === 'TEACHER';
   const [groups, setGroups] = useState<any[]>([]);
   const [sessions, setSessions] = useState<any[]>([]);
   const [absentees, setAbsentees] = useState<any[]>([]);
@@ -144,7 +147,11 @@ export default function AttendancePage() {
     <AppShell>
       <PageHeader
         title="الحضور"
-        subtitle="تسجيل يدوي أو QR مع إشعار فوري لولي الأمر"
+        subtitle={
+          isTeacher
+            ? 'امسح كارت الطالب — لو دفع حصتك يظهر الاسم ويدخل'
+            : 'تسجيل يدوي أو QR مع إشعار فوري لولي الأمر'
+        }
         action={
           <div className="flex flex-wrap gap-2">
             <Link href="/check-in" className="btn-ghost">
@@ -168,6 +175,10 @@ export default function AttendancePage() {
         ]}
       />
       {message ? <AlertBanner tone={tone}>{message}</AlertBanner> : null}
+
+      <div className="mb-4">
+        <SessionGateScanner teacherOnly={isTeacher} />
+      </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
         <div className="space-y-4">

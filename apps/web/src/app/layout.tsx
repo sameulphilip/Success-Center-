@@ -2,9 +2,11 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { ClientBoot } from '@/components/ClientBoot';
 
+import { CENTER_NAME, CENTER_TAGLINE, FOUNDER_NAME } from '@/lib/brand';
+
 export const metadata: Metadata = {
-  title: 'Success Center | نظام إدارة السنتر',
-  description: 'Success Educational Center — Future Begins Here',
+  title: `${CENTER_NAME} · ${FOUNDER_NAME} | نظام إدارة السنتر`,
+  description: `${CENTER_NAME} Educational Center — ${FOUNDER_NAME} — ${CENTER_TAGLINE}`,
   icons: { icon: '/success-logo.png' },
 };
 

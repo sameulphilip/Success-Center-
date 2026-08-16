@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   NotFoundException,
   Param,
@@ -17,7 +18,7 @@ import {
   RoleCode,
   SessionPayMethod,
 } from '@prisma/client';
-import { OpsService } from './ops.service';
+import { OpsService, parseStudentQr } from './ops.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -39,10 +40,20 @@ export class OpsController {
   async lookupStudent(
     @Query('phone') phone?: string,
     @Query('uid') uid?: string,
+    @Query('id') id?: string,
+    @Query('qr') qr?: string,
   ) {
+    let studentUid = uid;
+    let studentId = id;
+    if (qr?.trim()) {
+      const parsed = parseStudentQr(qr);
+      if (parsed.studentUid) studentUid = parsed.studentUid;
+      if (parsed.id) studentId = parsed.id;
+    }
     const student = await this.ops.findStudent({
       phone,
-      studentUid: uid,
+      studentUid,
+      id: studentId,
     });
     if (!student) throw new NotFoundException('الطالب غير موجود');
     return student;
@@ -54,8 +65,19 @@ export class OpsController {
   }
 
   @Get('sessions/open')
-  listOpen() {
-    return this.ops.listOpenSessions();
+  @Roles(
+    RoleCode.SUPER_ADMIN,
+    RoleCode.CENTER_MANAGER,
+    RoleCode.RECEPTION,
+    RoleCode.ACCOUNTANT,
+    RoleCode.TEACHER,
+  )
+  async listOpen(@CurrentUser() user: { userId: string; role: string }) {
+    const teacherId =
+      user?.role === RoleCode.TEACHER
+        ? await this.ops.resolveTeacherId(user.userId)
+        : undefined;
+    return this.ops.listOpenSessions(teacherId || undefined);
   }
 
   @Get('sessions/:id')
@@ -110,7 +132,12 @@ export class OpsController {
   }
 
   @Post('check-in')
-  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER, RoleCode.RECEPTION)
+  @Roles(
+    RoleCode.SUPER_ADMIN,
+    RoleCode.CENTER_MANAGER,
+    RoleCode.RECEPTION,
+    RoleCode.TEACHER,
+  )
   checkIn(
     @Body()
     body: {
@@ -119,16 +146,17 @@ export class OpsController {
       phone?: string;
       studentUid?: string;
       qrPayload?: string;
+      teacherId?: string;
       source?: OpsCheckInSource;
     },
-    @CurrentUser() user: { userId: string },
+    @CurrentUser() user: { userId: string; role: string },
   ) {
     return this.ops.checkIn(
       {
         ...body,
         source: body.source || OpsCheckInSource.MANUAL,
       },
-      user?.userId,
+      { userId: user?.userId, role: user?.role },
     );
   }
 
@@ -139,6 +167,24 @@ export class OpsController {
     @CurrentUser() user: { userId: string },
   ) {
     return this.ops.closeSession(id, user?.userId);
+  }
+
+  @Post('sessions/:id/pay-teacher')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER, RoleCode.RECEPTION)
+  payTeacher(
+    @Param('id') id: string,
+    @CurrentUser() user: { userId: string },
+  ) {
+    return this.ops.payTeacherShare(id, user?.userId);
+  }
+
+  @Delete('sessions/:id')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  remove(
+    @Param('id') id: string,
+    @CurrentUser() user: { role: string },
+  ) {
+    return this.ops.deleteSession(id, user?.role);
   }
 
   @Post('entries/:id/refund')

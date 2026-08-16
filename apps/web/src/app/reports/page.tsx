@@ -11,6 +11,7 @@ import {
   SectionCard,
 } from '@/components/ui';
 import { api, downloadFile } from '@/lib/api';
+import { AppDialog } from '@/components/AppDialog';
 
 function monthStart() {
   const d = new Date();
@@ -37,6 +38,7 @@ export default function ReportsPage() {
   const [error, setError] = useState('');
   const [exporting, setExporting] = useState(false);
   const [payoutBusy, setPayoutBusy] = useState<string>('');
+  const [notice, setNotice] = useState('');
 
   async function createPayoutFromProfit(teacherId: string, label: string) {
     if (!teacherId || teacherId === 'center-only') {
@@ -55,7 +57,7 @@ export default function ReportsPage() {
         }),
       });
       setError('');
-      alert(`تم إنشاء مستحق ربحية لـ ${label}`);
+      setNotice(`تم إنشاء مستحق ربحية لـ ${label}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'فشل إنشاء المستحق');
     } finally {
@@ -561,6 +563,14 @@ export default function ReportsPage() {
           </div>
         </>
       ) : null}
+      <AppDialog
+        open={!!notice}
+        tone="success"
+        title="تم"
+        message={notice}
+        confirmLabel="حسناً"
+        onClose={() => setNotice('')}
+      />
     </AppShell>
   );
 }

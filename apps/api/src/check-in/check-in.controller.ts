@@ -26,6 +26,7 @@ export class CheckInController {
       payload: string;
       /** Phase A class session — required when multiple paid sessions are open */
       sessionId?: string;
+      teacherId?: string;
       /** @deprecated ignored — kiosk now uses ops sessions, not group attendance */
       groupId?: string;
       source?: AttendanceSource | string;

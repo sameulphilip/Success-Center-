@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { PaymentStatus, PayoutStatus } from '@prisma/client';
+import { BookingStatus, PaymentStatus, PayoutStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 function startOfDay(d = new Date()) {
@@ -490,5 +490,63 @@ export class FinanceService {
       include: { teacher: true },
       orderBy: { createdAt: 'desc' },
     });
+  }
+
+  /** Admin-only: remove a ledger receipt (payment or session entry). */
+  async deleteReceipt(id: string, source: 'PAYMENT' | 'SESSION') {
+    if (source === 'SESSION') {
+      const entry = await this.prisma.sessionEntry.findUnique({
+        where: { id },
+      });
+      if (!entry) throw new NotFoundException('إيصال الحصة غير موجود');
+      await this.prisma.sessionEntry.delete({ where: { id } });
+      return { ok: true, deletedId: id, source };
+    }
+
+    const payment = await this.prisma.payment.findUnique({
+      where: { id },
+      include: { invoice: true },
+    });
+    if (!payment) throw new NotFoundException('الإيصال غير موجود');
+
+    await this.prisma.$transaction(async (tx) => {
+      if (payment.invoiceId && payment.invoice) {
+        const invoice = payment.invoice;
+        const paidAmount = Math.max(
+          0,
+          Number(invoice.paidAmount) - Number(payment.amount),
+        );
+        const totalDue =
+          Number(invoice.feeAmount) -
+          Number(invoice.discount) +
+          Number(invoice.extras);
+        let status: PaymentStatus = PaymentStatus.PENDING;
+        if (paidAmount <= 0) status = PaymentStatus.PENDING;
+        else if (paidAmount >= totalDue) status = PaymentStatus.PAID;
+        else status = PaymentStatus.PARTIAL;
+
+        await tx.invoice.update({
+          where: { id: payment.invoiceId },
+          data: { paidAmount, status },
+        });
+      }
+
+      if (payment.receiptNumber?.startsWith('BK-')) {
+        await tx.bookingSubmission.updateMany({
+          where: { receiptNumber: payment.receiptNumber },
+          data: {
+            receiptNumber: null,
+            paidAt: null,
+            paymentMethod: null,
+            vodafoneTxn: null,
+            status: BookingStatus.SUBMITTED,
+          },
+        });
+      }
+
+      await tx.payment.delete({ where: { id } });
+    });
+
+    return { ok: true, deletedId: id, source: 'PAYMENT' as const };
   }
 }

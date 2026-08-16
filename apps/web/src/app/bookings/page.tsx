@@ -918,7 +918,7 @@ export default function BookingsAdminPage() {
                       <th>النوع</th>
                       <th>اختاروه</th>
                       <th>مدفوع</th>
-                      <th></th>
+                      <th>PDF</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -934,14 +934,30 @@ export default function BookingsAdminPage() {
                           {o.paidCount ?? 0}
                         </td>
                         <td>
-                          <button
-                            type="button"
-                            className="text-xs text-red-600 font-semibold"
-                            disabled={busy === `del-${o.id}`}
-                            onClick={() => removeOffering(o.id)}
-                          >
-                            حذف
-                          </button>
+                          <div className="flex flex-wrap gap-1 justify-end">
+                            <Link
+                              href={`/bookings/roster/${o.id}?print=1`}
+                              target="_blank"
+                              className="btn-accent text-xs px-2 py-1"
+                            >
+                              PDF
+                            </Link>
+                            <Link
+                              href={`/bookings/roster/${o.id}?paidOnly=1&print=1`}
+                              target="_blank"
+                              className="btn-ghost text-xs px-2 py-1"
+                            >
+                              مدفوع
+                            </Link>
+                            <button
+                              type="button"
+                              className="text-xs text-red-600 font-semibold px-1"
+                              disabled={busy === `del-${o.id}`}
+                              onClick={() => removeOffering(o.id)}
+                            >
+                              حذف
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}

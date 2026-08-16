@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { api } from '@/lib/api';
+import { CENTER_NAME, CENTER_TAGLINE, FOUNDER_NAME } from '@/lib/brand';
 
 export default function StudentCardPrintPage() {
   const params = useParams<{ id: string }>();
@@ -40,16 +41,24 @@ export default function StudentCardPrintPage() {
           <header className="flex items-center justify-between gap-3">
             <div>
               <p className="text-xs tracking-[0.2em] text-amber-700 font-bold">
-                SUCCESS
+                {CENTER_NAME}
+              </p>
+              <p className="text-[11px] font-semibold text-amber-800 mt-0.5">
+                {FOUNDER_NAME}
               </p>
               <p className="text-[10px] text-slate-500">STUDENT CARD</p>
             </div>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/success-logo.png"
-              alt="Success"
-              className="h-12 w-12 object-contain rounded-full shadow-sm"
-            />
+            <div className="text-center">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/success-logo.png"
+                alt={`${CENTER_NAME} · ${FOUNDER_NAME}`}
+                className="h-12 w-12 object-contain rounded-full shadow-sm"
+              />
+              <p className="mt-0.5 text-[8px] font-semibold text-amber-800">
+                {FOUNDER_NAME}
+              </p>
+            </div>
           </header>
 
           <div className="flex items-center gap-4 mt-2">
@@ -71,7 +80,7 @@ export default function StudentCardPrintPage() {
           </div>
 
           <footer className="text-[10px] text-slate-400 mt-3">
-            Future Begins Here · Scan QR for attendance
+            {CENTER_TAGLINE} · {FOUNDER_NAME} · Scan QR for attendance
           </footer>
         </article>
 

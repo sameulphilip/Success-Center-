@@ -25,9 +25,26 @@ export class CheckInService {
     return `${student.firstName || ''} ${student.lastName || ''}`.trim() || 'طالب';
   }
 
+  private sessionDetail(session?: {
+    teacher?: { firstName?: string; lastName?: string } | null;
+    subject?: { nameAr?: string | null; nameEn?: string | null } | null;
+    title?: string | null;
+  } | null) {
+    if (!session) return undefined;
+    const teacher = `${session.teacher?.firstName || ''} ${session.teacher?.lastName || ''}`.trim();
+    const sessionName =
+      session.subject?.nameAr ||
+      session.subject?.nameEn ||
+      session.title ||
+      'حصة';
+    if (teacher) return `المدرس: ${teacher} · الحصة: ${sessionName}`;
+    return `الحصة: ${sessionName}`;
+  }
+
   async checkIn(input: {
     payload: string;
     sessionId?: string;
+    teacherId?: string;
     groupId?: string;
     source?: AttendanceSource | string;
     deviceName?: string;
@@ -42,6 +59,7 @@ export class CheckInService {
     let result = await this.ops.checkIn({
       qrPayload: input.payload.trim(),
       sessionId: input.sessionId,
+      teacherId: input.teacherId,
       source,
     });
 
@@ -59,6 +77,7 @@ export class CheckInService {
         result = await this.ops.checkIn({
           qrPayload: input.payload.trim(),
           sessionId: eligible[0].id,
+          teacherId: input.teacherId,
           source,
         });
       } else if (eligible.length > 1) {
@@ -66,11 +85,12 @@ export class CheckInService {
           ok: false,
           gate: 'CHOOSE_SESSION' as const,
           needsSessionChoice: true,
-          message: 'اختر الحصة للدخول',
+          message: 'اختر الحصة المدفوعة للدخول',
           student: result.student,
           studentName: this.studentName(result.student),
           sessions: result.sessions,
           eligibleSessions: eligible,
+          otherPaidSessions: result.otherPaidSessions || [],
           deviceName,
           at: new Date().toISOString(),
         };
@@ -80,6 +100,8 @@ export class CheckInService {
           (s: { needsConfirm?: boolean; needsPayment?: boolean }) =>
             s.needsConfirm || s.needsPayment,
         );
+        const otherPaid = result.otherPaidSessions || [];
+        const otherLabel = otherPaid[0]?.paidLabel;
         return {
           ok: false,
           gate: openCount === 0 ? ('NO_SESSION' as const) : ('NEED_PAYMENT' as const),
@@ -87,12 +109,15 @@ export class CheckInService {
           message:
             openCount === 0
               ? 'لا توجد حصص مفتوحة الآن — راجع الاستقبال'
-              : pending.some((s: { needsConfirm?: boolean }) => s.needsConfirm)
-                ? 'الدفع بانتظار تأكيد الاستقبال (فودافون كاش)'
-                : 'ادفع عند الاستقبال أولاً قبل الدخول',
+              : otherLabel
+                ? `${otherLabel} — مش الحصة دي، لازم يدفع للمدرس الحالي`
+                : pending.some((s: { needsConfirm?: boolean }) => s.needsConfirm)
+                  ? 'الدفع بانتظار تأكيد الاستقبال (فودافون كاش)'
+                  : 'ادفع عند الاستقبال أولاً قبل الدخول',
           student: result.student,
           studentName: this.studentName(result.student),
           sessions: result.sessions,
+          otherPaidSessions: otherPaid,
           deviceName,
           at: new Date().toISOString(),
         };
@@ -100,11 +125,14 @@ export class CheckInService {
     }
 
     if (result && 'alreadyCheckedIn' in result && result.alreadyCheckedIn) {
+      const detail = this.sessionDetail(result.session);
       return {
         ok: true,
         alreadyCheckedIn: true,
-        gate: 'ALREADY' as const,
-        message: `مسجّل مسبقاً: ${this.studentName(result.student)}`,
+        allowed: true,
+        gate: 'ALLOWED' as const,
+        message: `مسموح بالدخول: ${this.studentName(result.student)}`,
+        detail,
         student: result.student,
         studentName: this.studentName(result.student),
         session: result.session,
@@ -115,21 +143,25 @@ export class CheckInService {
     }
 
     if (result && 'ok' in result && result.ok) {
-      const sessionLabel = [
-        result.entry?.session?.teacher?.firstName,
-        result.entry?.session?.teacher?.lastName,
-      ]
-        .filter(Boolean)
-        .join(' ');
+      const session =
+        'session' in result
+          ? result.session
+          : (result as { entry?: { session?: any } }).entry?.session;
+      const detail = this.sessionDetail(session);
       return {
         ok: true,
+        allowed: true,
         gate: 'ENTERED' as const,
-        message: `تم الدخول: ${this.studentName(result.student)}`,
-        detail: sessionLabel ? `حصة ${sessionLabel}` : undefined,
+        message: `مسموح بالدخول: ${this.studentName(result.student)}`,
+        detail,
         student: result.student,
         studentName: this.studentName(result.student),
-        entry: result.entry,
-        phoneCheckInRemaining: result.phoneCheckInRemaining,
+        entry: 'entry' in result ? result.entry : undefined,
+        session,
+        phoneCheckInRemaining:
+          'phoneCheckInRemaining' in result
+            ? result.phoneCheckInRemaining
+            : undefined,
         deviceName,
         at: new Date().toISOString(),
       };

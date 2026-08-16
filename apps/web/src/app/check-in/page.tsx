@@ -7,8 +7,9 @@ import {
   useState,
   type KeyboardEvent,
 } from 'react';
-import Image from 'next/image';
 import { PoweredByCowdlly } from '@/components/PoweredByCowdlly';
+import { BrandMark } from '@/components/BrandMark';
+import { AppDialog } from '@/components/AppDialog';
 
 const CHECKIN_URL =
   process.env.NEXT_PUBLIC_CHECKIN_API_URL ||
@@ -27,6 +28,9 @@ type SessionChoice = {
   id: string;
   title?: string | null;
   feeAmount?: string | number;
+  teacherName?: string;
+  subjectName?: string;
+  paidLabel?: string | null;
   teacher?: { firstName: string; lastName: string };
   subject?: { nameAr?: string; nameEn?: string } | null;
   canCheckIn?: boolean;
@@ -68,14 +72,17 @@ function decodeNdefText(record: {
 }
 
 function sessionLabel(s: SessionChoice) {
-  const teacher = s.teacher
-    ? `${s.teacher.firstName} ${s.teacher.lastName}`
-    : 'مدرس';
-  const subject = s.subject?.nameAr || s.subject?.nameEn || s.title || 'حصة';
+  if (s.paidLabel) return s.paidLabel;
+  const teacher =
+    s.teacherName ||
+    (s.teacher ? `${s.teacher.firstName} ${s.teacher.lastName}` : 'مدرس');
+  const subject =
+    s.subjectName || s.subject?.nameAr || s.subject?.nameEn || s.title || 'حصة';
   return `${teacher} · ${subject}`;
 }
 
 export default function CheckInKioskPage() {
+  const [teacherId, setTeacherId] = useState<string | undefined>();
   const [status, setStatus] = useState<UiStatus>('idle');
   const [message, setMessage] = useState(
     'ادفع عند الاستقبال أولاً · ثم امسح QR أو NFC',
@@ -91,6 +98,16 @@ export default function CheckInKioskPage() {
   const [choices, setChoices] = useState<SessionChoice[]>([]);
   const [pendingPayload, setPendingPayload] = useState('');
   const [pendingSource, setPendingSource] = useState<ScanSource>('QR_STUDENT');
+  const [popup, setPopup] = useState<{
+    tone: 'success' | 'error' | 'info';
+    title: string;
+    message: string;
+  } | null>(null);
+
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get('teacherId');
+    if (id) setTeacherId(id);
+  }, []);
 
   const busyRef = useRef(false);
   const lastPayloadRef = useRef('');
@@ -154,6 +171,7 @@ export default function CheckInKioskPage() {
           body: JSON.stringify({
             payload: raw,
             sessionId,
+            teacherId,
             source,
             deviceName: source === 'NFC_CARD' ? 'web-nfc' : 'web-qr-camera',
           }),
@@ -183,51 +201,68 @@ export default function CheckInKioskPage() {
         }
 
         if (data.gate === 'NEED_PAYMENT' || data.gate === 'NO_SESSION') {
+          const other = (data.otherPaidSessions || [])[0];
           setStatus('err');
-          setMessage(data.message || 'الدفع مطلوب قبل الدخول');
-          setDetail(data.studentName || 'راجع مكتب الاستقبال');
-          resetIdle(4000);
+          setPopup({
+            tone: 'error',
+            title: 'مرفوض',
+            message: [
+              data.message || 'الدفع مطلوب قبل الدخول',
+              other?.paidLabel
+                ? `${data.studentName || ''} · ${other.paidLabel}`
+                : data.studentName || '',
+            ]
+              .filter(Boolean)
+              .join('\n'),
+          });
+          busyRef.current = true;
           return;
         }
 
-        if (data.gate === 'ALREADY' || data.alreadyCheckedIn) {
-          setStatus('warn');
-          setMessage(data.message || 'مسجّل مسبقاً');
-          setDetail(data.detail || data.studentName || '');
-          resetIdle();
+        if (data.gate === 'ALREADY' || data.alreadyCheckedIn || data.gate === 'ALLOWED') {
+          setStatus('ok');
+          setPopup({
+            tone: 'success',
+            title: 'مسموح بالدخول',
+            message: [data.message, data.detail].filter(Boolean).join('\n'),
+          });
+          busyRef.current = true;
           return;
         }
 
         if (data.ok || data.gate === 'ENTERED') {
           setStatus('ok');
-          setMessage(data.message || `تم الدخول: ${data.studentName || 'طالب'}`);
-          setDetail(
-            [
-              data.detail,
-              source === 'NFC_CARD' ? 'NFC' : 'QR',
-              'دفع مؤكد',
-            ]
-              .filter(Boolean)
-              .join(' · '),
-          );
-          resetIdle();
+          setPopup({
+            tone: 'success',
+            title: 'مسموح بالدخول',
+            message: [data.message, data.detail].filter(Boolean).join('\n'),
+          });
+          busyRef.current = true;
           return;
         }
 
         setStatus('err');
-        setMessage(data.message || 'تعذّر إكمال الدخول');
-        setDetail('');
-        resetIdle();
+        setPopup({
+          tone: 'error',
+          title: 'مرفوض',
+          message: data.message || 'تعذّر إكمال الدخول',
+        });
+        busyRef.current = true;
       } catch (e) {
         setStatus('err');
-        setMessage(e instanceof Error ? e.message : 'خطأ غير متوقع');
-        setDetail('حصّل أو أكّد الدفع من الاستقبال ثم أعد المسح');
-        resetIdle(4000);
+        setPopup({
+          tone: 'error',
+          title: 'مرفوض',
+          message:
+            (e instanceof Error ? e.message : 'خطأ غير متوقع') +
+            '\nحصّل من الاستقبال ثم أعد المسح',
+        });
+        busyRef.current = true;
       } finally {
         wedgeInputRef.current?.focus();
       }
     },
-    [resetIdle],
+    [resetIdle, teacherId],
   );
 
   function chooseSession(sessionId: string) {
@@ -383,17 +418,7 @@ export default function CheckInKioskPage() {
       className={`min-h-screen flex flex-col items-center justify-center p-4 sm:p-6 transition-colors duration-300 ${bg}`}
     >
       <div className="w-full max-w-lg text-center text-white">
-        <Image
-          src="/success-logo.png"
-          alt="Success"
-          width={96}
-          height={96}
-          className="mx-auto mb-3 rounded-full shadow-md"
-          priority
-        />
-        <p className="text-xs tracking-[0.3em] text-amber-300 font-bold">
-          SUCCESS CHECK-IN
-        </p>
+        <BrandMark size="lg" layout="stack" invert showTagline />
         <h1 className="mt-2 text-2xl sm:text-3xl font-extrabold">
           دخول الحصة
         </h1>
@@ -460,11 +485,9 @@ export default function CheckInKioskPage() {
                   className="rounded-xl bg-[#0B2545] px-4 py-3 text-sm font-bold text-white hover:bg-[#163a63]"
                 >
                   {sessionLabel(s)}
-                  {s.feeAmount != null ? (
-                    <span className="block text-[11px] font-normal text-amber-200 mt-1">
-                      مدفوع · {Number(s.feeAmount).toLocaleString('en-EG')} EGP
-                    </span>
-                  ) : null}
+                  <span className="block text-[11px] font-normal text-amber-200 mt-1">
+                    مدفوع · يقدر يدخل
+                  </span>
                 </button>
               ))}
             </div>
@@ -492,6 +515,22 @@ export default function CheckInKioskPage() {
           <PoweredByCowdlly variant="onNavy" />
         </div>
       </div>
+      <AppDialog
+        open={!!popup}
+        tone={popup?.tone || 'info'}
+        title={popup?.title}
+        message={popup?.message}
+        confirmLabel="حسناً"
+        onClose={() => {
+          setPopup(null);
+          setStatus('idle');
+          setMessage('ادفع عند الاستقبال أولاً · ثم امسح QR أو NFC');
+          setDetail('');
+          busyRef.current = false;
+          lastPayloadRef.current = '';
+          wedgeInputRef.current?.focus();
+        }}
+      />
     </div>
   );
 }

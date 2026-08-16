@@ -11,6 +11,7 @@ import {
   SectionCard,
 } from '@/components/ui';
 import { api } from '@/lib/api';
+import { AppDialog } from '@/components/AppDialog';
 
 type NamedItem = {
   id: string;
@@ -39,6 +40,11 @@ export default function SettingsPage() {
   const [editingGradeId, setEditingGradeId] = useState<string | null>(null);
 
   const [roomForm, setRoomForm] = useState({ name: '', capacity: 30 });
+  const [ask, setAsk] = useState<null | {
+    kind: 'subject' | 'grade';
+    id: string;
+    name: string;
+  }>(null);
 
   async function load() {
     const [s, g, c, u, qr] = await Promise.all([
@@ -86,7 +92,12 @@ export default function SettingsPage() {
   }
 
   async function deleteSubject(id: string, name: string) {
-    if (!confirm(`مسح المادة «${name}»؟`)) return;
+    setAsk({ kind: 'subject', id, name });
+  }
+
+  async function runDeleteSubject() {
+    if (!ask || ask.kind !== 'subject') return;
+    const { id } = ask;
     setBusy(`del-s-${id}`);
     setError('');
     try {
@@ -135,7 +146,12 @@ export default function SettingsPage() {
   }
 
   async function deleteGrade(id: string, name: string) {
-    if (!confirm(`مسح الصف «${name}»؟`)) return;
+    setAsk({ kind: 'grade', id, name });
+  }
+
+  async function runDeleteGrade() {
+    if (!ask || ask.kind !== 'grade') return;
+    const { id } = ask;
     setBusy(`del-g-${id}`);
     setError('');
     try {
@@ -491,6 +507,19 @@ export default function SettingsPage() {
           </ul>
         </SectionCard>
       </div>
+      <AppDialog
+        open={!!ask}
+        tone="danger"
+        title={ask?.kind === 'grade' ? 'مسح الصف' : 'مسح المادة'}
+        message={`مسح «${ask?.name || ''}»؟`}
+        confirmLabel="مسح"
+        cancelLabel="رجوع"
+        onConfirm={() => {
+          if (ask?.kind === 'grade') void runDeleteGrade();
+          else void runDeleteSubject();
+        }}
+        onClose={() => setAsk(null)}
+      />
     </AppShell>
   );
 }

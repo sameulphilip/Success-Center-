@@ -565,6 +565,8 @@ model ClassSession {
   teacherPercent       Decimal            @db.Decimal(5, 2)
   settledTeacherAmount Decimal?           @db.Decimal(12, 2)
   settledCenterAmount  Decimal?           @db.Decimal(12, 2)
+  teacherPaidAt        DateTime?
+  teacherPaidByUserId  String?
   openedByUserId       String?
   closedByUserId       String?
   closedAt             DateTime?

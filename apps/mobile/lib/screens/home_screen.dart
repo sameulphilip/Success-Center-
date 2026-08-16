@@ -104,6 +104,14 @@ class _HomeScreenState extends State<HomeScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text('Success'),
+                  const Text(
+                    'Eslam Atya',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: SuccessColors.goldSoft,
+                    ),
+                  ),
                   Text(
                     '$name · $role',
                     maxLines: 1,

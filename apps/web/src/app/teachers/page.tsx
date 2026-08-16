@@ -10,6 +10,7 @@ import {
   SectionCard,
 } from '@/components/ui';
 import { api } from '@/lib/api';
+import { AppDialog } from '@/components/AppDialog';
 
 type TeacherForm = {
   firstName: string;
@@ -38,6 +39,10 @@ export default function TeachersPage() {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
+  const [pendingDelete, setPendingDelete] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
 
   async function load() {
     const [t, s, g] = await Promise.all([
@@ -109,12 +114,17 @@ export default function TeachersPage() {
 
   async function onDelete(t: any) {
     const name = `${t.firstName} ${t.lastName === '-' ? '' : t.lastName}`.trim();
-    if (!confirm(`مسح المدرس «${name}» من القائمة؟`)) return;
-    setBusy(`del-${t.id}`);
+    setPendingDelete({ id: t.id, name });
+  }
+
+  async function runDeleteTeacher() {
+    if (!pendingDelete) return;
+    const { id } = pendingDelete;
+    setBusy(`del-${id}`);
     setError('');
     try {
-      await api(`/teachers/${t.id}`, { method: 'DELETE' });
-      if (editingId === t.id) cancelEdit();
+      await api(`/teachers/${id}`, { method: 'DELETE' });
+      if (editingId === id) cancelEdit();
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'فشل المسح');
@@ -388,6 +398,16 @@ export default function TeachersPage() {
           </form>
         </SectionCard>
       </div>
+      <AppDialog
+        open={!!pendingDelete}
+        tone="danger"
+        title="مسح المدرس"
+        message={`مسح المدرس «${pendingDelete?.name || ''}» من القائمة؟`}
+        confirmLabel="مسح"
+        cancelLabel="رجوع"
+        onConfirm={() => void runDeleteTeacher()}
+        onClose={() => setPendingDelete(null)}
+      />
     </AppShell>
   );
 }

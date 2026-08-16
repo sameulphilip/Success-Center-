@@ -259,6 +259,72 @@ export class BookingService {
     };
   }
 
+  /** Students who booked a specific teacher offering — for roster PDF/print */
+  async getOfferingRoster(offeringId: string, paidOnly = false) {
+    const offering = await this.prisma.bookingOffering.findUnique({
+      where: { id: offeringId },
+      include: { form: true },
+    });
+    if (!offering) throw new NotFoundException('المدرس غير موجود في الاستمارة');
+
+    const selections = await this.prisma.bookingSelection.findMany({
+      where: {
+        offeringId,
+        submission: {
+          status: paidOnly ? 'PAID' : { not: 'CANCELLED' },
+        },
+      },
+      include: {
+        submission: true,
+      },
+    });
+
+    const students = selections
+      .map((s) => ({
+        id: s.submission.id,
+        formSerial: s.submission.formSerial,
+        studentName: s.submission.studentName,
+        studentPhone: s.submission.studentPhone,
+        parentPhone: s.submission.parentPhone,
+        status: s.submission.status,
+        receiptNumber: s.submission.receiptNumber,
+        paidAt: s.submission.paidAt,
+        createdAt: s.submission.createdAt,
+      }))
+      .sort((a, b) => {
+        const sa = a.formSerial ?? 999999;
+        const sb = b.formSerial ?? 999999;
+        if (sa !== sb) return sa - sb;
+        return a.studentName.localeCompare(b.studentName, 'ar');
+      });
+
+    const paid = students.filter((s) => s.status === 'PAID').length;
+
+    return {
+      generatedAt: new Date().toISOString(),
+      paidOnly,
+      offering: {
+        id: offering.id,
+        teacherName: offering.teacherName,
+        subjectName: offering.subjectName,
+        isOnline: offering.isOnline,
+      },
+      form: {
+        id: offering.form.id,
+        title: offering.form.title,
+        gradeLabel: offering.form.gradeLabel,
+        academicYear: offering.form.academicYear,
+        subtitle: offering.form.subtitle,
+      },
+      totals: {
+        all: students.length,
+        paid,
+        pending: students.length - paid,
+      },
+      students,
+    };
+  }
+
   /** Public published form by slug */
   async getPublicForm(slug: string) {
     const form = await this.prisma.bookingForm.findFirst({

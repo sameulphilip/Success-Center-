@@ -41,6 +41,16 @@ export class BookingController {
     return this.booking.getFormShare(id, baseUrl);
   }
 
+  @Get('offerings/:id/roster')
+  getOfferingRoster(
+    @Param('id') id: string,
+    @Query('paidOnly') paidOnly?: string,
+  ) {
+    const paid =
+      paidOnly === '1' || paidOnly === 'true' || paidOnly === 'yes';
+    return this.booking.getOfferingRoster(id, paid);
+  }
+
   @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
   @Post('forms')
   createForm(

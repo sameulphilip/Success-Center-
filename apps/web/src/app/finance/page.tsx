@@ -53,12 +53,27 @@ type CashSnapshot = {
   collectedCash: number;
   collectedVodafone: number;
   collectedTotal: number;
+  collectedBreakdown?: Array<{
+    key: string;
+    label: string;
+    cash: number;
+    vodafone: number;
+    total: number;
+  }>;
   drawerExpenses: number;
+  drawerExpenseLines?: Array<{
+    id: string;
+    amount: number;
+    category: string;
+    note?: string | null;
+  }>;
   expectedInDrawer: number;
   safeBalance: number;
-  ownerBalance: number;
-  totalHandedToOwner: number;
-  ownerSpent: number;
+  ownerBalance?: number;
+  totalHandedToOwner?: number;
+  ownerSpent?: number;
+  viewerScope?: 'reception' | 'owner';
+  canOwnerExpense?: boolean;
   categories: string[];
   close: {
     countedAmount: string | number;
@@ -114,6 +129,10 @@ export default function FinancePage() {
   const canReceipts = hasPerm(me?.permissions, 'finance.receipts');
   const canSafe = hasPerm(me?.permissions, 'finance.safe');
   const canClose = hasPerm(me?.permissions, 'finance.close');
+  const isReception = me?.role === 'RECEPTION';
+  const canOwnerExpense = !isReception;
+  const canDelete =
+    me?.role === 'SUPER_ADMIN' || me?.role === 'CENTER_MANAGER';
   const [payments, setPayments] = useState<ReceiptRow[]>([]);
   const [summary, setSummary] = useState<FinanceSummary | null>(null);
   const [cash, setCash] = useState<CashSnapshot | null>(null);
@@ -122,7 +141,10 @@ export default function FinancePage() {
   const [expForm, setExpForm] = useState({
     amount: '',
     category: 'مستلزمات',
-    paidFrom: 'DRAWER' as 'DRAWER' | 'SAFE' | 'OWNER',
+    paidFrom: (me?.role === 'RECEPTION' ? 'DRAWER' : 'OWNER') as
+      | 'DRAWER'
+      | 'SAFE'
+      | 'OWNER',
     note: '',
   });
   const [counted, setCounted] = useState('');
@@ -133,7 +155,10 @@ export default function FinancePage() {
     canReceipts ? 'receipts' : canSafe ? 'safe' : 'close',
   );
   const [confirm, setConfirm] = useState<null | {
-    kind: 'close' | 'handover';
+    kind: 'close' | 'handover' | 'del-receipt' | 'del-expense';
+    id?: string;
+    source?: 'PAYMENT' | 'SESSION';
+    label?: string;
   }>(null);
 
   async function load() {
@@ -244,6 +269,39 @@ export default function FinancePage() {
     }
   }
 
+  async function doDeleteReceipt() {
+    if (!confirm?.id || !confirm.source) return;
+    setBusy(`del-r-${confirm.id}`);
+    setError('');
+    try {
+      await api(
+        `/finance/payments/${confirm.id}?source=${confirm.source}`,
+        { method: 'DELETE' },
+      );
+      setConfirm(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'فشل مسح الإيصال');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function doDeleteExpense() {
+    if (!confirm?.id) return;
+    setBusy(`del-e-${confirm.id}`);
+    setError('');
+    try {
+      await api(`/finance/cash/expenses/${confirm.id}`, { method: 'DELETE' });
+      setConfirm(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'فشل مسح المصروف');
+    } finally {
+      setBusy('');
+    }
+  }
+
   return (
     <AppShell>
       <PageHeader
@@ -257,46 +315,55 @@ export default function FinancePage() {
         </p>
       ) : null}
 
-      <div
-        className={`mb-4 grid gap-2 rounded-xl bg-sand p-1 ${
-          [canReceipts, canSafe, canClose].filter(Boolean).length >= 3
-            ? 'grid-cols-3'
-            : 'grid-cols-2'
-        }`}
-      >
-        {canReceipts ? (
-          <button
-            type="button"
-            className={`rounded-lg py-2.5 text-sm font-bold transition ${
-              tab === 'receipts' ? 'bg-[#0B2545] text-white' : 'text-navy/60'
-            }`}
-            onClick={() => setTab('receipts')}
-          >
-            الإيصالات ({payments.length})
-          </button>
-        ) : null}
-        {canSafe ? (
-          <button
-            type="button"
-            className={`rounded-lg py-2.5 text-sm font-bold transition ${
-              tab === 'safe' ? 'bg-[#0B2545] text-white' : 'text-navy/60'
-            }`}
-            onClick={() => setTab('safe')}
-          >
-            الخزنة
-          </button>
-        ) : null}
-        {canClose ? (
-          <button
-            type="button"
-            className={`rounded-lg py-2.5 text-sm font-bold transition ${
-              tab === 'close' ? 'bg-[#0B2545] text-white' : 'text-navy/60'
-            }`}
-            onClick={() => setTab('close')}
-          >
-            قفل اليوم
-          </button>
-        ) : null}
+      <div className="mb-5 flex flex-wrap gap-2 rounded-2xl border border-mist bg-white p-1.5 shadow-sm">
+        {(
+          [
+            canReceipts
+              ? ({
+                  id: 'receipts' as const,
+                  label: 'الإيصالات',
+                  count: payments.length,
+                } as const)
+              : null,
+            canSafe
+              ? ({ id: 'safe' as const, label: 'الخزنة' } as const)
+              : null,
+            canClose
+              ? ({ id: 'close' as const, label: 'قفل اليوم' } as const)
+              : null,
+          ].filter(Boolean) as Array<{
+            id: 'receipts' | 'safe' | 'close';
+            label: string;
+            count?: number;
+          }>
+        ).map((item) => {
+          const active = tab === item.id;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setTab(item.id)}
+              className={`inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-bold transition ${
+                active
+                  ? 'bg-[#0B2545] text-white shadow-sm'
+                  : 'text-navy/55 hover:bg-sand hover:text-navy'
+              }`}
+            >
+              <span className="whitespace-nowrap">{item.label}</span>
+              {typeof item.count === 'number' ? (
+                <span
+                  className={`inline-flex min-w-7 items-center justify-center rounded-md px-1.5 py-0.5 text-[11px] font-extrabold tabular-nums ${
+                    active
+                      ? 'bg-white/15 text-white'
+                      : 'bg-sand text-navy/70'
+                  }`}
+                >
+                  {item.count.toLocaleString('en-EG')}
+                </span>
+              ) : null}
+            </button>
+          );
+        })}
       </div>
 
       {tab === 'safe' || tab === 'close' ? (
@@ -304,7 +371,7 @@ export default function FinancePage() {
       <PageHero
         eyebrow="CASH"
         title="الخزنة والدرج"
-        subtitle="فودافون كاش بتتحسب كاش مع قفل اليوم. مصروف الاستقبال من الدرج، وصاحب السنتر من الخزنة أو بعد التسليم."
+        subtitle="فودافون كاش بتتحسب كاش مع قفل اليوم. الاستقبال يصرف من الدرج أو الخزنة. صاحب السنتر يشوف الكل ويصرف بعد التسليم."
         metrics={[
           {
             label: 'المفروض في الدرج',
@@ -312,10 +379,14 @@ export default function FinancePage() {
             highlight: true,
           },
           { label: 'رصيد الخزنة', value: money(cash?.safeBalance ?? 0) },
-          {
-            label: 'عند صاحب السنتر',
-            value: money(cash?.ownerBalance ?? 0),
-          },
+          ...(canOwnerExpense || cash?.canOwnerExpense
+            ? [
+                {
+                  label: 'عند صاحب السنتر',
+                  value: money(cash?.ownerBalance ?? 0),
+                },
+              ]
+            : []),
           {
             label: cash?.closed ? 'اليوم' : 'تحصيل اليوم',
             value: cash?.closed ? 'مقفل' : money(cash?.collectedTotal ?? 0),
@@ -358,6 +429,66 @@ export default function FinancePage() {
               </p>
             </div>
           </div>
+
+          {cash?.collectedBreakdown?.length ? (
+            <div className="mb-4 overflow-hidden rounded-xl border border-navy/10">
+              <p className="bg-sand px-3 py-2 text-[11px] font-semibold text-navy/55">
+                تفصيل الفلوس في الدرج
+              </p>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-[11px] text-navy/40">
+                    <th className="px-3 py-1.5 text-right font-medium">المصدر</th>
+                    <th className="px-3 py-1.5 text-left font-medium">كاش</th>
+                    <th className="px-3 py-1.5 text-left font-medium">فودافون</th>
+                    <th className="px-3 py-1.5 text-left font-medium">الإجمالي</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {cash.collectedBreakdown.map((row) => (
+                    <tr key={row.key} className="border-t border-navy/5">
+                      <td className="px-3 py-1.5">{row.label}</td>
+                      <td className="px-3 py-1.5 tabular-nums text-left">
+                        {money(row.cash)}
+                      </td>
+                      <td className="px-3 py-1.5 tabular-nums text-left">
+                        {money(row.vodafone)}
+                      </td>
+                      <td className="px-3 py-1.5 tabular-nums text-left font-semibold">
+                        {money(row.total)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+
+          {cash?.drawerExpenseLines?.length ? (
+            <div className="mb-4 overflow-hidden rounded-xl border border-rose-200/70">
+              <p className="bg-rose-50 px-3 py-2 text-[11px] font-semibold text-rose-800">
+                مصروف الدرج النهاردة
+              </p>
+              <ul className="divide-y divide-rose-100 text-sm">
+                {cash.drawerExpenseLines.map((e) => (
+                  <li
+                    key={e.id}
+                    className="flex items-center justify-between gap-3 px-3 py-1.5"
+                  >
+                    <span>
+                      {e.category}
+                      {e.note ? (
+                        <span className="text-navy/40"> · {e.note}</span>
+                      ) : null}
+                    </span>
+                    <span className="tabular-nums font-semibold text-rose-700">
+                      − {money(e.amount)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
 
           {cash?.closed ? (
             <p className="text-sm text-navy/70">
@@ -416,7 +547,11 @@ export default function FinancePage() {
         {tab === 'safe' ? (
         <SectionCard
           title="مصروف"
-          subtitle="استقبال من الدرج · صاحب السنتر من الخزنة أو بعد التسليم"
+          subtitle={
+            canOwnerExpense
+              ? 'الاستقبال: درج أو خزنة · صاحب السنتر: بعد استلام التسليم'
+              : 'سجّل اللي صرفته أنت من الدرج أو من الخزنة'
+          }
         >
           <form onSubmit={submitExpense} className="space-y-3">
             <FieldLabel label="المبلغ">
@@ -460,8 +595,12 @@ export default function FinancePage() {
                 <option value="DRAWER" disabled={!!cash?.closed}>
                   درج اليوم (استقبال)
                 </option>
-                <option value="SAFE">الخزنة (صاحب السنتر في السنتر)</option>
-                <option value="OWNER">فلوس صاحب السنتر بعد التسليم</option>
+                <option value="SAFE">الخزنة</option>
+                {canOwnerExpense ? (
+                  <option value="OWNER">
+                    فلوس صاحب السنتر بعد التسليم
+                  </option>
+                ) : null}
               </select>
             </FieldLabel>
             <FieldLabel label="بيان">
@@ -525,7 +664,13 @@ export default function FinancePage() {
       </SectionCard>
 
       <div className="grid gap-4 xl:grid-cols-2 mb-4">
-        <SectionCard title="آخر المصروفات">
+        <SectionCard
+          title={
+            canOwnerExpense
+              ? 'كل المصروفات'
+              : 'مصروفاتك (الدرج والخزنة)'
+          }
+        >
           <ul className="space-y-2 text-sm">
             {(cash?.expenses || []).map((e) => (
               <li
@@ -542,9 +687,27 @@ export default function FinancePage() {
                     {e.note ? ` · ${e.note}` : ''}
                   </p>
                 </div>
-                <p className="font-extrabold tabular-nums text-rose-700 shrink-0">
-                  {money(Number(e.amount))}
-                </p>
+                <div className="shrink-0 text-left space-y-1">
+                  <p className="font-extrabold tabular-nums text-rose-700">
+                    {money(Number(e.amount))}
+                  </p>
+                  {canDelete ? (
+                    <button
+                      type="button"
+                      className="text-xs font-bold text-rose-700 hover:underline"
+                      disabled={busy === `del-e-${e.id}`}
+                      onClick={() =>
+                        setConfirm({
+                          kind: 'del-expense',
+                          id: e.id,
+                          label: `${e.category} · ${money(Number(e.amount))}`,
+                        })
+                      }
+                    >
+                      مسح
+                    </button>
+                  ) : null}
+                </div>
               </li>
             ))}
             {!cash?.expenses?.length ? (
@@ -693,9 +856,28 @@ export default function FinancePage() {
                     : '—'}
                 </span>
               </div>
-              <p className="font-extrabold tabular-nums text-navy">
-                {Number(p.amount).toLocaleString('en-EG')} ج.م
-              </p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="font-extrabold tabular-nums text-navy">
+                  {Number(p.amount).toLocaleString('en-EG')} ج.م
+                </p>
+                {canDelete ? (
+                  <button
+                    type="button"
+                    className="text-xs font-bold text-rose-700"
+                    disabled={busy === `del-r-${p.id}`}
+                    onClick={() =>
+                      setConfirm({
+                        kind: 'del-receipt',
+                        id: p.id,
+                        source: p.source,
+                        label: `${p.receiptNumber} · ${p.reason}`,
+                      })
+                    }
+                  >
+                    مسح
+                  </button>
+                ) : null}
+              </div>
             </article>
           ))}
           {!payments.length ? <EmptyState>لا توجد إيصالات</EmptyState> : null}
@@ -712,6 +894,7 @@ export default function FinancePage() {
                 <th>الطريقة</th>
                 <th>التاريخ</th>
                 <th>المبلغ</th>
+                {canDelete ? <th></th> : null}
               </tr>
             </thead>
             <tbody>
@@ -738,6 +921,25 @@ export default function FinancePage() {
                   <td className="font-bold tabular-nums">
                     {Number(p.amount).toLocaleString('en-EG')}
                   </td>
+                  {canDelete ? (
+                    <td>
+                      <button
+                        type="button"
+                        className="text-xs font-bold text-rose-700 hover:underline"
+                        disabled={busy === `del-r-${p.id}`}
+                        onClick={() =>
+                          setConfirm({
+                            kind: 'del-receipt',
+                            id: p.id,
+                            source: p.source,
+                            label: `${p.receiptNumber} · ${p.reason}`,
+                          })
+                        }
+                      >
+                        مسح
+                      </button>
+                    </td>
+                  ) : null}
                 </tr>
               ))}
             </tbody>
@@ -766,6 +968,26 @@ export default function FinancePage() {
         confirmLabel={busy === 'handover' ? 'جاري التسليم...' : 'تأكيد التسليم'}
         cancelLabel="رجوع"
         onConfirm={doHandover}
+        onClose={() => setConfirm(null)}
+      />
+      <AppDialog
+        open={confirm?.kind === 'del-receipt'}
+        tone="danger"
+        title="مسح إيصال"
+        message={`هيتشال الإيصال من السجل والدرج.\n${confirm?.label || ''}`}
+        confirmLabel="مسح الإيصال"
+        cancelLabel="رجوع"
+        onConfirm={() => void doDeleteReceipt()}
+        onClose={() => setConfirm(null)}
+      />
+      <AppDialog
+        open={confirm?.kind === 'del-expense'}
+        tone="danger"
+        title="مسح مصروف"
+        message={`هيتشال المصروف من السجل.\n${confirm?.label || ''}`}
+        confirmLabel="مسح المصروف"
+        cancelLabel="رجوع"
+        onConfirm={() => void doDeleteExpense()}
         onClose={() => setConfirm(null)}
       />
     </AppShell>

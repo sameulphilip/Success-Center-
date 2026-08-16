@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { PaymentStatus, RoleCode } from '@prisma/client';
 import { FinanceService } from './finance.service';
 import { CashService } from './cash.service';
@@ -64,6 +74,20 @@ export class FinanceController {
     return this.finance.recordPayment(body);
   }
 
+  @Delete('payments/:id')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  @RequirePerms('finance.receipts')
+  deletePayment(
+    @Param('id') id: string,
+    @Query('source') source?: string,
+  ) {
+    const src = String(source || 'PAYMENT').toUpperCase();
+    if (src !== 'PAYMENT' && src !== 'SESSION') {
+      throw new BadRequestException('مصدر الإيصال غير صالح');
+    }
+    return this.finance.deleteReceipt(id, src as 'PAYMENT' | 'SESSION');
+  }
+
   @Get('payouts')
   @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER, RoleCode.ACCOUNTANT)
   @RequirePerms('finance')
@@ -117,14 +141,14 @@ export class FinanceController {
 
   @Get('cash/snapshot')
   @RequirePerms('finance.safe', 'finance.close')
-  cashSnapshot() {
-    return this.cash.snapshot();
+  cashSnapshot(@CurrentUser() user: { userId: string; role?: string }) {
+    return this.cash.snapshot(undefined, user);
   }
 
   @Post('cash/expenses')
   @RequirePerms('finance.safe')
   addExpense(
-    @CurrentUser() user: { userId: string },
+    @CurrentUser() user: { userId: string; role?: string },
     @Body()
     body: {
       amount: number;
@@ -133,7 +157,14 @@ export class FinanceController {
       note?: string;
     },
   ) {
-    return this.cash.addExpense(user.userId, body);
+    return this.cash.addExpense(user.userId, body, user.role);
+  }
+
+  @Delete('cash/expenses/:id')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  @RequirePerms('finance.safe')
+  deleteExpense(@Param('id') id: string) {
+    return this.cash.deleteExpense(id);
   }
 
   @Post('cash/close-day')

@@ -15,16 +15,80 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizePhone } from '../common/phone.util';
+import { CashService } from '../finance/cash.service';
 
 const PHONE_CHECKIN_LIMIT = 2;
 
+function isPaidStatus(status?: SessionPayStatus | null) {
+  return (
+    status === SessionPayStatus.CONFIRMED ||
+    status === SessionPayStatus.PARTIALLY_REFUNDED
+  );
+}
+
+export function parseStudentQr(raw?: string | null): {
+  id?: string;
+  studentUid?: string;
+} {
+  const value = String(raw || '').trim();
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    if (parsed && typeof parsed === 'object') {
+      const id = parsed.id || parsed.studentId;
+      const studentUid = parsed.uid || parsed.studentUid;
+      return {
+        ...(id ? { id: String(id) } : {}),
+        ...(studentUid ? { studentUid: String(studentUid) } : {}),
+      };
+    }
+  } catch {
+    /* not json */
+  }
+  if (value.toUpperCase().startsWith('SUCCESS:')) {
+    return { studentUid: value.slice(value.indexOf(':') + 1).trim() };
+  }
+  if (/^https?:\/\//i.test(value)) return {};
+  return { studentUid: value };
+}
+
+function teacherLabel(teacher?: {
+  firstName?: string | null;
+  lastName?: string | null;
+} | null) {
+  if (!teacher) return 'المدرس';
+  return `${teacher.firstName || ''} ${teacher.lastName || ''}`.trim() || 'المدرس';
+}
+
 @Injectable()
 export class OpsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cash: CashService,
+  ) {}
 
-  listOpenSessions() {
+  private async actorTeacherId(userId?: string, role?: string) {
+    if (role !== RoleCode.TEACHER || !userId) return null;
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { teacher: { select: { id: true } } },
+    });
+    if (!user?.teacher?.id) {
+      throw new ForbiddenException('حساب المدرس غير مربوط بمدرس');
+    }
+    return user.teacher.id;
+  }
+
+  async resolveTeacherId(userId: string) {
+    return this.actorTeacherId(userId, RoleCode.TEACHER);
+  }
+
+  listOpenSessions(teacherId?: string) {
     return this.prisma.classSession.findMany({
-      where: { status: ClassSessionStatus.OPEN },
+      where: {
+        status: ClassSessionStatus.OPEN,
+        ...(teacherId ? { teacherId } : {}),
+      },
       include: {
         teacher: true,
         subject: true,
@@ -123,14 +187,28 @@ export class OpsService {
     }
   }
 
-  async findStudent(query: { phone?: string; studentUid?: string; id?: string }) {
+  async findStudent(query: {
+    phone?: string;
+    studentUid?: string;
+    id?: string;
+  }) {
     if (query.id) {
-      return this.prisma.student.findUnique({ where: { id: query.id } });
+      const byId = await this.prisma.student.findUnique({
+        where: { id: query.id },
+      });
+      if (byId) return byId;
     }
     if (query.studentUid) {
-      return this.prisma.student.findUnique({
-        where: { studentUid: query.studentUid },
+      const uid = query.studentUid.trim();
+      const byUid = await this.prisma.student.findFirst({
+        where: {
+          OR: [
+            { studentUid: uid },
+            { studentUid: { equals: uid, mode: 'insensitive' } },
+          ],
+        },
       });
+      if (byUid) return byUid;
     }
     if (query.phone) {
       const phone = normalizePhone(query.phone);
@@ -178,7 +256,12 @@ export class OpsService {
       },
     });
     if (existing && existing.payStatus !== SessionPayStatus.REFUNDED) {
-      throw new BadRequestException('الطالب مسجّل بالفعل في هذه الجلسة');
+      const name = `${student.firstName} ${student.lastName === '-' ? '' : student.lastName}`.trim();
+      throw new BadRequestException(
+        existing.checkedInAt
+          ? `${name} داخل الجلسة بالفعل — مش هيتسجل تاني`
+          : `${name} مسجّل في الجلسة بالفعل — مش هيتسجل تاني`,
+      );
     }
 
     if (data.method === SessionPayMethod.VODAFONE_CASH && !data.vodafoneTxn?.trim()) {
@@ -203,8 +286,13 @@ export class OpsService {
           : SessionPayStatus.PENDING_CONFIRM,
         confirmedAt: isCash ? new Date() : null,
         confirmedByUserId: isCash ? userId : null,
+        checkedInAt: isCash ? new Date() : null,
+        checkInSource: isCash ? OpsCheckInSource.MANUAL : null,
       },
-      include: { student: true, session: true },
+      include: {
+        student: true,
+        session: { include: { teacher: true, subject: true } },
+      },
     });
   }
 
@@ -228,8 +316,10 @@ export class OpsService {
         payStatus: SessionPayStatus.CONFIRMED,
         confirmedAt: new Date(),
         confirmedByUserId: userId,
+        checkedInAt: entry.checkedInAt || new Date(),
+        checkInSource: entry.checkInSource || OpsCheckInSource.MANUAL,
       },
-      include: { student: true, session: true },
+      include: { student: true, session: { include: { teacher: true, subject: true } } },
     });
   }
 
@@ -240,23 +330,16 @@ export class OpsService {
       phone?: string;
       studentUid?: string;
       qrPayload?: string;
+      teacherId?: string;
       source: OpsCheckInSource;
     },
-    _userId?: string,
+    actor?: { userId?: string; role?: string },
   ) {
     let studentUid = data.studentUid;
     if (data.qrPayload) {
-      try {
-        const parsed = JSON.parse(data.qrPayload);
-        if (parsed?.uid) studentUid = parsed.uid;
-        else if (parsed?.id) data.studentId = parsed.id;
-      } catch {
-        if (data.qrPayload.startsWith('SUCCESS:')) {
-          studentUid = data.qrPayload.replace(/^SUCCESS:/, '');
-        } else {
-          studentUid = data.qrPayload;
-        }
-      }
+      const parsed = parseStudentQr(data.qrPayload);
+      if (parsed.id) data.studentId = parsed.id;
+      if (parsed.studentUid) studentUid = parsed.studentUid;
     }
 
     const student = await this.findStudent({
@@ -266,38 +349,109 @@ export class OpsService {
     });
     if (!student) throw new NotFoundException('الطالب غير موجود');
 
-    // If no session specified, list open sessions with confirmed unpaid check-in options
+    const actorTeacherId = await this.actorTeacherId(
+      actor?.userId,
+      actor?.role,
+    );
+    const teacherId = actorTeacherId || data.teacherId || undefined;
+
+    const decorate = (
+      s: {
+        id: string;
+        title: string | null;
+        feeAmount: unknown;
+        teacher: { firstName: string; lastName: string };
+        subject: { nameAr?: string | null; nameEn?: string | null } | null;
+      },
+      entry?: {
+        payStatus: SessionPayStatus;
+        checkedInAt: Date | null;
+        amount: unknown;
+      } | null,
+    ) => {
+      const name = teacherLabel(s.teacher);
+      const subjectName =
+        s.subject?.nameAr || s.subject?.nameEn || s.title || 'حصة';
+      const paid = isPaidStatus(entry?.payStatus);
+      return {
+        ...s,
+        entry,
+        teacherName: name,
+        subjectName,
+        paidLabel: paid ? `دفع حصة ${name}` : null,
+        canCheckIn: paid,
+        alreadyIn: Boolean(entry?.checkedInAt),
+        needsPayment:
+          !entry ||
+          entry.payStatus === SessionPayStatus.PENDING_CONFIRM ||
+          entry.payStatus === SessionPayStatus.REFUNDED,
+        needsConfirm: entry?.payStatus === SessionPayStatus.PENDING_CONFIRM,
+        paidAmount: paid ? Number(entry?.amount || 0) : 0,
+      };
+    };
+
+    // If no session specified, list open sessions with paid check-in options
     if (!data.sessionId) {
       const open = await this.prisma.classSession.findMany({
-        where: { status: ClassSessionStatus.OPEN },
+        where: {
+          status: ClassSessionStatus.OPEN,
+          ...(teacherId ? { teacherId } : {}),
+        },
         include: { teacher: true, subject: true },
         orderBy: { createdAt: 'desc' },
       });
-      const entries = await this.prisma.sessionEntry.findMany({
-        where: {
-          studentId: student.id,
-          sessionId: { in: open.map((s) => s.id) },
-        },
-      });
+      const entries = open.length
+        ? await this.prisma.sessionEntry.findMany({
+            where: {
+              studentId: student.id,
+              sessionId: { in: open.map((s) => s.id) },
+            },
+          })
+        : [];
+      const sessions = open.map((s) =>
+        decorate(
+          s,
+          entries.find((e) => e.sessionId === s.id),
+        ),
+      );
+
+      let otherPaid: ReturnType<typeof decorate>[] = [];
+      if (teacherId) {
+        const others = await this.prisma.sessionEntry.findMany({
+          where: {
+            studentId: student.id,
+            payStatus: {
+              in: [
+                SessionPayStatus.CONFIRMED,
+                SessionPayStatus.PARTIALLY_REFUNDED,
+              ],
+            },
+            session: {
+              status: ClassSessionStatus.OPEN,
+              teacherId: { not: teacherId },
+            },
+          },
+          include: {
+            session: { include: { teacher: true, subject: true } },
+          },
+        });
+        otherPaid = others.map((e) => decorate(e.session, e));
+      }
+
       return {
         needsSessionChoice: true,
         student,
-        sessions: open.map((s) => {
-          const entry = entries.find((e) => e.sessionId === s.id);
-          return {
-            ...s,
-            entry,
-            canCheckIn: entry?.payStatus === SessionPayStatus.CONFIRMED && !entry.checkedInAt,
-            needsPayment: !entry || entry.payStatus === SessionPayStatus.PENDING_CONFIRM || entry.payStatus === SessionPayStatus.REFUNDED,
-            needsConfirm: entry?.payStatus === SessionPayStatus.PENDING_CONFIRM,
-          };
-        }),
+        sessions,
+        otherPaidSessions: otherPaid,
       };
     }
 
     const session = await this.getSession(data.sessionId);
     if (session.status !== ClassSessionStatus.OPEN) {
       throw new BadRequestException('الجلسة مقفولة');
+    }
+    if (teacherId && session.teacherId !== teacherId) {
+      throw new ForbiddenException('الحصة دي مش بتاعة المدرس الحالي');
     }
     await this.assertNotBlocked(student.id, session.teacherId);
 
@@ -309,13 +463,19 @@ export class OpsService {
         },
       },
     });
-    if (!entry || entry.payStatus !== SessionPayStatus.CONFIRMED) {
+    if (!entry || !isPaidStatus(entry.payStatus)) {
       throw new BadRequestException(
-        'الدفع غير مؤكد — حصّل أو أكّد فودافون كاش قبل الدخول',
+        'مفيش دفع مؤكد للحصة دي — حصّل من الاستقبال أولاً',
       );
     }
     if (entry.checkedInAt) {
-      return { alreadyCheckedIn: true, entry, student, session };
+      return {
+        alreadyCheckedIn: true,
+        entry,
+        student,
+        session,
+        paidLabel: `دفع حصة ${teacherLabel(session.teacher)}`,
+      };
     }
 
     if (data.source === OpsCheckInSource.PHONE) {
@@ -336,13 +496,18 @@ export class OpsService {
         checkedInAt: new Date(),
         checkInSource: data.source,
       },
-      include: { student: true, session: { include: { teacher: true } } },
+      include: {
+        student: true,
+        session: { include: { teacher: true, subject: true } },
+      },
     });
 
     return {
       ok: true,
       entry: updated,
       student: updated.student,
+      session: updated.session,
+      paidLabel: `دفع حصة ${teacherLabel(updated.session?.teacher)}`,
       phoneCheckInRemaining:
         data.source === OpsCheckInSource.PHONE
           ? Math.max(0, PHONE_CHECKIN_LIMIT - (student.phoneCheckInUsed + 1))
@@ -380,6 +545,33 @@ export class OpsService {
     });
   }
 
+  async payTeacherShare(sessionId: string, userId?: string) {
+    const session = await this.getSession(sessionId);
+    if (session.status !== ClassSessionStatus.CLOSED) {
+      throw new BadRequestException('اقفل الجلسة وسعّي الأول');
+    }
+    if (session.teacherPaidAt) {
+      throw new BadRequestException('اتدفع للمدرس بالفعل على الجلسة دي');
+    }
+    const teacherShare = Number(session.settledTeacherAmount || 0);
+    const teacherName = teacherLabel(session.teacher);
+    if (teacherShare > 0.009) {
+      await this.cash.payFromDrawer(userId || 'system', {
+        amount: teacherShare,
+        category: 'حصة مدرس',
+        note: `تسوية ${teacherName}${session.subject?.nameAr ? ` · ${session.subject.nameAr}` : ''} · حصة ${String(session.sessionDate).slice(0, 10)}`,
+      });
+    }
+    return this.prisma.classSession.update({
+      where: { id: sessionId },
+      data: {
+        teacherPaidAt: new Date(),
+        teacherPaidByUserId: userId || null,
+      },
+      include: { teacher: true, subject: true, entries: true },
+    });
+  }
+
   async refund(
     entryId: string,
     data: { amount?: number; reason: RefundReason; note?: string },
@@ -391,14 +583,9 @@ export class OpsService {
     });
     if (!entry) throw new NotFoundException('القيد غير موجود');
 
-    const sessionClosed = entry.session.status === ClassSessionStatus.CLOSED;
-    const isManager =
-      actor.role === RoleCode.SUPER_ADMIN ||
-      actor.role === RoleCode.CENTER_MANAGER;
-
-    if (sessionClosed && !isManager) {
-      throw new ForbiddenException(
-        'بعد قفل الحصة الاسترجاع للمدير فقط',
+    if (entry.session.status === ClassSessionStatus.CLOSED) {
+      throw new BadRequestException(
+        'الجلسة اتقفلت — مفيش استرجاع لأي طالب',
       );
     }
     if (
@@ -427,7 +614,7 @@ export class OpsService {
           amount: refundAmount,
           reason: data.reason,
           note: data.note,
-          isException: sessionClosed,
+          isException: false,
           createdByUserId: actor.userId,
         },
       });
@@ -486,5 +673,24 @@ export class OpsService {
       where: { id },
       data: { isActive: false },
     });
+  }
+
+  async deleteSession(sessionId: string, role?: string) {
+    if (role !== RoleCode.SUPER_ADMIN && role !== RoleCode.CENTER_MANAGER) {
+      throw new ForbiddenException('مسح الجلسة للمدير فقط');
+    }
+    const session = await this.prisma.classSession.findUnique({
+      where: { id: sessionId },
+    });
+    if (!session) throw new NotFoundException('الجلسة غير موجودة');
+
+    await this.prisma.$transaction([
+      this.prisma.handoutSale.updateMany({
+        where: { sessionId },
+        data: { sessionId: null },
+      }),
+      this.prisma.classSession.delete({ where: { id: sessionId } }),
+    ]);
+    return { ok: true, deletedId: sessionId };
   }
 }

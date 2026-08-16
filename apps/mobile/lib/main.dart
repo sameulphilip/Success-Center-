@@ -65,6 +65,24 @@ class _CenterErpAppState extends State<CenterErpApp> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Image.asset('assets/brand/success-logo.png', width: 120),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Success',
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                        color: SuccessColors.navy,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Eslam Atya',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: SuccessColors.gold,
+                      ),
+                    ),
                     const SizedBox(height: 16),
                     const CircularProgressIndicator(color: SuccessColors.navy),
                   ],

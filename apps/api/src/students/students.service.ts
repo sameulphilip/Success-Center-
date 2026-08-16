@@ -68,7 +68,7 @@ export class StudentsService {
         invoices: { include: { payments: true, group: true } },
         payments: { orderBy: { paidAt: 'desc' } },
         sessionEntries: {
-          take: 40,
+          take: 200,
           orderBy: { createdAt: 'desc' },
           include: {
             session: {
@@ -236,11 +236,17 @@ export class StudentsService {
 
   async mine(userId: string, role: string) {
     if (role === 'STUDENT') {
-      const student = await this.prisma.student.findFirst({
-        where: { userId },
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        include: { student: true },
       });
-      if (!student) return [];
-      return [await this.get(student.id)];
+      const studentId =
+        user?.student?.id ||
+        (
+          await this.prisma.student.findFirst({ where: { userId } })
+        )?.id;
+      if (!studentId) return [];
+      return [await this.get(studentId)];
     }
 
     const parent = await this.prisma.parent.findFirst({

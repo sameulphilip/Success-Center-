@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { CashExpenseFrom, Prisma, SessionPayStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -11,6 +15,7 @@ export const EXPENSE_CATEGORIES = [
   'نظافة',
   'مشروبات',
   'انتقالات',
+  'حصة مدرس',
   'أخرى',
 ] as const;
 
@@ -45,6 +50,23 @@ function isVodafone(method?: string | null) {
   return m.includes('VODAFONE');
 }
 
+type MoneyRow = { amount: unknown; method?: string | null };
+
+function splitMoney(rows: MoneyRow[]) {
+  let cash = 0;
+  let vodafone = 0;
+  for (const row of rows) {
+    const amt = money(row.amount as Prisma.Decimal);
+    if (isVodafone(row.method)) vodafone += amt;
+    else cash += amt;
+  }
+  return { cash, vodafone, total: cash + vodafone };
+}
+
+function bucket(key: string, label: string, rows: MoneyRow[]) {
+  return { key, label, ...splitMoney(rows) };
+}
+
 @Injectable()
 export class CashService {
   constructor(private readonly prisma: PrismaService) {}
@@ -57,7 +79,13 @@ export class CashService {
     const [payments, sessions, online, handouts, rentals] = await Promise.all([
       this.prisma.payment.findMany({
         where: { paidAt: range },
-        select: { amount: true, method: true },
+        select: {
+          amount: true,
+          method: true,
+          receiptNumber: true,
+          note: true,
+          invoice: { select: { note: true, groupId: true } },
+        },
       }),
       this.prisma.sessionEntry.findMany({
         where: { payStatus: confirmed, confirmedAt: range },
@@ -77,20 +105,41 @@ export class CashService {
       }),
     ]);
 
-    let cash = 0;
-    let vodafone = 0;
-    for (const row of [
+    const bookings: MoneyRow[] = [];
+    const subscriptions: MoneyRow[] = [];
+    const otherReceipts: MoneyRow[] = [];
+    for (const p of payments) {
+      const blob = `${p.receiptNumber || ''} ${p.note || ''} ${p.invoice?.note || ''}`.toLowerCase();
+      if (
+        (p.receiptNumber || '').startsWith('BK-') ||
+        blob.includes('حجز')
+      ) {
+        bookings.push(p);
+      } else if (p.invoice?.groupId) {
+        subscriptions.push(p);
+      } else {
+        otherReceipts.push(p);
+      }
+    }
+
+    const totals = splitMoney([
       ...payments,
       ...sessions,
       ...online,
       ...handouts,
       ...rentals,
-    ]) {
-      const amt = money(row.amount);
-      if (isVodafone(row.method)) vodafone += amt;
-      else cash += amt;
-    }
-    return { cash, vodafone, total: cash + vodafone };
+    ]);
+    const breakdown = [
+      bucket('booking', 'استمارات حجز', bookings),
+      bucket('groups', 'اشتراكات مجموعات', subscriptions),
+      bucket('receipts', 'إيصالات أخرى', otherReceipts),
+      bucket('sessions', 'حصص اليوم', sessions),
+      bucket('online', 'أكواد أونلاين', online),
+      bucket('handouts', 'مذكرات', handouts),
+      bucket('rentals', 'تأجير قاعات', rentals),
+    ].filter((b) => b.total > 0);
+
+    return { ...totals, breakdown };
   }
 
   private async balances() {
@@ -118,23 +167,36 @@ export class CashService {
     };
   }
 
-  async snapshot(ymd = cairoYmd()) {
+  async snapshot(ymd = cairoYmd(), viewer?: { userId: string; role?: string }) {
+    const isReception = viewer?.role === 'RECEPTION';
+    const expenseWhere: Prisma.CashExpenseWhereInput = isReception
+      ? {
+          createdByUserId: viewer!.userId,
+          paidFrom: { in: [CashExpenseFrom.DRAWER, CashExpenseFrom.SAFE] },
+        }
+      : {};
     const businessDate = dateOnly(ymd);
-    const [collected, drawerExpAgg, close, balances, expenses, handovers, closes] =
+    const drawerTodayWhere: Prisma.CashExpenseWhereInput = {
+      paidFrom: CashExpenseFrom.DRAWER,
+      businessDate,
+    };
+    const [collected, drawerExpAgg, drawerToday, close, balances, expenses, handovers, closes] =
       await Promise.all([
         this.dayCollections(ymd),
         this.prisma.cashExpense.aggregate({
-          where: {
-            paidFrom: CashExpenseFrom.DRAWER,
-            businessDate,
-          },
+          where: drawerTodayWhere,
           _sum: { amount: true },
+        }),
+        this.prisma.cashExpense.findMany({
+          where: drawerTodayWhere,
+          orderBy: { createdAt: 'desc' },
         }),
         this.prisma.cashDayClose.findUnique({ where: { businessDate } }),
         this.balances(),
         this.prisma.cashExpense.findMany({
+          where: expenseWhere,
           orderBy: { createdAt: 'desc' },
-          take: 40,
+          take: 80,
         }),
         this.prisma.cashHandover.findMany({
           orderBy: { createdAt: 'desc' },
@@ -176,9 +238,23 @@ export class CashService {
       collectedCash: collected.cash,
       collectedVodafone: collected.vodafone,
       collectedTotal: collected.total,
+      collectedBreakdown: collected.breakdown,
       drawerExpenses,
+      drawerExpenseLines: drawerToday.map((e) => ({
+        id: e.id,
+        amount: money(e.amount),
+        category: e.category,
+        note: e.note,
+      })),
       expectedInDrawer,
       ...balances,
+      ownerBalance: isReception ? undefined : balances.ownerBalance,
+      ownerSpent: isReception ? undefined : balances.ownerSpent,
+      totalHandedToOwner: isReception
+        ? undefined
+        : balances.totalHandedToOwner,
+      viewerScope: isReception ? 'reception' : 'owner',
+      canOwnerExpense: !isReception,
       categories: EXPENSE_CATEGORIES,
       expenses: expenses.map((e) => ({
         ...e,
@@ -209,6 +285,7 @@ export class CashService {
       paidFrom: CashExpenseFrom | string;
       note?: string;
     },
+    role?: string,
   ) {
     const amount = Number(body.amount);
     if (!Number.isFinite(amount) || amount <= 0) {
@@ -217,6 +294,14 @@ export class CashService {
     const paidFrom = String(body.paidFrom || '').toUpperCase() as CashExpenseFrom;
     if (!Object.values(CashExpenseFrom).includes(paidFrom)) {
       throw new BadRequestException('مصدر الصرف غير صالح');
+    }
+    if (role === 'RECEPTION' && paidFrom === CashExpenseFrom.OWNER) {
+      throw new BadRequestException(
+        'مصروف صاحب السنتر بعد التسليم يسجّله المدير فقط',
+      );
+    }
+    if (role === 'RECEPTION' && paidFrom !== CashExpenseFrom.DRAWER && paidFrom !== CashExpenseFrom.SAFE) {
+      throw new BadRequestException('الاستقبال يصرف من الدرج أو الخزنة فقط');
     }
     const category = (body.category || 'أخرى').trim() || 'أخرى';
     const ymd = cairoYmd();
@@ -229,7 +314,9 @@ export class CashService {
       });
       if (existing) {
         throw new BadRequestException(
-          'اليوم مقفول. سجّل المصروف من الخزنة أو من فلوس صاحب السنتر.',
+          role === 'RECEPTION'
+            ? 'اليوم مقفول. سجّل المصروف من الخزنة.'
+            : 'اليوم مقفول. سجّل المصروف من الخزنة أو من فلوس صاحب السنتر.',
         );
       }
       const collected = await this.dayCollections(ymd);
@@ -251,6 +338,12 @@ export class CashService {
       );
     }
 
+    if (paidFrom === CashExpenseFrom.OWNER && amount > balances.ownerBalance + 0.009) {
+      throw new BadRequestException(
+        `رصيد صاحب السنتر غير كافٍ. المتاح ${Math.round(balances.ownerBalance)} ج.م`,
+      );
+    }
+
     return this.prisma.cashExpense.create({
       data: {
         amount,
@@ -261,6 +354,30 @@ export class CashService {
         createdByUserId: userId,
       },
     });
+  }
+
+  /** Pay a teacher's session share from the drawer (center share stays in till). */
+  async payFromDrawer(
+    userId: string,
+    body: { amount: number; category: string; note?: string },
+  ) {
+    return this.addExpense(
+      userId,
+      {
+        amount: body.amount,
+        category: body.category,
+        paidFrom: CashExpenseFrom.DRAWER,
+        note: body.note,
+      },
+      'CENTER_MANAGER',
+    );
+  }
+
+  async deleteExpense(id: string) {
+    const expense = await this.prisma.cashExpense.findUnique({ where: { id } });
+    if (!expense) throw new NotFoundException('المصروف غير موجود');
+    await this.prisma.cashExpense.delete({ where: { id } });
+    return { ok: true, deletedId: id };
   }
 
   async closeDay(

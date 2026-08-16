@@ -1,6 +1,7 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { AppShell } from '@/components/AppShell';
 import { PageHeader } from '@/components/PageHeader';
 import {
@@ -10,8 +11,18 @@ import {
   SectionCard,
 } from '@/components/ui';
 import { api, getStoredUser } from '@/lib/api';
+import { AppDialog } from '@/components/AppDialog';
 
-type Teacher = { id: string; firstName: string; lastName: string };
+type Teacher = {
+  id: string;
+  firstName: string;
+  lastName: string;
+  hourlyRate?: string | number;
+  subjects?: {
+    subjectId?: string;
+    subject?: { id: string; nameAr: string };
+  }[];
+};
 type Subject = { id: string; nameAr: string };
 type Student = {
   id: string;
@@ -30,6 +41,7 @@ type Session = {
   teacherPercent: string | number;
   settledTeacherAmount?: string | number | null;
   settledCenterAmount?: string | number | null;
+  teacherPaidAt?: string | null;
   teacher: Teacher;
   subject?: Subject | null;
   _count?: { entries: number };
@@ -63,6 +75,20 @@ const payStatusAr: Record<string, string> = {
   PARTIALLY_REFUNDED: 'مسترجع جزئي',
 };
 
+function subjectsOf(t?: Teacher | null): { id: string; nameAr: string }[] {
+  const list = (t?.subjects || [])
+    .map((s) => s.subject || (s.subjectId ? { id: s.subjectId, nameAr: '' } : null))
+    .filter((s): s is { id: string; nameAr: string } => !!s?.id);
+  const seen = new Set<string>();
+  return list.filter((s) => {
+    if (seen.has(s.id)) return false;
+    seen.add(s.id);
+    return true;
+  });
+}
+
+const OPS_SCANNER_ID = 'ops-desk-qr';
+
 export default function OpsPage() {
   const me = getStoredUser();
   const isManager =
@@ -72,11 +98,17 @@ export default function OpsPage() {
   const [selectedId, setSelectedId] = useState('');
   const [detail, setDetail] = useState<Session | null>(null);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
-  const [subjects, setSubjects] = useState<Subject[]>([]);
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
   const [msg, setMsg] = useState('');
+  const [settle, setSettle] = useState<Session | null>(null);
+  const [ask, setAsk] = useState<null | 'close' | 'delete'>(null);
+  const [scanNotice, setScanNotice] = useState<{
+    tone: 'success' | 'error' | 'info';
+    title: string;
+    message: string;
+  } | null>(null);
 
   const [openForm, setOpenForm] = useState({
     teacherId: '',
@@ -92,14 +124,10 @@ export default function OpsPage() {
     method: 'CASH' as 'CASH' | 'VODAFONE_CASH',
     vodafoneTxn: '',
   });
-
-  const [checkForm, setCheckForm] = useState({
-    phone: '',
-    qrPayload: '',
-    source: 'MANUAL' as 'MANUAL' | 'PHONE' | 'QR',
-  });
-  const [choiceSessions, setChoiceSessions] = useState<any[] | null>(null);
-  const [choiceStudent, setChoiceStudent] = useState<Student | null>(null);
+  const [scanned, setScanned] = useState<Student | null>(null);
+  const [scanOpen, setScanOpen] = useState(false);
+  const scannerRef = useRef<any>(null);
+  const lastScanAt = useRef(0);
 
   const [refundForm, setRefundForm] = useState({
     entryId: '',
@@ -116,20 +144,25 @@ export default function OpsPage() {
   });
 
   async function loadLists() {
-    const [s, t, sub, b] = await Promise.all([
+    const [s, t, b] = await Promise.all([
       api<Session[]>('/ops/sessions'),
       api<Teacher[]>('/teachers'),
-      api<Subject[]>('/catalog/subjects'),
       api<Block[]>('/ops/blocks'),
     ]);
     setSessions(s);
     setTeachers(t);
-    setSubjects(sub);
     setBlocks(b);
     if (!selectedId && s[0]) setSelectedId(s[0].id);
-    if (!openForm.teacherId && t[0]) {
-      setOpenForm((f) => ({ ...f, teacherId: t[0].id }));
-    }
+    setOpenForm((f) => {
+      const teacherId = f.teacherId || t[0]?.id || '';
+      const teacher = t.find((x) => x.id === teacherId);
+      const subs = subjectsOf(teacher);
+      const subjectId =
+        (f.subjectId && subs.some((x) => x.id === f.subjectId)
+          ? f.subjectId
+          : subs[0]?.id) || '';
+      return { ...f, teacherId, subjectId };
+    });
   }
 
   async function loadDetail(id: string) {
@@ -146,8 +179,143 @@ export default function OpsPage() {
 
   useEffect(() => {
     if (selectedId) loadDetail(selectedId).catch((e) => setError(e.message));
+    setScanned(null);
   }, [selectedId]);
 
+  const applyQr = useCallback(
+    async (raw: string) => {
+      const now = Date.now();
+      if (now - lastScanAt.current < 1800) return;
+      lastScanAt.current = now;
+      setError('');
+      if (!selectedId) {
+        setScanNotice({
+          tone: 'error',
+          title: 'مفيش جلسة',
+          message: 'اختَر الجلسة أولاً ثم امسح كارت الطالب',
+        });
+        return;
+      }
+      try {
+        const student = await api<Student>(
+          `/ops/students/lookup?qr=${encodeURIComponent(raw.trim())}`,
+        );
+        const name =
+          `${student.firstName} ${student.lastName === '-' ? '' : student.lastName}`.trim();
+        const teacherName = detail?.teacher
+          ? `${detail.teacher.firstName} ${detail.teacher.lastName}`
+          : 'الجلسة';
+        const subjectName = detail?.subject?.nameAr || detail?.title || 'حصة';
+        const already = (detail?.entries || []).find(
+          (e) => e.student.id === student.id && e.payStatus !== 'REFUNDED',
+        );
+        if (already) {
+          setScanOpen(false);
+          setScanned(student);
+          setScanNotice({
+            tone: 'success',
+            title: 'مسموح بالدخول',
+            message: `${name}\nحضر ودفع · ${teacherName} · ${subjectName}`,
+          });
+          await loadDetail(selectedId);
+          return;
+        }
+
+        if (payForm.method === 'VODAFONE_CASH') {
+          setScanned(student);
+          setPayForm((f) => ({ ...f, phone: student.phone || '' }));
+          setScanOpen(false);
+          setScanNotice({
+            tone: 'info',
+            title: 'تم المسح',
+            message: `${name}\nأكّد رقم عملية فودافون ثم سجّل الدفع`,
+          });
+          return;
+        }
+
+        await api(`/ops/sessions/${selectedId}/pay`, {
+          method: 'POST',
+          body: JSON.stringify({
+            studentId: student.id,
+            studentUid: student.studentUid,
+            method: 'CASH',
+          }),
+        });
+        setScanOpen(false);
+        setScanned(null);
+        await loadDetail(selectedId);
+        await loadLists();
+        setScanNotice({
+          tone: 'success',
+          title: 'تم الدفع والحضور',
+          message: `${name}\nحضر · ${teacherName} · ${subjectName}`,
+        });
+      } catch (err: any) {
+        setScanned(null);
+        setScanOpen(false);
+        setScanNotice({
+          tone: 'error',
+          title: 'مرفوض',
+          message: err.message || 'QR غير معروف',
+        });
+      }
+    },
+    [detail?.entries, detail?.teacher, detail?.subject, detail?.title, selectedId, payForm.method],
+  );
+
+  useEffect(() => {
+    if (!scanOpen) return;
+    let stopped = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const { Html5Qrcode } = await import('html5-qrcode');
+        const el = document.getElementById(OPS_SCANNER_ID);
+        if (!el || stopped) return;
+        const scanner = new Html5Qrcode(OPS_SCANNER_ID);
+        scannerRef.current = scanner;
+        await scanner.start(
+          { facingMode: 'environment' },
+          {
+            fps: 8,
+            qrbox: (w: number, h: number) => {
+              const side = Math.min(w, h, 240);
+              return { width: side, height: side };
+            },
+          },
+          (decoded: string) => {
+            void applyQr(decoded);
+          },
+          () => undefined,
+        );
+      } catch {
+        if (!stopped) {
+          setError('تعذّر فتح الكاميرا — اسمح للموقع بالكاميرا أو استخدم Chrome');
+        }
+      }
+    }, 80);
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+      const scanner = scannerRef.current;
+      scannerRef.current = null;
+      if (!scanner) return;
+      scanner
+        .stop()
+        .catch(() => undefined)
+        .finally(() => {
+          scanner.clear().catch(() => undefined);
+        });
+    };
+  }, [scanOpen, applyQr]);
+
+  const selectedTeacher = useMemo(
+    () => teachers.find((t) => t.id === openForm.teacherId) || null,
+    [teachers, openForm.teacherId],
+  );
+  const teacherSubjects = useMemo(
+    () => subjectsOf(selectedTeacher),
+    [selectedTeacher],
+  );
   const openCount = useMemo(
     () => sessions.filter((s) => s.status === 'OPEN').length,
     [sessions],
@@ -185,7 +353,9 @@ export default function OpsPage() {
       await api(`/ops/sessions/${selectedId}/pay`, {
         method: 'POST',
         body: JSON.stringify({
-          phone: payForm.phone,
+          studentId: scanned?.id,
+          phone: scanned ? undefined : payForm.phone,
+          studentUid: scanned?.studentUid,
           method: payForm.method,
           vodafoneTxn:
             payForm.method === 'VODAFONE_CASH'
@@ -194,9 +364,10 @@ export default function OpsPage() {
         }),
       });
       setPayForm({ phone: '', method: 'CASH', vodafoneTxn: '' });
+      setScanned(null);
       await loadDetail(selectedId);
       await loadLists();
-      setMsg('تم تسجيل الدفع');
+      setMsg('تم تسجيل الدفع والحضور');
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -217,56 +388,20 @@ export default function OpsPage() {
     }
   }
 
-  async function doCheckIn(e: FormEvent) {
-    e.preventDefault();
-    setBusy('in');
-    setError('');
-    setChoiceSessions(null);
-    try {
-      const res = await api<any>('/ops/check-in', {
-        method: 'POST',
-        body: JSON.stringify({
-          sessionId: selectedId || undefined,
-          phone: checkForm.phone || undefined,
-          qrPayload: checkForm.qrPayload || undefined,
-          source: checkForm.source,
-        }),
-      });
-      if (res.needsSessionChoice) {
-        setChoiceStudent(res.student);
-        setChoiceSessions(res.sessions);
-        setMsg('اختَر الجلسة/المدرس للطالب');
-      } else if (res.alreadyCheckedIn) {
-        setMsg('الطالب حاضر بالفعل');
-      } else {
-        setMsg('تم تسجيل الحضور');
-        setCheckForm({ phone: '', qrPayload: '', source: 'MANUAL' });
-        if (selectedId) await loadDetail(selectedId);
-      }
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setBusy('');
-    }
+  async function deleteSession() {
+    if (!selectedId || !isManager) return;
+    setAsk('delete');
   }
 
-  async function checkInToSession(sessionId: string) {
-    if (!choiceStudent) return;
-    setBusy('in');
+  async function runDeleteSession() {
+    if (!selectedId || !isManager) return;
+    setBusy('delete');
     try {
-      await api('/ops/check-in', {
-        method: 'POST',
-        body: JSON.stringify({
-          sessionId,
-          studentId: choiceStudent.id,
-          source: checkForm.source,
-        }),
-      });
-      setChoiceSessions(null);
-      setChoiceStudent(null);
-      setMsg('تم تسجيل الحضور');
-      setSelectedId(sessionId);
-      await loadDetail(sessionId);
+      await api(`/ops/sessions/${selectedId}`, { method: 'DELETE' });
+      setSelectedId('');
+      setDetail(null);
+      await loadLists();
+      setMsg('اتمسحت الجلسة');
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -275,13 +410,39 @@ export default function OpsPage() {
   }
 
   async function closeSession() {
-    if (!selectedId || !confirm('قفل الجلسة وتثبيت نسب المدرس/السنتر؟')) return;
+    if (!selectedId) return;
+    setAsk('close');
+  }
+
+  async function runCloseSession() {
+    if (!selectedId) return;
     setBusy('close');
     try {
-      await api(`/ops/sessions/${selectedId}/close`, { method: 'POST' });
+      const closed = await api<Session>(`/ops/sessions/${selectedId}/close`, {
+        method: 'POST',
+      });
       await loadLists();
       await loadDetail(selectedId);
-      setMsg('تم قفل الجلسة وتسوية الحساب');
+      setSettle(closed);
+      setMsg('اتقفلت الجلسة — راجع التسوية');
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function payTeacherShare(sessionId: string) {
+    setBusy('pay-teacher');
+    setError('');
+    try {
+      const paid = await api<Session>(`/ops/sessions/${sessionId}/pay-teacher`, {
+        method: 'POST',
+      });
+      setSettle(paid);
+      await loadLists();
+      await loadDetail(sessionId);
+      setMsg('اتدفع للمدرس · نصيب السنتر فضل في الدرج');
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -292,6 +453,11 @@ export default function OpsPage() {
   async function doRefund(e: FormEvent) {
     e.preventDefault();
     if (!refundForm.entryId) return;
+    if (detail?.status === 'CLOSED') {
+      setError('الجلسة اتقفلت — مفيش استرجاع لأي طالب');
+      setRefundForm({ entryId: '', amount: '', reason: 'CANCELLED', note: '' });
+      return;
+    }
     setBusy('refund');
     try {
       await api(`/ops/entries/${refundForm.entryId}/refund`, {
@@ -395,9 +561,16 @@ export default function OpsPage() {
                   className="field"
                   required
                   value={openForm.teacherId}
-                  onChange={(e) =>
-                    setOpenForm({ ...openForm, teacherId: e.target.value })
-                  }
+                  onChange={(e) => {
+                    const teacherId = e.target.value;
+                    const teacher = teachers.find((x) => x.id === teacherId);
+                    const subs = subjectsOf(teacher);
+                    setOpenForm((f) => ({
+                      ...f,
+                      teacherId,
+                      subjectId: subs[0]?.id || '',
+                    }));
+                  }}
                 >
                   {teachers.map((t) => (
                     <option key={t.id} value={t.id}>
@@ -406,21 +579,29 @@ export default function OpsPage() {
                   ))}
                 </select>
               </FieldLabel>
-              <FieldLabel label="المادة (اختياري)">
-                <select
-                  className="field"
-                  value={openForm.subjectId}
-                  onChange={(e) =>
-                    setOpenForm({ ...openForm, subjectId: e.target.value })
-                  }
-                >
-                  <option value="">—</option>
-                  {subjects.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.nameAr}
-                    </option>
-                  ))}
-                </select>
+              <FieldLabel label="المادة">
+                {teacherSubjects.length <= 1 ? (
+                  <input
+                    className="field bg-sand"
+                    readOnly
+                    value={teacherSubjects[0]?.nameAr || 'لا توجد مادة مربوطة بالمدرس'}
+                  />
+                ) : (
+                  <select
+                    className="field"
+                    required
+                    value={openForm.subjectId}
+                    onChange={(e) =>
+                      setOpenForm({ ...openForm, subjectId: e.target.value })
+                    }
+                  >
+                    {teacherSubjects.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.nameAr}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </FieldLabel>
               <FieldLabel label="عنوان مختصر">
                 <input
@@ -525,182 +706,154 @@ export default function OpsPage() {
                   </span>
                 }
                 action={
-                  detail.status === 'OPEN' ? (
-                    <button
-                      type="button"
-                      className="btn-ghost"
-                      disabled={busy === 'close'}
-                      onClick={closeSession}
-                    >
-                      قفل وتسوية
-                    </button>
-                  ) : (
-                    <span className="text-xs text-navy/50">
-                      مدرس:{' '}
-                      {Number(detail.settledTeacherAmount || 0).toLocaleString(
-                        'en-EG',
-                      )}{' '}
-                      · سنتر:{' '}
-                      {Number(detail.settledCenterAmount || 0).toLocaleString(
-                        'en-EG',
-                      )}
-                    </span>
-                  )
+                  <div className="flex flex-wrap items-center gap-2 justify-end">
+                    {detail.status === 'OPEN' ? (
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        disabled={busy === 'close'}
+                        onClick={closeSession}
+                      >
+                        قفل وتسوية
+                      </button>
+                    ) : (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs text-navy/50">
+                          مدرس:{' '}
+                          {Number(detail.settledTeacherAmount || 0).toLocaleString(
+                            'en-EG',
+                          )}{' '}
+                          · سنتر:{' '}
+                          {Number(detail.settledCenterAmount || 0).toLocaleString(
+                            'en-EG',
+                          )}
+                        </span>
+                        {detail.teacherPaidAt ? (
+                          <span className="badge-ok">اتدفع للمدرس</span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn-primary !py-1.5 !px-3 text-xs"
+                            disabled={busy === 'pay-teacher'}
+                            onClick={() => setSettle(detail)}
+                          >
+                            تسوية الدفع
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {isManager ? (
+                      <button
+                        type="button"
+                        className="btn-ghost text-rose-700"
+                        disabled={busy === 'delete'}
+                        onClick={deleteSession}
+                      >
+                        مسح الجلسة
+                      </button>
+                    ) : null}
+                  </div>
                 }
               >
                 {detail.status === 'OPEN' ? (
-                  <div className="grid gap-4 lg:grid-cols-2 mb-4">
-                    <form
-                      onSubmit={collectPay}
-                      className="rounded-xl border border-mist p-3 space-y-2"
+                  <form
+                    onSubmit={collectPay}
+                    className="mb-4 max-w-xl rounded-xl border border-mist p-3 space-y-2"
+                  >
+                    <p className="font-bold text-navy text-sm">
+                      تحصيل ودخول
+                    </p>
+                    <button
+                      type="button"
+                      className="btn-primary w-full"
+                      onClick={() => {
+                        setError('');
+                        setScanned(null);
+                        setPayForm((f) => ({ ...f, phone: '' }));
+                        setScanOpen(true);
+                      }}
                     >
-                      <p className="font-bold text-navy text-sm">تحصيل قبل الدخول</p>
-                      <FieldLabel label="موبايل الطالب">
+                      مسح QR بالكاميرا
+                    </button>
+                    {scanned ? (
+                      <div className="rounded-xl bg-emerald-50 border border-emerald-100 px-3 py-2">
+                        <p className="text-xs text-emerald-800">تم المسح</p>
+                        <p className="font-extrabold text-navy">
+                          {scanned.firstName}{' '}
+                          {scanned.lastName === '-' ? '' : scanned.lastName}
+                        </p>
+                        <button
+                          type="button"
+                          className="text-xs text-navy/50 mt-1"
+                          onClick={() => {
+                            setScanned(null);
+                            setPayForm((f) => ({ ...f, phone: '' }));
+                          }}
+                        >
+                          إلغاء
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-navy/45">
+                        امسح الـ QR للتحصيل والدخول · أو اكتب رقم الموبايل تحت
+                      </p>
+                    )}
+                    <FieldLabel label="أو برقم الموبايل">
+                      <input
+                        className="field"
+                        inputMode="tel"
+                        disabled={Boolean(scanned)}
+                        value={payForm.phone}
+                        onChange={(e) =>
+                          setPayForm({
+                            ...payForm,
+                            phone: e.target.value,
+                          })
+                        }
+                        placeholder="01xxxxxxxxx"
+                      />
+                    </FieldLabel>
+                    <FieldLabel label="طريقة الدفع">
+                      <select
+                        className="field"
+                        value={payForm.method}
+                        onChange={(e) =>
+                          setPayForm({
+                            ...payForm,
+                            method: e.target.value as any,
+                          })
+                        }
+                      >
+                        <option value="CASH">كاش</option>
+                        <option value="VODAFONE_CASH">فودافون كاش</option>
+                      </select>
+                    </FieldLabel>
+                    {payForm.method === 'VODAFONE_CASH' ? (
+                      <FieldLabel label="رقم العملية">
                         <input
                           className="field"
                           required
-                          value={payForm.phone}
-                          onChange={(e) =>
-                            setPayForm({ ...payForm, phone: e.target.value })
-                          }
-                          placeholder="01xxxxxxxxx"
-                        />
-                      </FieldLabel>
-                      <FieldLabel label="طريقة الدفع">
-                        <select
-                          className="field"
-                          value={payForm.method}
+                          value={payForm.vodafoneTxn}
                           onChange={(e) =>
                             setPayForm({
                               ...payForm,
-                              method: e.target.value as any,
+                              vodafoneTxn: e.target.value,
                             })
                           }
-                        >
-                          <option value="CASH">كاش</option>
-                          <option value="VODAFONE_CASH">فودافون كاش</option>
-                        </select>
+                        />
                       </FieldLabel>
-                      {payForm.method === 'VODAFONE_CASH' ? (
-                        <FieldLabel label="رقم العملية">
-                          <input
-                            className="field"
-                            required
-                            value={payForm.vodafoneTxn}
-                            onChange={(e) =>
-                              setPayForm({
-                                ...payForm,
-                                vodafoneTxn: e.target.value,
-                              })
-                            }
-                          />
-                        </FieldLabel>
-                      ) : null}
-                      <button
-                        type="submit"
-                        className="btn-accent w-full"
-                        disabled={busy === 'pay'}
-                      >
-                        تسجيل الدفع
-                      </button>
-                    </form>
-
-                    <form
-                      onSubmit={doCheckIn}
-                      className="rounded-xl border border-mist p-3 space-y-2"
+                    ) : null}
+                    <button
+                      type="submit"
+                      className="btn-accent w-full"
+                      disabled={
+                        busy === 'pay' ||
+                        (!scanned && !payForm.phone.trim())
+                      }
                     >
-                      <p className="font-bold text-navy text-sm">حضور</p>
-                      <FieldLabel label="موبايل أو QR">
-                        <input
-                          className="field"
-                          value={checkForm.phone}
-                          onChange={(e) =>
-                            setCheckForm({
-                              ...checkForm,
-                              phone: e.target.value,
-                              qrPayload: '',
-                            })
-                          }
-                          placeholder="موبايل الطالب"
-                        />
-                      </FieldLabel>
-                      <FieldLabel label="أو لصق QR payload">
-                        <input
-                          className="field font-mono text-xs"
-                          value={checkForm.qrPayload}
-                          onChange={(e) =>
-                            setCheckForm({
-                              ...checkForm,
-                              qrPayload: e.target.value,
-                              phone: '',
-                            })
-                          }
-                        />
-                      </FieldLabel>
-                      <FieldLabel label="المصدر">
-                        <select
-                          className="field"
-                          value={checkForm.source}
-                          onChange={(e) =>
-                            setCheckForm({
-                              ...checkForm,
-                              source: e.target.value as any,
-                            })
-                          }
-                        >
-                          <option value="MANUAL">يدوي / QR عند الاستقبال</option>
-                          <option value="PHONE">استثناء موبايل (مرتين كحد أقصى)</option>
-                          <option value="QR">QR</option>
-                        </select>
-                      </FieldLabel>
-                      <button
-                        type="submit"
-                        className="btn-primary w-full"
-                        disabled={busy === 'in'}
-                      >
-                        تسجيل حضور
-                      </button>
-                    </form>
-                  </div>
-                ) : null}
-
-                {choiceSessions ? (
-                  <div className="mb-4 rounded-xl bg-sand p-3">
-                    <p className="text-sm font-bold text-navy mb-2">
-                      اختر جلسة لـ {choiceStudent?.firstName}{' '}
-                      {choiceStudent?.lastName}
-                    </p>
-                    <ul className="space-y-2">
-                      {choiceSessions.map((s) => (
-                        <li
-                          key={s.id}
-                          className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white px-3 py-2 text-sm"
-                        >
-                          <span>
-                            {s.teacher.firstName} {s.teacher.lastName}
-                            {s.title ? ` · ${s.title}` : ''}
-                          </span>
-                          {s.canCheckIn ? (
-                            <button
-                              type="button"
-                              className="btn-accent text-xs"
-                              onClick={() => checkInToSession(s.id)}
-                            >
-                              حضور
-                            </button>
-                          ) : s.needsConfirm ? (
-                            <span className="text-amber-700 text-xs">
-                              يحتاج تأكيد فودافون
-                            </span>
-                          ) : (
-                            <span className="text-navy/45 text-xs">
-                              يحتاج دفع أولًا
-                            </span>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+                      تأكيد الدفع ودخول الجلسة
+                    </button>
+                  </form>
                 ) : null}
 
                 <div className="overflow-auto">
@@ -754,7 +907,7 @@ export default function OpsPage() {
                             ) : null}
                             {(e.payStatus === 'CONFIRMED' ||
                               e.payStatus === 'PARTIALLY_REFUNDED') &&
-                            (detail.status === 'OPEN' || isManager) ? (
+                            detail.status === 'OPEN' ? (
                               <button
                                 type="button"
                                 className="btn-ghost text-xs px-2 py-1 w-full"
@@ -783,7 +936,7 @@ export default function OpsPage() {
                   ) : null}
                 </div>
 
-                {refundForm.entryId ? (
+                {refundForm.entryId && detail.status === 'OPEN' ? (
                   <form
                     onSubmit={doRefund}
                     className="mt-4 rounded-xl border border-amber-200 bg-amber-50/50 p-3 grid gap-2 sm:grid-cols-4"
@@ -851,11 +1004,6 @@ export default function OpsPage() {
                         إلغاء
                       </button>
                     </div>
-                    {detail.status === 'CLOSED' ? (
-                      <p className="sm:col-span-4 text-xs text-amber-800">
-                        استثناء مدير بعد قفل الحصة
-                      </p>
-                    ) : null}
                   </form>
                 ) : null}
               </SectionCard>
@@ -972,6 +1120,143 @@ export default function OpsPage() {
           </SectionCard>
         </div>
       </div>
+      {settle
+        ? createPortal(
+            <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+              <button
+                type="button"
+                className="absolute inset-0 bg-[#0B2545]/55 backdrop-blur-[2px]"
+                aria-label="إغلاق"
+                onClick={() => setSettle(null)}
+              />
+              <div
+                className="relative z-10 w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl"
+                dir="rtl"
+              >
+                <p className="text-[11px] font-bold tracking-[0.16em] text-gold">
+                  تسوية الجلسة
+                </p>
+                <h3 className="mt-1 text-lg font-extrabold text-navy">
+                  {settle.teacher.firstName} {settle.teacher.lastName}
+                  {settle.subject?.nameAr ? ` · ${settle.subject.nameAr}` : ''}
+                </h3>
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                  <div className="rounded-2xl bg-amber-50 px-3 py-3">
+                    <p className="text-[11px] text-amber-800/70">المدرس</p>
+                    <p className="text-xl font-extrabold tabular-nums text-amber-950">
+                      {Number(settle.settledTeacherAmount || 0).toLocaleString(
+                        'en-EG',
+                      )}{' '}
+                      <span className="text-xs font-semibold">ج.م</span>
+                    </p>
+                    <p className="mt-1 text-[11px] text-amber-800/70">
+                      نسبة {Number(settle.teacherPercent)}%
+                    </p>
+                  </div>
+                  <div className="rounded-2xl bg-emerald-50 px-3 py-3">
+                    <p className="text-[11px] text-emerald-800/70">السنتر</p>
+                    <p className="text-xl font-extrabold tabular-nums text-emerald-950">
+                      {Number(settle.settledCenterAmount || 0).toLocaleString(
+                        'en-EG',
+                      )}{' '}
+                      <span className="text-xs font-semibold">ج.م</span>
+                    </p>
+                    <p className="mt-1 text-[11px] text-emerald-800/70">
+                      تفضل في الدرج
+                    </p>
+                  </div>
+                </div>
+                {settle.teacherPaidAt ? (
+                  <p className="mt-4 rounded-xl bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800">
+                    اتدفع للمدرس · نصيب السنتر في الدرج
+                  </p>
+                ) : (
+                  <p className="mt-4 text-sm text-navy/60">
+                    ادفع حصة المدرس من الدرج. اللي يتبقى نصيب السنتر في الدرج.
+                  </p>
+                )}
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {!settle.teacherPaidAt ? (
+                    <button
+                      type="button"
+                      className="btn-primary flex-1"
+                      disabled={busy === 'pay-teacher'}
+                      onClick={() => void payTeacherShare(settle.id)}
+                    >
+                      تم دفع للمدرس
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="btn-ghost flex-1"
+                    onClick={() => setSettle(null)}
+                  >
+                    {settle.teacherPaidAt ? 'تم' : 'لاحقاً'}
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+      {scanOpen
+        ? createPortal(
+            <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+              <button
+                type="button"
+                className="absolute inset-0 bg-[#0B2545]/55 backdrop-blur-[2px]"
+                aria-label="إغلاق"
+                onClick={() => setScanOpen(false)}
+              />
+              <div className="relative z-10 w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl" dir="rtl">
+                <h3 className="text-lg font-extrabold text-navy">مسح كارت الطالب</h3>
+                <p className="mt-1 text-sm text-navy/50">
+                  وجّه الكاميرا على الـ QR
+                </p>
+                <div
+                  id={OPS_SCANNER_ID}
+                  className="mt-4 mx-auto w-full max-w-[260px] overflow-hidden rounded-xl bg-navy aspect-square"
+                />
+                <button
+                  type="button"
+                  className="btn-ghost w-full mt-4"
+                  onClick={() => setScanOpen(false)}
+                >
+                  إلغاء
+                </button>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+      <AppDialog
+        open={ask === 'close'}
+        tone="info"
+        title="قفل الجلسة"
+        message="هتتقفل الجلسة وتتثبت نسبة المدرس ونصيب السنتر. بعدها تقدر تسجّل إن المدرس استلم فلوسه."
+        confirmLabel="قفل وتسوية"
+        cancelLabel="رجوع"
+        onConfirm={() => void runCloseSession()}
+        onClose={() => setAsk(null)}
+      />
+      <AppDialog
+        open={ask === 'delete'}
+        tone="danger"
+        title="مسح الجلسة"
+        message="هتتمسح الجلسة وكل القيود المرتبطة بيها. التحصيل المسجّل هيتشال من الجلسة دي."
+        confirmLabel="مسح الجلسة"
+        cancelLabel="رجوع"
+        onConfirm={() => void runDeleteSession()}
+        onClose={() => setAsk(null)}
+      />
+      <AppDialog
+        open={!!scanNotice}
+        tone={scanNotice?.tone || 'info'}
+        title={scanNotice?.title}
+        message={scanNotice?.message}
+        confirmLabel="حسناً"
+        onClose={() => setScanNotice(null)}
+      />
     </AppShell>
   );
 }

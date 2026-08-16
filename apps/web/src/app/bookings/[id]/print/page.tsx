@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '@/lib/api';
+import { PrintBrand } from '@/components/BrandMark';
 
 type SharePack = {
   formId: string;
@@ -55,17 +56,8 @@ export default function BookingFormPrintPage() {
       </div>
 
       <article className="mx-auto max-w-2xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm print:shadow-none print:border-slate-300 print:rounded-none">
-        <header className="bg-[#0B2545] text-white px-8 py-8 text-center">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/success-logo.png"
-            alt="Success"
-            className="mx-auto h-24 w-24 rounded-full bg-white p-1 object-contain shadow"
-          />
-          <p className="mt-4 text-3xl font-extrabold tracking-tight">Success</p>
-          <p className="mt-1 text-[11px] tracking-[0.28em] text-amber-300 uppercase">
-            Future Begins Here
-          </p>
+        <header className="bg-[#0B2545] text-white px-8 py-8">
+          <PrintBrand />
         </header>
 
         <div className="px-8 py-8 text-center space-y-3">

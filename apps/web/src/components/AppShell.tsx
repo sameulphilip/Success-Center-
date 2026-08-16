@@ -3,8 +3,9 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
-import Image from 'next/image';
 import { getStoredUser, logout, type AuthUser } from '@/lib/api';
+import { CENTER_NAME, CENTER_TAGLINE, FOUNDER_NAME } from '@/lib/brand';
+import { BrandMark } from '@/components/BrandMark';
 import { PoweredByCowdlly } from '@/components/PoweredByCowdlly';
 import { NavGlyph, type NavIconKey, type NavTone } from '@/components/nav-icons';
 
@@ -92,25 +93,10 @@ function SideNav({
   return (
     <>
       <div className="px-2 pb-5 mb-4 border-b border-white/10">
-        <div className="flex items-center gap-3">
-          <div className="relative">
-            <Image
-              src="/success-logo.png"
-              alt="Success"
-              width={48}
-              height={48}
-              className="object-contain rounded-full shadow-md ring-2 ring-gold/40"
-              priority
-            />
-            <span className="absolute -bottom-0.5 -left-0.5 h-2.5 w-2.5 rounded-full bg-emerald-400 ring-2 ring-navy-deep" />
-          </div>
-          <div>
-            <p className="font-extrabold text-white text-lg leading-none">Success</p>
-            <p className="text-[10px] tracking-[0.2em] text-gold mt-1.5 uppercase">
-              {portalLabel}
-            </p>
-          </div>
-        </div>
+        <BrandMark size="sm" invert />
+        <p className="mt-2 text-[10px] tracking-[0.2em] text-gold uppercase">
+          {portalLabel}
+        </p>
         <div className="mt-4 rounded-xl bg-gradient-to-l from-white/[0.08] to-gold/10 px-3 py-2.5 border border-white/10">
           <p className="text-sm font-medium text-white truncate">{user.fullName}</p>
           <p className="text-[11px] text-gold/90 mt-0.5">{user.role}</p>
@@ -208,16 +194,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (!user) {
     return (
       <div className="min-h-screen grid place-items-center bg-surface">
-        <div className="animate-rise text-center">
-          <Image
-            src="/success-logo.png"
-            alt="Success"
-            width={88}
-            height={88}
-            className="rounded-full shadow-soft ring-2 ring-gold/30"
-            priority
-          />
-          <p className="mt-3 text-sm text-navy/50">جاري التحميل...</p>
+        <div className="animate-rise">
+          <BrandMark size="lg" layout="stack" showTagline />
+          <p className="mt-3 text-sm text-navy/50 text-center">جاري التحميل...</p>
         </div>
       </div>
     );
@@ -230,7 +209,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const current =
     navForUser(user).find((n) => pathname.startsWith(n.href))?.label ??
-    'Success';
+    CENTER_NAME;
 
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-[272px_1fr]">
@@ -253,7 +232,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <div className="min-w-0">
                 <p className="text-sm font-bold text-navy truncate">{current}</p>
                 <p className="text-[11px] text-navy/40 hidden sm:block">
-                  Success Center · Future Begins Here
+                  {CENTER_NAME} · {FOUNDER_NAME} · {CENTER_TAGLINE}
                 </p>
               </div>
             </div>
