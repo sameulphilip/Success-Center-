@@ -49,14 +49,26 @@ export const ACCESS_CATALOG: {
   },
   {
     code: 'finance',
-    labelAr: 'الحسابات والفواتير',
-    labelEn: 'Finance',
+    labelAr: 'كل الحسابات (إيصالات + خزنة + قفل اليوم)',
+    labelEn: 'All finance',
     routes: ['/finance'],
   },
   {
-    code: 'finance.payments',
-    labelAr: 'تسجيل المدفوعات فقط',
-    labelEn: 'Record payments',
+    code: 'finance.receipts',
+    labelAr: 'الحسابات: الإيصالات',
+    labelEn: 'Finance receipts',
+    routes: ['/finance'],
+  },
+  {
+    code: 'finance.safe',
+    labelAr: 'الحسابات: الخزنة والتسليم',
+    labelEn: 'Finance safe',
+    routes: ['/finance'],
+  },
+  {
+    code: 'finance.close',
+    labelAr: 'الحسابات: قفل اليوم',
+    labelEn: 'Finance day close',
     routes: ['/finance'],
   },
   {
@@ -120,6 +132,24 @@ export const ACCESS_CATALOG: {
     routes: ['/portal'],
   },
 ];
+
+export function expandPermissions(permissions: string[]) {
+  const set = new Set(permissions);
+  if (set.has('*')) return set;
+  if (set.has('finance')) {
+    set.add('finance.receipts');
+    set.add('finance.safe');
+    set.add('finance.close');
+    set.add('finance.payments');
+  }
+  if (set.has('finance.payments')) set.add('finance.receipts');
+  return set;
+}
+
+export function hasPerm(permissions: string[] | undefined, code: string) {
+  const set = expandPermissions(permissions || []);
+  return set.has('*') || set.has(code);
+}
 
 export function describeAccess(permissions: string[]) {
   if (permissions.includes('*')) {

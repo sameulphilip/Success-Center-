@@ -456,6 +456,20 @@ export default function SettingsPage() {
         </SectionCard>
 
         <SectionCard
+          title="QR دخول الطالب"
+          subtitle="صفحة مستقلة في القائمة الجانبية"
+          action={
+            <Link href="/login-qr" className="btn-accent text-xs px-2 py-1">
+              فتح الصفحة
+            </Link>
+          }
+        >
+          <p className="text-sm text-navy/60">
+            من القائمة: <strong>QR دخول الطالب</strong> — اطبع الملصق أو انسخ الرابط.
+          </p>
+        </SectionCard>
+
+        <SectionCard
           title="المستخدمون"
           subtitle="للإدارة الكاملة استخدم صفحة الحسابات"
           action={

@@ -62,4 +62,25 @@ export class QrService {
     const dataUrl = await QRCode.toDataURL(payload, { width: 300, margin: 1 });
     return { type: 'gate', qrDataUrl: dataUrl, payload };
   }
+
+  /** Public URL QR so a student phone opens the student login screen */
+  async studentLoginQr(baseUrl?: string) {
+    const origin = (
+      baseUrl ||
+      process.env.PUBLIC_WEB_URL ||
+      'https://success.cowdlly.com'
+    ).replace(/\/$/, '');
+    const url = `${origin}/login?mode=student`;
+    const qrDataUrl = await QRCode.toDataURL(url, {
+      width: 520,
+      margin: 2,
+      errorCorrectionLevel: 'M',
+      color: { dark: '#0B2545', light: '#FFFFFF' },
+    });
+    return {
+      type: 'student-login',
+      url,
+      qrDataUrl,
+    };
+  }
 }

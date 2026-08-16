@@ -175,7 +175,7 @@ export class FinanceService {
           invoice: { include: { group: { include: { subject: true } } } },
         },
         orderBy: { paidAt: 'desc' },
-        take: 200,
+        take: 2000,
       }),
       this.prisma.sessionEntry.findMany({
         where: { payStatus: 'CONFIRMED' },
@@ -189,7 +189,7 @@ export class FinanceService {
           },
         },
         orderBy: { confirmedAt: 'desc' },
-        take: 150,
+        take: 1000,
       }),
     ]);
 
@@ -263,8 +263,7 @@ export class FinanceService {
       .sort(
         (a, b) =>
           new Date(b.paidAt).getTime() - new Date(a.paidAt).getTime(),
-      )
-      .slice(0, 250);
+      );
   }
 
   private describePaymentReason(

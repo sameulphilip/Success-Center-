@@ -111,6 +111,12 @@ enum RentalStatus {
   COMPLETED
 }
 
+enum CashExpenseFrom {
+  DRAWER
+  SAFE
+  OWNER
+}
+
 model User {
   id              String    @id @default(cuid())
   email           String    @unique
@@ -753,4 +759,48 @@ model RoomRental {
 
   @@index([classroomId, startsAt])
   @@index([status, startsAt])
+}
+
+/// End-of-day till close: cash + converted Vodafone go into the safe
+model CashDayClose {
+  id                 String   @id @default(cuid())
+  businessDate       DateTime @unique @db.Date
+  cashCollected      Decimal  @db.Decimal(12, 2)
+  vodafoneCollected  Decimal  @db.Decimal(12, 2)
+  drawerExpenses     Decimal  @db.Decimal(12, 2)
+  expectedAmount     Decimal  @db.Decimal(12, 2)
+  countedAmount      Decimal  @db.Decimal(12, 2)
+  difference         Decimal  @db.Decimal(12, 2)
+  transferredToSafe  Decimal  @db.Decimal(12, 2)
+  note               String?
+  closedByUserId     String?
+  closedAt           DateTime @default(now())
+  createdAt          DateTime @default(now())
+
+  @@index([closedAt])
+}
+
+model CashExpense {
+  id              String          @id @default(cuid())
+  amount          Decimal         @db.Decimal(12, 2)
+  category        String
+  paidFrom        CashExpenseFrom
+  note            String?
+  businessDate    DateTime        @db.Date
+  createdByUserId String?
+  createdAt       DateTime        @default(now())
+
+  @@index([businessDate, paidFrom])
+  @@index([createdAt])
+}
+
+/// Weekly (or ad-hoc) handover from safe to center owner
+model CashHandover {
+  id              String   @id @default(cuid())
+  amount          Decimal  @db.Decimal(12, 2)
+  note            String?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  @@index([createdAt])
 }

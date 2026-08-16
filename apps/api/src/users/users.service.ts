@@ -193,7 +193,10 @@ export class UsersService {
     if (!Array.isArray(permissions) || !permissions.length) {
       throw new BadRequestException('اختر صلاحية واحدة على الأقل');
     }
-    const allowed = new Set(ACCESS_CATALOG.map((a) => a.code));
+    const allowed = new Set([
+      ...ACCESS_CATALOG.map((a) => a.code),
+      'finance.payments',
+    ]);
     const cleaned = [...new Set(permissions)].filter((p) => allowed.has(p));
     if (!cleaned.length) {
       throw new BadRequestException('صلاحيات غير صالحة');

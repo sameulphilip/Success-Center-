@@ -3,8 +3,47 @@
 import { FormEvent, Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Image from 'next/image';
+import { Eye, EyeOff } from 'lucide-react';
 import { login, phoneLogin, phoneSetup, phoneStatus } from '@/lib/api';
 import { PoweredByCowdlly } from '@/components/PoweredByCowdlly';
+
+function PasswordField({
+  value,
+  onChange,
+  minLength,
+  required,
+  autoComplete,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  minLength?: number;
+  required?: boolean;
+  autoComplete?: string;
+}) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <div className="relative mt-1.5">
+      <input
+        className="field !mt-0 pe-11"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        type={visible ? 'text' : 'password'}
+        minLength={minLength}
+        required={required}
+        autoComplete={autoComplete}
+      />
+      <button
+        type="button"
+        className="absolute end-2 top-1/2 -translate-y-1/2 inline-flex h-9 w-9 items-center justify-center rounded-lg text-navy/45 hover:bg-sand hover:text-navy"
+        onClick={() => setVisible((v) => !v)}
+        aria-label={visible ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
+        title={visible ? 'إخفاء' : 'إظهار'}
+      >
+        {visible ? <EyeOff size={18} /> : <Eye size={18} />}
+      </button>
+    </div>
+  );
+}
 
 type Mode = 'staff' | 'student';
 
@@ -191,12 +230,11 @@ function LoginForm() {
               </label>
               <label className="mt-4 block text-sm font-medium text-navy/80">
                 كلمة المرور
-                <input
-                  className="field"
+                <PasswordField
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  type="password"
+                  onChange={setPassword}
                   required
+                  autoComplete="current-password"
                 />
               </label>
               {error ? (
@@ -259,24 +297,22 @@ function LoginForm() {
                   </label>
                   <label className="mt-4 block text-sm font-medium text-navy/80">
                     كلمة المرور الجديدة
-                    <input
-                      className="field"
+                    <PasswordField
                       value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      type="password"
+                      onChange={setPassword}
                       minLength={6}
                       required
+                      autoComplete="new-password"
                     />
                   </label>
                   <label className="mt-4 block text-sm font-medium text-navy/80">
                     تأكيد كلمة المرور
-                    <input
-                      className="field"
+                    <PasswordField
                       value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      type="password"
+                      onChange={setConfirmPassword}
                       minLength={6}
                       required
+                      autoComplete="new-password"
                     />
                   </label>
                   {error ? (
@@ -313,12 +349,11 @@ function LoginForm() {
                   </label>
                   <label className="mt-4 block text-sm font-medium text-navy/80">
                     كلمة المرور
-                    <input
-                      className="field"
+                    <PasswordField
                       value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      type="password"
+                      onChange={setPassword}
                       required
+                      autoComplete="current-password"
                     />
                   </label>
                   {error ? (

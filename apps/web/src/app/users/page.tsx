@@ -199,7 +199,11 @@ export default function UsersAdminPage() {
 
   function startRoleEdit(role: Role) {
     setRoleEditId(role.id);
-    setRolePerms([...role.permissions]);
+    const perms = [...role.permissions];
+    if (perms.includes('finance.payments') && !perms.includes('finance.receipts')) {
+      perms.push('finance.receipts');
+    }
+    setRolePerms(perms);
   }
 
   function togglePerm(code: string) {

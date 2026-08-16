@@ -1,4 +1,4 @@
-import { Controller, Get, NotFoundException, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, NotFoundException, Param, Query, UseGuards } from '@nestjs/common';
 import { RoleCode } from '@prisma/client';
 import { QrService } from './qr.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -36,6 +36,16 @@ export class QrController {
   )
   studentQr(@Param('id') id: string) {
     return this.qr.studentQr(id);
+  }
+
+  @Get('student-login')
+  @Roles(
+    RoleCode.SUPER_ADMIN,
+    RoleCode.CENTER_MANAGER,
+    RoleCode.RECEPTION,
+  )
+  studentLoginQr(@Query('baseUrl') baseUrl?: string) {
+    return this.qr.studentLoginQr(baseUrl);
   }
 
   @Get('gate')
