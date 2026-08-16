@@ -195,7 +195,36 @@ export class BookingService {
       },
     });
     if (!form) throw new NotFoundException('Booking form not found');
-    return form;
+
+    const [picked, paid] = await Promise.all([
+      this.prisma.bookingSelection.groupBy({
+        by: ['offeringId'],
+        where: {
+          offering: { formId: id },
+          submission: { status: { not: 'CANCELLED' } },
+        },
+        _count: { _all: true },
+      }),
+      this.prisma.bookingSelection.groupBy({
+        by: ['offeringId'],
+        where: {
+          offering: { formId: id },
+          submission: { status: 'PAID' },
+        },
+        _count: { _all: true },
+      }),
+    ]);
+    const pickedMap = new Map(picked.map((r) => [r.offeringId, r._count._all]));
+    const paidMap = new Map(paid.map((r) => [r.offeringId, r._count._all]));
+
+    return {
+      ...form,
+      offerings: form.offerings.map((o) => ({
+        ...o,
+        pickCount: pickedMap.get(o.id) || 0,
+        paidCount: paidMap.get(o.id) || 0,
+      })),
+    };
   }
 
   /** Full public URL + QR for admin share / print poster */

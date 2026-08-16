@@ -37,6 +37,7 @@ export default function TeachersPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
+  const [search, setSearch] = useState('');
 
   async function load() {
     const [t, s, g] = await Promise.all([
@@ -127,6 +128,31 @@ export default function TeachersPage() {
     [teachers],
   );
 
+  const filteredTeachers = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return teachers;
+    return teachers.filter((t) => {
+      const name = `${t.firstName || ''} ${t.lastName === '-' ? '' : t.lastName || ''}`
+        .toLowerCase()
+        .trim();
+      const phone = String(t.phone || '').toLowerCase();
+      const subjectsText = (t.subjects || [])
+        .map((s: any) => `${s.subject?.nameAr || ''} ${s.subject?.nameEn || ''}`)
+        .join(' ')
+        .toLowerCase();
+      const gradesText = (t.gradeLevels || [])
+        .map((g: any) => g.gradeLevel?.nameAr || '')
+        .join(' ')
+        .toLowerCase();
+      return (
+        name.includes(q) ||
+        phone.includes(q) ||
+        subjectsText.includes(q) ||
+        gradesText.includes(q)
+      );
+    });
+  }, [teachers, search]);
+
   return (
     <AppShell>
       <PageHeader
@@ -154,8 +180,24 @@ export default function TeachersPage() {
       <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
         <SectionCard
           title="قائمة المدرسين"
-          badge={<span className="badge-navy">{teachers.length}</span>}
+          badge={
+            <span className="badge-navy">
+              {search.trim()
+                ? `${filteredTeachers.length} / ${teachers.length}`
+                : teachers.length}
+            </span>
+          }
         >
+          <div className="mb-3">
+            <FieldLabel label="بحث">
+              <input
+                className="field"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="اسم المدرس، المادة، الصف، أو الموبايل…"
+              />
+            </FieldLabel>
+          </div>
           <div className="table-scroll">
             <table className="data-table">
               <thead>
@@ -168,7 +210,7 @@ export default function TeachersPage() {
                 </tr>
               </thead>
               <tbody>
-                {teachers.map((t) => (
+                {filteredTeachers.map((t) => (
                   <tr
                     key={t.id}
                     className={editingId === t.id ? 'bg-gold/10' : undefined}
@@ -239,7 +281,11 @@ export default function TeachersPage() {
                 ))}
               </tbody>
             </table>
-            {!teachers.length ? <EmptyState>لا يوجد مدرسون</EmptyState> : null}
+            {!teachers.length ? (
+              <EmptyState>لا يوجد مدرسون</EmptyState>
+            ) : !filteredTeachers.length ? (
+              <EmptyState>لا يوجد مدرس مطابق للبحث</EmptyState>
+            ) : null}
           </div>
         </SectionCard>
 

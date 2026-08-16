@@ -31,6 +31,8 @@ type Offering = {
   pageNumber: number;
   sortOrder: number;
   isActive: boolean;
+  pickCount?: number;
+  paidCount?: number;
 };
 
 type FormRow = {
@@ -108,6 +110,7 @@ export default function BookingsAdminPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [phoneSearch, setPhoneSearch] = useState('');
   const [phoneQuery, setPhoneQuery] = useState('');
+  const [teacherSearch, setTeacherSearch] = useState('');
   const [busy, setBusy] = useState('');
   const [dialog, setDialog] = useState<DialogState>(null);
   const [payDialog, setPayDialog] = useState<{
@@ -307,6 +310,10 @@ export default function BookingsAdminPage() {
     ]).catch((e) => notify(e.message));
   }, [selectedFormId, statusFilter, phoneQuery]);
 
+  useEffect(() => {
+    setTeacherSearch('');
+  }, [selectedFormId]);
+
   const selectedFormMeta = useMemo(
     () => forms.find((f) => f.id === selectedFormId) || null,
     [forms, selectedFormId],
@@ -332,6 +339,44 @@ export default function BookingsAdminPage() {
     }
     return forms.reduce((n, f) => n + (f._count?.submissions || 0), 0);
   }, [forms, selectedFormMeta]);
+
+  const rankedOfferings = useMemo(() => {
+    const list = [...(formDetail?.offerings || [])];
+    const fromSubs = new Map<string, { pick: number; paid: number }>();
+    for (const s of submissions) {
+      if (s.status === 'CANCELLED') continue;
+      if (formDetail && s.formId && s.formId !== formDetail.id) continue;
+      for (const x of s.selections || []) {
+        const id = x.offeringId || x.offering?.id;
+        if (!id) continue;
+        const cur = fromSubs.get(id) || { pick: 0, paid: 0 };
+        cur.pick += 1;
+        if (s.status === 'PAID') cur.paid += 1;
+        fromSubs.set(id, cur);
+      }
+    }
+    return list
+      .map((o) => ({
+        ...o,
+        pickCount: o.pickCount ?? fromSubs.get(o.id)?.pick ?? 0,
+        paidCount: o.paidCount ?? fromSubs.get(o.id)?.paid ?? 0,
+      }))
+      .sort(
+        (a, b) =>
+          (b.pickCount || 0) - (a.pickCount || 0) ||
+          a.teacherName.localeCompare(b.teacherName, 'ar'),
+      );
+  }, [formDetail, submissions]);
+
+  const filteredOfferings = useMemo(() => {
+    const q = teacherSearch.trim().toLowerCase();
+    if (!q) return rankedOfferings;
+    return rankedOfferings.filter(
+      (o) =>
+        o.teacherName.toLowerCase().includes(q) ||
+        o.subjectName.toLowerCase().includes(q),
+    );
+  }, [rankedOfferings, teacherSearch]);
 
   async function createBookingForm(e: FormEvent) {
     e.preventDefault();
@@ -854,6 +899,16 @@ export default function BookingsAdminPage() {
                 </div>
               ) : null}
 
+              <div className="mb-3">
+                <FieldLabel label="بحث باسم المدرس">
+                  <input
+                    className="field"
+                    value={teacherSearch}
+                    onChange={(e) => setTeacherSearch(e.target.value)}
+                    placeholder="اكتب اسم المدرس أو المادة…"
+                  />
+                </FieldLabel>
+              </div>
               <div className="table-scroll max-h-72 mb-4">
                 <table className="data-table">
                   <thead>
@@ -861,15 +916,23 @@ export default function BookingsAdminPage() {
                       <th>المدرس</th>
                       <th>المادة</th>
                       <th>النوع</th>
+                      <th>اختاروه</th>
+                      <th>مدفوع</th>
                       <th></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {(formDetail.offerings || []).map((o) => (
+                    {filteredOfferings.map((o) => (
                       <tr key={o.id}>
                         <td className="font-semibold">{o.teacherName}</td>
                         <td>{o.subjectName}</td>
                         <td>{o.isOnline ? 'Online' : 'حضور'}</td>
+                        <td className="font-extrabold text-navy tabular-nums">
+                          {o.pickCount ?? 0}
+                        </td>
+                        <td className="tabular-nums text-emerald-700 font-semibold">
+                          {o.paidCount ?? 0}
+                        </td>
                         <td>
                           <button
                             type="button"
@@ -886,7 +949,17 @@ export default function BookingsAdminPage() {
                 </table>
                 {!formDetail.offerings?.length ? (
                   <EmptyState>لا يوجد مدرسون في الاستمارة</EmptyState>
-                ) : null}
+                ) : !filteredOfferings.length ? (
+                  <EmptyState>لا يوجد مدرس بهذا الاسم</EmptyState>
+                ) : (
+                  <p className="mt-2 text-[11px] text-navy/45">
+                    «اختاروه» = كل الحجوزات غير الملغاة · «مدفوع» = اللي اتأكد
+                    دفعهم. الجدول مرتّب من الأكثر اختيارًا.
+                    {teacherSearch.trim()
+                      ? ` · ظاهر ${filteredOfferings.length} من ${rankedOfferings.length}`
+                      : ''}
+                  </p>
+                )}
               </div>
 
               <form
