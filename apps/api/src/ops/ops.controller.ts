@@ -90,17 +90,38 @@ export class OpsController {
   open(
     @Body()
     body: {
-      teacherId: string;
+      teacherId?: string;
+      teacherName?: string;
       subjectId?: string;
       title?: string;
       feeAmount: number;
-      teacherPercent: number;
+      centerAmount?: number;
+      teacherPercent?: number;
       notes?: string;
       sessionDate?: string;
     },
     @CurrentUser() user: { userId: string },
   ) {
     return this.ops.openSession(body, user?.userId);
+  }
+
+  @Patch('sessions/:id')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  update(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      teacherId?: string;
+      teacherName?: string;
+      subjectId?: string | null;
+      title?: string | null;
+      feeAmount?: number;
+      centerAmount?: number;
+      notes?: string | null;
+    },
+    @CurrentUser() user: { role: string },
+  ) {
+    return this.ops.updateOpenSession(id, body, user?.role);
   }
 
   @Post('sessions/:id/pay')
@@ -112,6 +133,7 @@ export class OpsController {
       studentId?: string;
       phone?: string;
       studentUid?: string;
+      studentName?: string;
       method: SessionPayMethod;
       vodafoneTxn?: string;
       amount?: number;

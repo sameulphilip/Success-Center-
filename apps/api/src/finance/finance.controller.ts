@@ -171,7 +171,7 @@ export class FinanceController {
   @RequirePerms('finance.close')
   closeDay(
     @CurrentUser() user: { userId: string },
-    @Body() body: { countedAmount: number; note?: string },
+    @Body() body: { countedAmount: number; note?: string; businessDate?: string },
   ) {
     return this.cash.closeDay(user.userId, body);
   }

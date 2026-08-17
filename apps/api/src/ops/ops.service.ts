@@ -14,8 +14,12 @@ import {
   SessionPayStatus,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { normalizePhone } from '../common/phone.util';
+import { normalizePhone, isValidMobile } from '../common/phone.util';
 import { CashService } from '../finance/cash.service';
+import {
+  splitSessionNet,
+  teacherPercentFromCenter,
+} from './session-split';
 
 const PHONE_CHECKIN_LIMIT = 2;
 
@@ -128,24 +132,128 @@ export class OpsService {
     return session;
   }
 
+  private resolveShare(feeAmount: number, centerAmount?: number, teacherPercent?: number) {
+    if (feeAmount < 0) throw new BadRequestException('السعر غير صالح');
+    const center =
+      centerAmount != null && !Number.isNaN(Number(centerAmount))
+        ? Number(centerAmount)
+        : teacherPercent != null
+          ? Math.round(feeAmount * (1 - Number(teacherPercent) / 100) * 100) /
+            100
+          : 0;
+    if (center < 0) {
+      throw new BadRequestException('مبلغ السنتر غير صالح');
+    }
+    if (center > feeAmount) {
+      throw new BadRequestException('مبلغ السنتر أكبر من سعر الحصة');
+    }
+    return {
+      centerAmount: center,
+      teacherPercent: teacherPercentFromCenter(feeAmount, center),
+    };
+  }
+
+  private foldPersonName(name: string) {
+    return (name || '')
+      .replace(/\s+/g, '')
+      .replace(/[أإآ]/g, 'ا')
+      .replace(/ة/g, 'ه')
+      .replace(/ى/g, 'ي')
+      .toLowerCase();
+  }
+
+  private splitPersonName(full: string) {
+    const parts = full.trim().split(/\s+/).filter(Boolean);
+    const firstName = parts[0] || full.trim();
+    const lastName = parts.slice(1).join(' ') || '-';
+    return { firstName, lastName };
+  }
+
+  private async ensureTeacherByName(rawName: string) {
+    const full = (rawName || '').trim();
+    if (full.length < 2) {
+      throw new BadRequestException('اكتب اسم المدرس');
+    }
+    const { firstName, lastName } = this.splitPersonName(full);
+    const all = await this.prisma.teacher.findMany({
+      where: { isActive: true },
+      select: { id: true, firstName: true, lastName: true },
+    });
+    const target = this.foldPersonName(full);
+    const hit = all.find((t) => {
+      const name = this.foldPersonName(
+        `${t.firstName} ${t.lastName === '-' ? '' : t.lastName}`.trim(),
+      );
+      return name === target;
+    });
+    if (hit) return hit.id;
+    const created = await this.prisma.teacher.create({
+      data: { firstName, lastName, hourlyRate: 0 },
+    });
+    return created.id;
+  }
+
+  private async resolveTeacherIdInput(data: {
+    teacherId?: string;
+    teacherName?: string;
+  }) {
+    const name = (data.teacherName || '').trim();
+    if (name) return this.ensureTeacherByName(name);
+    if (data.teacherId && data.teacherId !== '__other__') return data.teacherId;
+    throw new BadRequestException('اختَر مدرس أو اكتب اسم مدرس مش في القائمة');
+  }
+
+  private async ensureWalkInStudent(phoneRaw: string, nameRaw: string) {
+    const phoneTrim = (phoneRaw || '').trim();
+    const phone = phoneTrim ? normalizePhone(phoneTrim) : '';
+    if (phoneTrim && !isValidMobile(phone)) {
+      throw new BadRequestException('موبايل الطالب غير صالح');
+    }
+    if (phone) {
+      const existing = await this.findStudent({ phone });
+      if (existing) return existing;
+    }
+    const full = (nameRaw || '').trim();
+    if (full.length < 2) {
+      throw new BadRequestException(
+        phone
+          ? 'الطالب مش متسجل — اكتب الاسم'
+          : 'اكتب اسم الطالب',
+      );
+    }
+    const { firstName, lastName } = this.splitPersonName(full);
+    return this.prisma.student.create({
+      data: {
+        firstName,
+        lastName,
+        phone: phone || null,
+        notes: 'تسجيل من جلسة استقبال',
+      },
+    });
+  }
+
   async openSession(
     data: {
-      teacherId: string;
+      teacherId?: string;
+      teacherName?: string;
       subjectId?: string;
       title?: string;
       feeAmount: number;
-      teacherPercent: number;
+      centerAmount?: number;
+      teacherPercent?: number;
       notes?: string;
       sessionDate?: string;
     },
     userId?: string,
   ) {
-    if (data.feeAmount < 0) throw new BadRequestException('السعر غير صالح');
-    if (data.teacherPercent < 0 || data.teacherPercent > 100) {
-      throw new BadRequestException('نسبة المدرس من 0 إلى 100');
-    }
+    const { centerAmount, teacherPercent } = this.resolveShare(
+      data.feeAmount,
+      data.centerAmount,
+      data.teacherPercent,
+    );
+    const teacherId = await this.resolveTeacherIdInput(data);
     const teacher = await this.prisma.teacher.findUnique({
-      where: { id: data.teacherId },
+      where: { id: teacherId },
     });
     if (!teacher || !teacher.isActive) {
       throw new BadRequestException('المدرس غير متاح');
@@ -153,11 +261,12 @@ export class OpsService {
 
     return this.prisma.classSession.create({
       data: {
-        teacherId: data.teacherId,
+        teacherId: teacherId,
         subjectId: data.subjectId || null,
         title: data.title?.trim() || null,
         feeAmount: data.feeAmount,
-        teacherPercent: data.teacherPercent,
+        centerAmount,
+        teacherPercent,
         notes: data.notes,
         sessionDate: data.sessionDate
           ? new Date(data.sessionDate)
@@ -166,6 +275,82 @@ export class OpsService {
         status: ClassSessionStatus.OPEN,
       },
       include: { teacher: true, subject: true },
+    });
+  }
+
+  async updateOpenSession(
+    sessionId: string,
+    data: {
+      teacherId?: string;
+      teacherName?: string;
+      subjectId?: string | null;
+      title?: string | null;
+      feeAmount?: number;
+      centerAmount?: number;
+      notes?: string | null;
+    },
+    role?: string,
+  ) {
+    if (role !== RoleCode.SUPER_ADMIN && role !== RoleCode.CENTER_MANAGER) {
+      throw new ForbiddenException('تعديل الجلسة للمدير فقط');
+    }
+    const session = await this.getSession(sessionId);
+    if (session.status !== ClassSessionStatus.OPEN) {
+      throw new BadRequestException('الجلسة اتقفلت — التعديل وهو مفتوحة فقط');
+    }
+
+    const teacherId = data.teacherName?.trim()
+      ? await this.ensureTeacherByName(data.teacherName)
+      : data.teacherId && data.teacherId !== '__other__'
+        ? data.teacherId
+        : session.teacherId;
+    const teacher = await this.prisma.teacher.findUnique({
+      where: { id: teacherId },
+    });
+    if (!teacher || !teacher.isActive) {
+      throw new BadRequestException('المدرس غير متاح');
+    }
+
+    const feeAmount =
+      data.feeAmount != null && !Number.isNaN(Number(data.feeAmount))
+        ? Number(data.feeAmount)
+        : Number(session.feeAmount);
+    const centerInput =
+      data.centerAmount != null && !Number.isNaN(Number(data.centerAmount))
+        ? Number(data.centerAmount)
+        : session.centerAmount != null
+          ? Number(session.centerAmount)
+          : undefined;
+    const { centerAmount, teacherPercent } = this.resolveShare(
+      feeAmount,
+      centerInput,
+      centerInput == null ? Number(session.teacherPercent) : undefined,
+    );
+
+    const subjectId =
+      data.subjectId === undefined
+        ? session.subjectId
+        : data.subjectId || null;
+
+    return this.prisma.classSession.update({
+      where: { id: sessionId },
+      data: {
+        teacherId,
+        subjectId,
+        title:
+          data.title === undefined
+            ? session.title
+            : data.title?.trim() || null,
+        feeAmount,
+        centerAmount,
+        teacherPercent,
+        notes: data.notes === undefined ? session.notes : data.notes,
+      },
+      include: {
+        teacher: true,
+        subject: true,
+        entries: { include: { student: true, refunds: true } },
+      },
     });
   }
 
@@ -227,6 +412,7 @@ export class OpsService {
       studentId?: string;
       phone?: string;
       studentUid?: string;
+      studentName?: string;
       method: SessionPayMethod;
       vodafoneTxn?: string;
       amount?: number;
@@ -239,13 +425,19 @@ export class OpsService {
       throw new BadRequestException('الجلسة مقفولة — لا يمكن التحصيل');
     }
 
-    const student =
+    let student =
       (await this.findStudent({
         id: data.studentId,
         phone: data.phone,
         studentUid: data.studentUid,
       })) || null;
-    if (!student) throw new NotFoundException('الطالب غير موجود');
+    if (!student) {
+      student = await this.ensureWalkInStudent(
+        data.phone || '',
+        data.studentName || '',
+      );
+    }
+    if (!student) throw new NotFoundException('اكتب اسم الطالب');
     if (!student.isActive) throw new BadRequestException('حساب الطالب غير نشط');
 
     await this.assertNotBlocked(student.id, session.teacherId);
@@ -528,9 +720,12 @@ export class OpsService {
     for (const e of confirmed) {
       net += Number(e.amount) - Number(e.refundedAmount);
     }
-    const teacherPct = Number(session.teacherPercent) / 100;
-    const teacherShare = Math.round(net * teacherPct * 100) / 100;
-    const centerShare = Math.round((net - teacherShare) * 100) / 100;
+    const { teacherShare, centerShare } = splitSessionNet({
+      net,
+      feeAmount: Number(session.feeAmount),
+      teacherPercent: session.teacherPercent,
+      centerAmount: session.centerAmount,
+    });
 
     return this.prisma.classSession.update({
       where: { id: sessionId },

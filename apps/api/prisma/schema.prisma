@@ -562,6 +562,8 @@ model ClassSession {
   sessionDate          DateTime           @db.Date
   status               ClassSessionStatus @default(OPEN)
   feeAmount            Decimal            @db.Decimal(12, 2)
+  /** Center cut per student in EGP. Teacher gets feeAmount - centerAmount. */
+  centerAmount         Decimal?           @db.Decimal(12, 2)
   teacherPercent       Decimal            @db.Decimal(5, 2)
   settledTeacherAmount Decimal?           @db.Decimal(12, 2)
   settledCenterAmount  Decimal?           @db.Decimal(12, 2)

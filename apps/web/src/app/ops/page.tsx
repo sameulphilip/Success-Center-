@@ -37,7 +37,10 @@ type Session = {
   id: string;
   title?: string | null;
   status: 'OPEN' | 'CLOSED';
+  teacherId: string;
+  subjectId?: string | null;
   feeAmount: string | number;
+  centerAmount?: string | number | null;
   teacherPercent: string | number;
   settledTeacherAmount?: string | number | null;
   settledCenterAmount?: string | number | null;
@@ -47,6 +50,27 @@ type Session = {
   _count?: { entries: number };
   entries?: Entry[];
 };
+
+function centerCutOf(s: {
+  feeAmount: string | number;
+  centerAmount?: string | number | null;
+  teacherPercent?: string | number;
+}) {
+  if (s.centerAmount != null && s.centerAmount !== '') {
+    return Number(s.centerAmount);
+  }
+  const fee = Number(s.feeAmount) || 0;
+  const pct = Number(s.teacherPercent) || 0;
+  return Math.round(fee * (1 - pct / 100) * 100) / 100;
+}
+
+function teacherCutOf(s: {
+  feeAmount: string | number;
+  centerAmount?: string | number | null;
+  teacherPercent?: string | number;
+}) {
+  return Math.max(0, Number(s.feeAmount || 0) - centerCutOf(s));
+}
 
 type Entry = {
   id: string;
@@ -88,6 +112,7 @@ function subjectsOf(t?: Teacher | null): { id: string; nameAr: string }[] {
 }
 
 const OPS_SCANNER_ID = 'ops-desk-qr';
+const OTHER_TEACHER = '__other__';
 
 export default function OpsPage() {
   const me = getStoredUser();
@@ -115,12 +140,22 @@ export default function OpsPage() {
     subjectId: '',
     title: '',
     feeAmount: 0,
-    teacherPercent: 50,
+    centerAmount: 0,
     notes: '',
+    teacherName: '',
+  });
+  const [editForm, setEditForm] = useState({
+    teacherId: '',
+    subjectId: '',
+    title: '',
+    feeAmount: 0,
+    centerAmount: 0,
+    teacherName: '',
   });
 
   const [payForm, setPayForm] = useState({
     phone: '',
+    studentName: '',
     method: 'CASH' as 'CASH' | 'VODAFONE_CASH',
     vodafoneTxn: '',
   });
@@ -154,6 +189,7 @@ export default function OpsPage() {
     setBlocks(b);
     if (!selectedId && s[0]) setSelectedId(s[0].id);
     setOpenForm((f) => {
+      if (f.teacherId === OTHER_TEACHER) return f;
       const teacherId = f.teacherId || t[0]?.id || '';
       const teacher = t.find((x) => x.id === teacherId);
       const subs = subjectsOf(teacher);
@@ -181,6 +217,26 @@ export default function OpsPage() {
     if (selectedId) loadDetail(selectedId).catch((e) => setError(e.message));
     setScanned(null);
   }, [selectedId]);
+
+  useEffect(() => {
+    if (!detail) return;
+    const teacherId = detail.teacherId || detail.teacher?.id || '';
+    const teacher = teachers.find((t) => t.id === teacherId);
+    const subs = subjectsOf(teacher);
+    const subjectId =
+      detail.subjectId ||
+      detail.subject?.id ||
+      subs[0]?.id ||
+      '';
+    setEditForm({
+      teacherId,
+      subjectId,
+      title: detail.title || '',
+      feeAmount: Number(detail.feeAmount || 0),
+      centerAmount: centerCutOf(detail),
+      teacherName: '',
+    });
+  }, [detail, teachers]);
 
   const applyQr = useCallback(
     async (raw: string) => {
@@ -316,6 +372,14 @@ export default function OpsPage() {
     () => subjectsOf(selectedTeacher),
     [selectedTeacher],
   );
+  const editTeacher = useMemo(
+    () => teachers.find((t) => t.id === editForm.teacherId) || null,
+    [teachers, editForm.teacherId],
+  );
+  const editSubjects = useMemo(
+    () => subjectsOf(editTeacher),
+    [editTeacher],
+  );
   const openCount = useMemo(
     () => sessions.filter((s) => s.status === 'OPEN').length,
     [sessions],
@@ -330,13 +394,60 @@ export default function OpsPage() {
         method: 'POST',
         body: JSON.stringify({
           ...openForm,
-          subjectId: openForm.subjectId || undefined,
+          teacherId:
+            openForm.teacherId === OTHER_TEACHER
+              ? undefined
+              : openForm.teacherId,
+          teacherName:
+            openForm.teacherId === OTHER_TEACHER
+              ? openForm.teacherName
+              : undefined,
+          subjectId:
+            openForm.teacherId === OTHER_TEACHER
+              ? undefined
+              : openForm.subjectId || undefined,
           title: openForm.title || undefined,
         }),
       });
       await loadLists();
       setSelectedId(created.id);
       setMsg('تم فتح الجلسة');
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function saveSession(e: FormEvent) {
+    e.preventDefault();
+    if (!selectedId || !isManager) return;
+    setBusy('edit');
+    setError('');
+    try {
+      const updated = await api<Session>(`/ops/sessions/${selectedId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          teacherId:
+            editForm.teacherId === OTHER_TEACHER
+              ? undefined
+              : editForm.teacherId,
+          teacherName:
+            editForm.teacherId === OTHER_TEACHER
+              ? editForm.teacherName
+              : undefined,
+          subjectId:
+            editForm.teacherId === OTHER_TEACHER
+              ? null
+              : editForm.subjectId || null,
+          title: editForm.title || null,
+          feeAmount: Number(editForm.feeAmount),
+          centerAmount: Number(editForm.centerAmount),
+        }),
+      });
+      setDetail(updated);
+      await loadLists();
+      setMsg('تم تعديل الجلسة');
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -354,8 +465,9 @@ export default function OpsPage() {
         method: 'POST',
         body: JSON.stringify({
           studentId: scanned?.id,
-          phone: scanned ? undefined : payForm.phone,
+          phone: scanned ? undefined : payForm.phone.trim() || undefined,
           studentUid: scanned?.studentUid,
+          studentName: scanned ? undefined : payForm.studentName.trim() || undefined,
           method: payForm.method,
           vodafoneTxn:
             payForm.method === 'VODAFONE_CASH'
@@ -363,7 +475,7 @@ export default function OpsPage() {
               : undefined,
         }),
       });
-      setPayForm({ phone: '', method: 'CASH', vodafoneTxn: '' });
+      setPayForm({ phone: '', studentName: '', method: 'CASH', vodafoneTxn: '' });
       setScanned(null);
       await loadDetail(selectedId);
       await loadLists();
@@ -554,7 +666,7 @@ export default function OpsPage() {
 
       <div className="grid gap-4 xl:grid-cols-[300px_1fr]">
         <div className="space-y-4">
-          <SectionCard title="فتح جلسة مرنة" subtitle="استقبال فقط · سعر ونسبة يدوي">
+          <SectionCard title="فتح جلسة مرنة" subtitle="استقبال فقط · سعر الحصة ومبلغ السنتر">
             <form onSubmit={openSession} className="space-y-2">
               <FieldLabel label="المدرس">
                 <select
@@ -569,40 +681,60 @@ export default function OpsPage() {
                       ...f,
                       teacherId,
                       subjectId: subs[0]?.id || '',
+                      teacherName:
+                        teacherId === OTHER_TEACHER ? f.teacherName : '',
                     }));
                   }}
                 >
                   {teachers.map((t) => (
                     <option key={t.id} value={t.id}>
-                      {t.firstName} {t.lastName}
+                      {t.firstName} {t.lastName === '-' ? '' : t.lastName}
                     </option>
                   ))}
+                  <option value={OTHER_TEACHER}>مدرس مش في القائمة…</option>
                 </select>
               </FieldLabel>
-              <FieldLabel label="المادة">
-                {teacherSubjects.length <= 1 ? (
+              {openForm.teacherId === OTHER_TEACHER ? (
+                <FieldLabel label="اسم المدرس">
                   <input
-                    className="field bg-sand"
-                    readOnly
-                    value={teacherSubjects[0]?.nameAr || 'لا توجد مادة مربوطة بالمدرس'}
-                  />
-                ) : (
-                  <select
                     className="field"
                     required
-                    value={openForm.subjectId}
+                    value={openForm.teacherName}
                     onChange={(e) =>
-                      setOpenForm({ ...openForm, subjectId: e.target.value })
+                      setOpenForm({ ...openForm, teacherName: e.target.value })
                     }
-                  >
-                    {teacherSubjects.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.nameAr}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </FieldLabel>
+                    placeholder="اكتب اسم المدرس"
+                  />
+                </FieldLabel>
+              ) : (
+                <FieldLabel label="المادة">
+                  {teacherSubjects.length <= 1 ? (
+                    <input
+                      className="field bg-sand"
+                      readOnly
+                      value={
+                        teacherSubjects[0]?.nameAr ||
+                        'لا توجد مادة مربوطة بالمدرس'
+                      }
+                    />
+                  ) : (
+                    <select
+                      className="field"
+                      required
+                      value={openForm.subjectId}
+                      onChange={(e) =>
+                        setOpenForm({ ...openForm, subjectId: e.target.value })
+                      }
+                    >
+                      {teacherSubjects.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.nameAr}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </FieldLabel>
+              )}
               <FieldLabel label="عنوان مختصر">
                 <input
                   className="field"
@@ -629,23 +761,31 @@ export default function OpsPage() {
                     }
                   />
                 </FieldLabel>
-                <FieldLabel label="نسبة المدرس %">
+                <FieldLabel label="مبلغ السنتر">
                   <input
                     className="field"
                     type="number"
                     min={0}
-                    max={100}
                     required
-                    value={openForm.teacherPercent}
+                    value={openForm.centerAmount}
                     onChange={(e) =>
                       setOpenForm({
                         ...openForm,
-                        teacherPercent: Number(e.target.value),
+                        centerAmount: Number(e.target.value),
                       })
                     }
                   />
                 </FieldLabel>
               </div>
+              <p className="text-[11px] text-navy/45">
+                المدرس ياخد الباقي:{' '}
+                {Math.max(
+                  0,
+                  Number(openForm.feeAmount || 0) -
+                    Number(openForm.centerAmount || 0),
+                ).toLocaleString('en-EG')}{' '}
+                ج.م للطالب
+              </p>
               <button
                 type="submit"
                 className="btn-primary w-full"
@@ -679,8 +819,10 @@ export default function OpsPage() {
                       }`}
                     >
                       {s.status === 'OPEN' ? 'مفتوحة' : 'مقفولة'} ·{' '}
-                      {Number(s.feeAmount).toLocaleString('en-EG')} ج.م · مدرس{' '}
-                      {Number(s.teacherPercent)}% · {s._count?.entries ?? 0} قيد
+                      {Number(s.feeAmount).toLocaleString('en-EG')} ج.م · سنتر{' '}
+                      {centerCutOf(s).toLocaleString('en-EG')} · مدرس{' '}
+                      {teacherCutOf(s).toLocaleString('en-EG')} ·{' '}
+                      {s._count?.entries ?? 0} قيد
                     </span>
                   </button>
                 </li>
@@ -695,7 +837,7 @@ export default function OpsPage() {
             <>
               <SectionCard
                 title={`${detail.teacher.firstName} ${detail.teacher.lastName}`}
-                subtitle={`${detail.subject?.nameAr || 'بدون مادة'} · سعر ${Number(detail.feeAmount).toLocaleString('en-EG')} · نسبة مدرس ${Number(detail.teacherPercent)}%`}
+                subtitle={`${detail.subject?.nameAr || 'بدون مادة'} · سعر ${Number(detail.feeAmount).toLocaleString('en-EG')} · سنتر ${centerCutOf(detail).toLocaleString('en-EG')} · مدرس ${teacherCutOf(detail).toLocaleString('en-EG')}`}
                 badge={
                   <span
                     className={
@@ -755,6 +897,145 @@ export default function OpsPage() {
                   </div>
                 }
               >
+                {detail.status === 'OPEN' && isManager ? (
+                  <form
+                    onSubmit={saveSession}
+                    className="mb-4 max-w-xl rounded-xl border border-mist p-3 space-y-2"
+                  >
+                    <p className="font-bold text-navy text-sm">تعديل الجلسة</p>
+                    <FieldLabel label="المدرس">
+                      <select
+                        className="field"
+                        required
+                        value={editForm.teacherId}
+                        onChange={(e) => {
+                          const teacherId = e.target.value;
+                          const teacher = teachers.find((x) => x.id === teacherId);
+                          const subs = subjectsOf(teacher);
+                          setEditForm((f) => ({
+                            ...f,
+                            teacherId,
+                            subjectId: subs[0]?.id || '',
+                            teacherName:
+                              teacherId === OTHER_TEACHER ? f.teacherName : '',
+                          }));
+                        }}
+                      >
+                        {teachers.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.firstName} {t.lastName === '-' ? '' : t.lastName}
+                          </option>
+                        ))}
+                        <option value={OTHER_TEACHER}>مدرس مش في القائمة…</option>
+                      </select>
+                    </FieldLabel>
+                    {editForm.teacherId === OTHER_TEACHER ? (
+                      <FieldLabel label="اسم المدرس">
+                        <input
+                          className="field"
+                          required
+                          value={editForm.teacherName}
+                          onChange={(e) =>
+                            setEditForm({
+                              ...editForm,
+                              teacherName: e.target.value,
+                            })
+                          }
+                          placeholder="اكتب اسم المدرس"
+                        />
+                      </FieldLabel>
+                    ) : (
+                    <FieldLabel label="المادة">
+                      {editSubjects.length <= 1 ? (
+                        <input
+                          className="field bg-sand"
+                          readOnly
+                          value={
+                            editSubjects[0]?.nameAr ||
+                            'لا توجد مادة مربوطة بالمدرس'
+                          }
+                        />
+                      ) : (
+                        <select
+                          className="field"
+                          required
+                          value={editForm.subjectId}
+                          onChange={(e) =>
+                            setEditForm({
+                              ...editForm,
+                              subjectId: e.target.value,
+                            })
+                          }
+                        >
+                          {editSubjects.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.nameAr}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </FieldLabel>
+                    )}
+                    <FieldLabel label="عنوان مختصر">
+                      <input
+                        className="field"
+                        value={editForm.title}
+                        onChange={(e) =>
+                          setEditForm({ ...editForm, title: e.target.value })
+                        }
+                      />
+                    </FieldLabel>
+                    <div className="grid grid-cols-2 gap-2">
+                      <FieldLabel label="سعر الحصة">
+                        <input
+                          className="field"
+                          type="number"
+                          min={0}
+                          required
+                          value={editForm.feeAmount}
+                          onChange={(e) =>
+                            setEditForm({
+                              ...editForm,
+                              feeAmount: Number(e.target.value),
+                            })
+                          }
+                        />
+                      </FieldLabel>
+                      <FieldLabel label="مبلغ السنتر">
+                        <input
+                          className="field"
+                          type="number"
+                          min={0}
+                          required
+                          value={editForm.centerAmount}
+                          onChange={(e) =>
+                            setEditForm({
+                              ...editForm,
+                              centerAmount: Number(e.target.value),
+                            })
+                          }
+                        />
+                      </FieldLabel>
+                    </div>
+                    <p className="text-[11px] text-navy/45">
+                      المدرس ياخد الباقي:{' '}
+                      {Math.max(
+                        0,
+                        Number(editForm.feeAmount || 0) -
+                          Number(editForm.centerAmount || 0),
+                      ).toLocaleString('en-EG')}{' '}
+                      ج.م للطالب · التحصيل اللي اتعمل قبل كده مش بيتغير
+                    </p>
+                    <button
+                      type="submit"
+                      className="btn-primary w-full"
+                      disabled={busy === 'edit'}
+                    >
+                      حفظ التعديل
+                    </button>
+                  </form>
+                ) : null}
+
                 {detail.status === 'OPEN' ? (
                   <form
                     onSubmit={collectPay}
@@ -795,10 +1076,24 @@ export default function OpsPage() {
                       </div>
                     ) : (
                       <p className="text-[11px] text-navy/45">
-                        امسح الـ QR للتحصيل والدخول · أو اكتب رقم الموبايل تحت
+                        امسح الـ QR · أو اكتب الاسم (الموبايل اختياري)
                       </p>
                     )}
-                    <FieldLabel label="أو برقم الموبايل">
+                    <FieldLabel label="اسم الطالب">
+                      <input
+                        className="field"
+                        disabled={Boolean(scanned)}
+                        value={payForm.studentName}
+                        onChange={(e) =>
+                          setPayForm({
+                            ...payForm,
+                            studentName: e.target.value,
+                          })
+                        }
+                        placeholder="لو مش متسجل في النظام"
+                      />
+                    </FieldLabel>
+                    <FieldLabel label="رقم الموبايل (اختياري)">
                       <input
                         className="field"
                         inputMode="tel"
@@ -810,7 +1105,7 @@ export default function OpsPage() {
                             phone: e.target.value,
                           })
                         }
-                        placeholder="01xxxxxxxxx"
+                        placeholder="لو موجود"
                       />
                     </FieldLabel>
                     <FieldLabel label="طريقة الدفع">
@@ -848,7 +1143,9 @@ export default function OpsPage() {
                       className="btn-accent w-full"
                       disabled={
                         busy === 'pay' ||
-                        (!scanned && !payForm.phone.trim())
+                        (!scanned &&
+                          !payForm.studentName.trim() &&
+                          !payForm.phone.trim())
                       }
                     >
                       تأكيد الدفع ودخول الجلسة
@@ -1150,7 +1447,7 @@ export default function OpsPage() {
                       <span className="text-xs font-semibold">ج.م</span>
                     </p>
                     <p className="mt-1 text-[11px] text-amber-800/70">
-                      نسبة {Number(settle.teacherPercent)}%
+                      الباقي بعد مبلغ السنتر
                     </p>
                   </div>
                   <div className="rounded-2xl bg-emerald-50 px-3 py-3">
@@ -1233,7 +1530,7 @@ export default function OpsPage() {
         open={ask === 'close'}
         tone="info"
         title="قفل الجلسة"
-        message="هتتقفل الجلسة وتتثبت نسبة المدرس ونصيب السنتر. بعدها تقدر تسجّل إن المدرس استلم فلوسه."
+        message="هتتقفل الجلسة ويتثبت مبلغ السنتر ونصيب المدرس. بعدها تقدر تسجّل إن المدرس استلم فلوسه."
         confirmLabel="قفل وتسوية"
         cancelLabel="رجوع"
         onConfirm={() => void runCloseSession()}

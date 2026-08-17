@@ -39,6 +39,33 @@ function dateOnly(ymd: string) {
   return new Date(Date.UTC(y, m - 1, d));
 }
 
+function ymdFromDate(d: Date) {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function addDays(ymd: string, delta: number) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + delta));
+  const yy = dt.getUTCFullYear();
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getUTCDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
+const OPEN_DAY_LOOKBACK = 21;
+
+export type OpenDayFigures = {
+  date: string;
+  collectedCash: number;
+  collectedVodafone: number;
+  collectedTotal: number;
+  drawerExpenses: number;
+  expected: number;
+};
+
 function money(n: Prisma.Decimal | number | null | undefined) {
   return Number(n || 0);
 }
@@ -142,6 +169,51 @@ export class CashService {
     return { ...totals, breakdown };
   }
 
+  private async dayFigures(ymd: string): Promise<OpenDayFigures> {
+    const collected = await this.dayCollections(ymd);
+    const drawerExp = await this.prisma.cashExpense.aggregate({
+      where: {
+        paidFrom: CashExpenseFrom.DRAWER,
+        businessDate: dateOnly(ymd),
+      },
+      _sum: { amount: true },
+    });
+    const drawerExpenses = money(drawerExp._sum.amount);
+    return {
+      date: ymd,
+      collectedCash: collected.cash,
+      collectedVodafone: collected.vodafone,
+      collectedTotal: collected.total,
+      drawerExpenses,
+      expected: collected.total - drawerExpenses,
+    };
+  }
+
+  /** Unclosed business days before today that still have drawer activity. */
+  private async unclosedPrevious(today = cairoYmd()): Promise<OpenDayFigures[]> {
+    const start = addDays(today, -OPEN_DAY_LOOKBACK);
+    const yesterday = addDays(today, -1);
+    if (yesterday < start) return [];
+
+    const closes = await this.prisma.cashDayClose.findMany({
+      where: {
+        businessDate: { gte: dateOnly(start), lte: dateOnly(yesterday) },
+      },
+      select: { businessDate: true },
+    });
+    const closed = new Set(closes.map((c) => ymdFromDate(c.businessDate)));
+    const candidates: string[] = [];
+    for (let d = start; d <= yesterday; d = addDays(d, 1)) {
+      if (!closed.has(d)) candidates.push(d);
+    }
+    if (!candidates.length) return [];
+
+    const figures = await Promise.all(candidates.map((ymd) => this.dayFigures(ymd)));
+    return figures.filter(
+      (f) => f.collectedTotal > 0.009 || f.drawerExpenses > 0.009,
+    );
+  }
+
   private async balances() {
     const [closes, safeExp, ownerExp, handovers] = await Promise.all([
       this.prisma.cashDayClose.aggregate({ _sum: { transferredToSafe: true } }),
@@ -180,7 +252,7 @@ export class CashService {
       paidFrom: CashExpenseFrom.DRAWER,
       businessDate,
     };
-    const [collected, drawerExpAgg, drawerToday, close, balances, expenses, handovers, closes] =
+    const [collected, drawerExpAgg, drawerToday, close, balances, expenses, handovers, closes, unclosedPrevious] =
       await Promise.all([
         this.dayCollections(ymd),
         this.prisma.cashExpense.aggregate({
@@ -206,10 +278,13 @@ export class CashService {
           orderBy: { businessDate: 'desc' },
           take: 14,
         }),
+        this.unclosedPrevious(ymd),
       ]);
 
     const drawerExpenses = money(drawerExpAgg._sum.amount);
-    const expectedInDrawer = Math.max(0, collected.total - drawerExpenses);
+    const carriedForward = unclosedPrevious.reduce((s, d) => s + d.expected, 0);
+    const todayExpected = close ? 0 : collected.total - drawerExpenses;
+    const expectedInDrawer = Math.max(0, todayExpected + carriedForward);
     const userIds = [
       ...expenses.map((e) => e.createdByUserId),
       ...handovers.map((h) => h.createdByUserId),
@@ -227,6 +302,9 @@ export class CashService {
     return {
       businessDate: ymd,
       closed: !!close,
+      unclosedPrevious,
+      carriedForward,
+      todayExpected,
       close: close
         ? {
             ...close,
@@ -319,12 +397,16 @@ export class CashService {
             : 'اليوم مقفول. سجّل المصروف من الخزنة أو من فلوس صاحب السنتر.',
         );
       }
-      const collected = await this.dayCollections(ymd);
-      const drawerExp = await this.prisma.cashExpense.aggregate({
-        where: { paidFrom: CashExpenseFrom.DRAWER, businessDate },
-        _sum: { amount: true },
-      });
-      const left = collected.total - money(drawerExp._sum.amount);
+      const [collected, drawerExp, previous] = await Promise.all([
+        this.dayCollections(ymd),
+        this.prisma.cashExpense.aggregate({
+          where: { paidFrom: CashExpenseFrom.DRAWER, businessDate },
+          _sum: { amount: true },
+        }),
+        this.unclosedPrevious(ymd),
+      ]);
+      const carried = previous.reduce((s, d) => s + d.expected, 0);
+      const left = collected.total - money(drawerExp._sum.amount) + carried;
       if (amount > left + 0.009) {
         throw new BadRequestException(
           `مفيش كفاية في الدرج. المتاح ${Math.round(left)} ج.م`,
@@ -382,42 +464,57 @@ export class CashService {
 
   async closeDay(
     userId: string,
-    body: { countedAmount: number; note?: string },
+    body: { countedAmount: number; note?: string; businessDate?: string },
   ) {
-    const ymd = cairoYmd();
+    const today = cairoYmd();
+    const raw = (body.businessDate || '').trim();
+    const ymd = raw || today;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+      throw new BadRequestException('تاريخ غير صالح');
+    }
+    if (ymd > today) {
+      throw new BadRequestException('لا يمكن قفل يوم لسه مجاش');
+    }
+    const earliest = addDays(today, -OPEN_DAY_LOOKBACK);
+    if (ymd < earliest) {
+      throw new BadRequestException('اليوم ده قديم أوي على القفل من هنا');
+    }
+
     const businessDate = dateOnly(ymd);
     const existing = await this.prisma.cashDayClose.findUnique({
       where: { businessDate },
     });
     if (existing) {
-      throw new BadRequestException('اليوم مقفول بالفعل');
+      throw new BadRequestException(
+        ymd === today ? 'اليوم مقفول بالفعل' : 'اليوم ده مقفول بالفعل',
+      );
     }
     const counted = Number(body.countedAmount);
     if (!Number.isFinite(counted) || counted < 0) {
       throw new BadRequestException('مبلغ العدّ غير صالح');
     }
 
-    const collected = await this.dayCollections(ymd);
-    const drawerExp = await this.prisma.cashExpense.aggregate({
-      where: { paidFrom: CashExpenseFrom.DRAWER, businessDate },
-      _sum: { amount: true },
-    });
-    const drawerExpenses = money(drawerExp._sum.amount);
-    const expectedAmount = collected.total - drawerExpenses;
-    if (expectedAmount < -0.009) {
+    const fig = await this.dayFigures(ymd);
+    if (
+      ymd !== today &&
+      fig.collectedTotal < 0.009 &&
+      fig.drawerExpenses < 0.009
+    ) {
+      throw new BadRequestException('مفيش تحصيل أو مصروف في اليوم ده');
+    }
+    if (fig.expected < -0.009) {
       throw new BadRequestException('مصروفات الدرج أكبر من التحصيل');
     }
-    const difference = counted - expectedAmount;
 
     return this.prisma.cashDayClose.create({
       data: {
         businessDate,
-        cashCollected: collected.cash,
-        vodafoneCollected: collected.vodafone,
-        drawerExpenses,
-        expectedAmount,
+        cashCollected: fig.collectedCash,
+        vodafoneCollected: fig.collectedVodafone,
+        drawerExpenses: fig.drawerExpenses,
+        expectedAmount: fig.expected,
         countedAmount: counted,
-        difference,
+        difference: counted - fig.expected,
         transferredToSafe: counted,
         note: body.note?.trim() || null,
         closedByUserId: userId,

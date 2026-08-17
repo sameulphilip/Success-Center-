@@ -23,6 +23,17 @@ function money(n: number) {
   return `${Math.round(Number(n) || 0).toLocaleString('en-EG')} ج.م`;
 }
 
+function formatArDay(ymd: string) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  if (!y || !m || !d) return ymd;
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('ar-EG', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    timeZone: 'UTC',
+  });
+}
+
 type FinanceSummary = {
   collectedToday: number;
   collectedMonth: number;
@@ -68,6 +79,16 @@ type CashSnapshot = {
     note?: string | null;
   }>;
   expectedInDrawer: number;
+  todayExpected?: number;
+  carriedForward?: number;
+  unclosedPrevious?: Array<{
+    date: string;
+    collectedCash: number;
+    collectedVodafone: number;
+    collectedTotal: number;
+    drawerExpenses: number;
+    expected: number;
+  }>;
   safeBalance: number;
   ownerBalance?: number;
   totalHandedToOwner?: number;
@@ -148,6 +169,7 @@ export default function FinancePage() {
     note: '',
   });
   const [counted, setCounted] = useState('');
+  const [prevCounted, setPrevCounted] = useState<Record<string, string>>({});
   const [closeNote, setCloseNote] = useState('');
   const [handAmount, setHandAmount] = useState('');
   const [handNote, setHandNote] = useState('');
@@ -157,6 +179,7 @@ export default function FinancePage() {
   const [confirm, setConfirm] = useState<null | {
     kind: 'close' | 'handover' | 'del-receipt' | 'del-expense';
     id?: string;
+    date?: string;
     source?: 'PAYMENT' | 'SESSION';
     label?: string;
   }>(null);
@@ -173,9 +196,24 @@ export default function FinancePage() {
       jobs.push(
         api<CashSnapshot>('/finance/cash/snapshot').then((snap) => {
           setCash(snap);
+          const todayExp =
+            snap.todayExpected ??
+            Math.max(
+              0,
+              (snap.collectedTotal || 0) - (snap.drawerExpenses || 0),
+            );
           if (!counted && snap && !snap.closed) {
-            setCounted(String(Math.round(snap.expectedInDrawer)));
+            setCounted(String(Math.round(todayExp)));
           }
+          setPrevCounted((curr) => {
+            const next = { ...curr };
+            for (const d of snap.unclosedPrevious || []) {
+              if (!next[d.date]) {
+                next[d.date] = String(Math.round(d.expected));
+              }
+            }
+            return next;
+          });
           if (!handAmount && snap) {
             setHandAmount(String(Math.round(snap.safeBalance)));
           }
@@ -197,12 +235,18 @@ export default function FinancePage() {
     load().catch((e) => setError(e instanceof Error ? e.message : 'فشل التحميل'));
   }, []);
 
-  const expected = cash?.expectedInDrawer ?? 0;
+  const prevDays = cash?.unclosedPrevious ?? [];
+  const todayClosed = !!cash?.closed;
+  const todayExpected =
+    cash?.todayExpected ??
+    (todayClosed
+      ? 0
+      : (cash?.collectedTotal ?? 0) - (cash?.drawerExpenses ?? 0));
   const countedN = Number(counted);
   const closeDiff = useMemo(() => {
     if (!Number.isFinite(countedN)) return 0;
-    return countedN - expected;
-  }, [countedN, expected]);
+    return countedN - todayExpected;
+  }, [countedN, todayExpected]);
 
   async function submitExpense(e: FormEvent) {
     e.preventDefault();
@@ -231,15 +275,20 @@ export default function FinancePage() {
     setBusy('close');
     setError('');
     try {
+      const ymd = confirm?.date;
+      const countedAmount = ymd
+        ? Number(prevCounted[ymd] || 0)
+        : Number(counted);
       await api('/finance/cash/close-day', {
         method: 'POST',
         body: JSON.stringify({
-          countedAmount: Number(counted),
-          note: closeNote || undefined,
+          countedAmount,
+          note: ymd ? undefined : closeNote || undefined,
+          businessDate: ymd || undefined,
         }),
       });
       setConfirm(null);
-      setCloseNote('');
+      if (!ymd) setCloseNote('');
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'فشل قفل اليوم');
@@ -315,6 +364,21 @@ export default function FinancePage() {
         </p>
       ) : null}
 
+      {prevDays.length && (canClose || canSafe) ? (
+        <button
+          type="button"
+          onClick={() => canClose && setTab('close')}
+          className="mb-4 w-full rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-right text-sm text-amber-950"
+        >
+          <span className="font-bold">فيه يوم مقفولش من أمس. </span>
+          الفلوس لسه في الدرج
+          {prevDays.length === 1
+            ? ` (${money(prevDays[0].expected)})`
+            : ` (${money(prevDays.reduce((s, d) => s + d.expected, 0))})`}
+          {canClose ? ' — اضغط هنا عشان تقفله.' : '.'}
+        </button>
+      ) : null}
+
       <div className="mb-5 flex flex-wrap gap-2 rounded-2xl border border-mist bg-white p-1.5 shadow-sm">
         {(
           [
@@ -329,7 +393,11 @@ export default function FinancePage() {
               ? ({ id: 'safe' as const, label: 'الخزنة' } as const)
               : null,
             canClose
-              ? ({ id: 'close' as const, label: 'قفل اليوم' } as const)
+              ? ({
+                  id: 'close' as const,
+                  label: 'قفل اليوم',
+                  count: prevDays.length || undefined,
+                } as const)
               : null,
           ].filter(Boolean) as Array<{
             id: 'receipts' | 'safe' | 'close';
@@ -398,11 +466,96 @@ export default function FinancePage() {
         <SectionCard
           title="قفل اليوم"
           subtitle={
-            cash?.closed
+            todayClosed
               ? `اتقفل · العدّ ${money(Number(cash.close?.countedAmount || 0))}`
               : 'في آخر اليوم: عدّ الفلوس وحطها في الخزنة'
           }
         >
+          {prevDays.length ? (
+            <div className="mb-4 space-y-3">
+              <p className="text-[11px] font-semibold text-navy/55">
+                أيام سابقة — قفّل كل يوم لوحده
+              </p>
+              {prevDays.map((d) => {
+                const countedPrev = Number(prevCounted[d.date] ?? '');
+                const diff = Number.isFinite(countedPrev)
+                  ? countedPrev - d.expected
+                  : 0;
+                return (
+                  <div
+                    key={d.date}
+                    className="rounded-xl border border-amber-200 bg-amber-50/70 p-3"
+                  >
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <p className="font-bold text-amber-950">
+                        {formatArDay(d.date)}
+                      </p>
+                      <p className="text-[12px] tabular-nums text-amber-900/80">
+                        المفروض {money(d.expected)}
+                      </p>
+                    </div>
+                    <div className="mb-3 grid grid-cols-3 gap-2 text-[12px]">
+                      <div className="rounded-lg bg-white/80 px-2 py-1.5">
+                        <p className="text-[10px] text-navy/45">كاش</p>
+                        <p className="font-bold tabular-nums">
+                          {money(d.collectedCash)}
+                        </p>
+                      </div>
+                      <div className="rounded-lg bg-white/80 px-2 py-1.5">
+                        <p className="text-[10px] text-navy/45">فودافون</p>
+                        <p className="font-bold tabular-nums">
+                          {money(d.collectedVodafone)}
+                        </p>
+                      </div>
+                      <div className="rounded-lg bg-white/80 px-2 py-1.5">
+                        <p className="text-[10px] text-navy/45">مصروف</p>
+                        <p className="font-bold tabular-nums text-rose-700">
+                          − {money(d.drawerExpenses)}
+                        </p>
+                      </div>
+                    </div>
+                    <FieldLabel label="العدّ الفعلي">
+                      <input
+                        className="field"
+                        type="number"
+                        min={0}
+                        value={prevCounted[d.date] ?? ''}
+                        onChange={(e) =>
+                          setPrevCounted((curr) => ({
+                            ...curr,
+                            [d.date]: e.target.value,
+                          }))
+                        }
+                      />
+                    </FieldLabel>
+                    <p
+                      className={`mt-1 text-xs font-semibold ${
+                        diff === 0
+                          ? 'text-emerald-700'
+                          : diff < 0
+                            ? 'text-rose-700'
+                            : 'text-amber-800'
+                      }`}
+                    >
+                      الفرق:{' '}
+                      {diff === 0
+                        ? 'مطابق'
+                        : `${diff > 0 ? '+' : ''}${Math.round(diff).toLocaleString('en-EG')} ج.م`}
+                    </p>
+                    <button
+                      type="button"
+                      className="btn-primary mt-2 w-full"
+                      disabled={busy === 'close'}
+                      onClick={() => setConfirm({ kind: 'close', date: d.date })}
+                    >
+                      قفل {formatArDay(d.date)} وتحويل للخزنة
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+
           <div className="grid grid-cols-2 gap-2 text-sm mb-4">
             <div className="rounded-xl bg-sand px-3 py-2">
               <p className="text-[11px] text-navy/45">كاش</p>
@@ -423,9 +576,9 @@ export default function FinancePage() {
               </p>
             </div>
             <div className="rounded-xl bg-gold/10 px-3 py-2">
-              <p className="text-[11px] text-navy/45">المفروض يتعدّ</p>
+              <p className="text-[11px] text-navy/45">المفروض يتعدّ النهاردة</p>
               <p className="font-extrabold tabular-nums">
-                {money(cash?.expectedInDrawer ?? 0)}
+                {money(todayExpected)}
               </p>
             </div>
           </div>
@@ -433,7 +586,7 @@ export default function FinancePage() {
           {cash?.collectedBreakdown?.length ? (
             <div className="mb-4 overflow-hidden rounded-xl border border-navy/10">
               <p className="bg-sand px-3 py-2 text-[11px] font-semibold text-navy/55">
-                تفصيل الفلوس في الدرج
+                تفصيل تحصيل النهاردة
               </p>
               <table className="w-full text-sm">
                 <thead>
@@ -490,7 +643,7 @@ export default function FinancePage() {
             </div>
           ) : null}
 
-          {cash?.closed ? (
+          {todayClosed ? (
             <p className="text-sm text-navy/70">
               اتقفل بواسطة {cash.close?.closedByName || 'موظف'} · فرق العدّ{' '}
               <strong className="tabular-nums">
@@ -953,8 +1106,23 @@ export default function FinancePage() {
       <AppDialog
         open={confirm?.kind === 'close'}
         tone="danger"
-        title="قفل اليوم"
-        message={`العدّ ${money(Number(counted) || 0)} هيتحوّل للخزنة.\nالمفروض ${money(expected)} · الفرق ${money(closeDiff)}.\nبعد القفل مصروف الاستقبال يبقى من الخزنة.`}
+        title={
+          confirm?.date ? `قفل ${formatArDay(confirm.date)}` : 'قفل اليوم'
+        }
+        message={(() => {
+          const ymd = confirm?.date;
+          const day = ymd
+            ? prevDays.find((d) => d.date === ymd)
+            : null;
+          const exp = day ? day.expected : todayExpected;
+          const cnt = ymd
+            ? Number(prevCounted[ymd] || 0)
+            : Number(counted || 0);
+          const diff = cnt - exp;
+          return `العدّ ${money(cnt)} هيتحوّل للخزنة.\nالمفروض ${money(exp)} · الفرق ${money(diff)}.${
+            ymd ? '' : '\nبعد القفل مصروف الاستقبال يبقى من الخزنة.'
+          }`;
+        })()}
         confirmLabel={busy === 'close' ? 'جاري القفل...' : 'تأكيد القفل'}
         cancelLabel="رجوع"
         onConfirm={doClose}

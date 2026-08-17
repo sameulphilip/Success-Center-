@@ -1293,10 +1293,10 @@ export class BookingService {
     return offerings
       .filter((o) => {
         const ot = this.foldTeacherName(o.teacherName);
-        const os = this.foldTeacherName(o.subjectName);
-        return foldedNames.some(
-          (n) => ot.includes(n) || n.includes(ot) || os.includes(n) || n.includes(os),
-        );
+        return foldedNames.some((n) => {
+          if (!n || n.length < 4) return false;
+          return ot === n || (n.length >= 6 && (ot.includes(n) || n.includes(ot)));
+        });
       })
       .map((o) => o.id);
   }
@@ -1525,22 +1525,17 @@ export class BookingService {
         if (existingPaid) {
           // Backfill teacher selections if import previously skipped them
           if (offeringIds.length) {
-            const existingSel = await this.prisma.bookingSelection.findMany({
+            await this.prisma.bookingSelection.deleteMany({
               where: { submissionId: existingPaid.id },
-              select: { offeringId: true },
             });
-            const have = new Set(existingSel.map((s) => s.offeringId));
-            const missing = offeringIds.filter((id) => !have.has(id));
-            if (missing.length) {
-              await this.prisma.bookingSelection.createMany({
-                data: missing.map((offeringId) => ({
-                  submissionId: existingPaid.id,
-                  offeringId,
-                  feeAmount: 0,
-                })),
-                skipDuplicates: true,
-              });
-            }
+            await this.prisma.bookingSelection.createMany({
+              data: offeringIds.map((offeringId) => ({
+                submissionId: existingPaid.id,
+                offeringId,
+                feeAmount: 0,
+              })),
+              skipDuplicates: true,
+            });
           }
           if (
             existingPaid.formSerial == null &&

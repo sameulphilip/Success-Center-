@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { splitSessionNet } from '../ops/session-split';
 
 @Injectable()
 export class ReportsService {
@@ -265,13 +266,14 @@ export class ReportsService {
         0,
       );
       const refunds = s.refunds.reduce((sum, r) => sum + Number(r.amount), 0);
-      const teacherShare = Number(
-        s.settledTeacherAmount ??
-          (entryGross * Number(s.teacherPercent)) / 100,
-      );
-      const centerShare = Number(
-        s.settledCenterAmount ?? entryGross - teacherShare,
-      );
+      const { teacherShare, centerShare } = splitSessionNet({
+        net: entryGross,
+        feeAmount: Number(s.feeAmount),
+        teacherPercent: s.teacherPercent,
+        centerAmount: s.centerAmount,
+        settledTeacherAmount: s.settledTeacherAmount,
+        settledCenterAmount: s.settledCenterAmount,
+      });
       const gross = entryGross;
       sessionsGross += gross;
       sessionsTeacher += teacherShare;

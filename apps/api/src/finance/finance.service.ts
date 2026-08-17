@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { BookingStatus, PaymentStatus, PayoutStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { splitSessionNet } from '../ops/session-split';
 
 function startOfDay(d = new Date()) {
   const x = new Date(d);
@@ -433,10 +434,14 @@ export class FinanceService {
         (sum, e) => sum + Number(e.amount) - Number(e.refundedAmount),
         0,
       );
-      const share = Number(
-        s.settledTeacherAmount ??
-          (entryGross * Number(s.teacherPercent)) / 100,
-      );
+      const share = splitSessionNet({
+        net: entryGross,
+        feeAmount: Number(s.feeAmount),
+        teacherPercent: s.teacherPercent,
+        centerAmount: s.centerAmount,
+        settledTeacherAmount: s.settledTeacherAmount,
+        settledCenterAmount: s.settledCenterAmount,
+      }).teacherShare;
       teacherShare += share;
       sessionsCount += 1;
     }
