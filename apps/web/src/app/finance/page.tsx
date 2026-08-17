@@ -23,6 +23,15 @@ function money(n: number) {
   return `${Math.round(Number(n) || 0).toLocaleString('en-EG')} ج.م`;
 }
 
+function cairoYmd() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Cairo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
 function formatArDay(ymd: string) {
   const [y, m, d] = ymd.split('-').map(Number);
   if (!y || !m || !d) return ymd;
@@ -124,6 +133,7 @@ type CashSnapshot = {
     category: string;
     paidFrom: 'DRAWER' | 'SAFE' | 'OWNER';
     note?: string | null;
+    businessDate?: string;
     createdAt: string;
     createdByName?: string | null;
   }>;
@@ -192,6 +202,7 @@ export default function FinancePage() {
       | 'SAFE'
       | 'OWNER',
     note: '',
+    businessDate: cairoYmd(),
   });
   const [counted, setCounted] = useState('');
   const [prevCounted, setPrevCounted] = useState<Record<string, string>>({});
@@ -294,6 +305,7 @@ export default function FinancePage() {
           category: expForm.category,
           paidFrom: expForm.paidFrom,
           note: expForm.note || undefined,
+          businessDate: expForm.businessDate || undefined,
         }),
       });
       setExpForm((f) => ({ ...f, amount: '', note: '' }));
@@ -844,6 +856,18 @@ export default function FinancePage() {
           }
         >
           <form onSubmit={submitExpense} className="space-y-3">
+            <FieldLabel label="التاريخ">
+              <input
+                className="field"
+                type="date"
+                required
+                max={cairoYmd()}
+                value={expForm.businessDate}
+                onChange={(e) =>
+                  setExpForm({ ...expForm, businessDate: e.target.value })
+                }
+              />
+            </FieldLabel>
             <FieldLabel label="المبلغ">
               <input
                 className="field"
@@ -882,7 +906,12 @@ export default function FinancePage() {
                   })
                 }
               >
-                <option value="DRAWER" disabled={!!cash?.closed}>
+                <option
+                  value="DRAWER"
+                  disabled={
+                    expForm.businessDate === cash?.businessDate && !!cash?.closed
+                  }
+                >
                   درج اليوم (استقبال)
                 </option>
                 <option value="SAFE">الخزنة</option>
@@ -972,7 +1001,9 @@ export default function FinancePage() {
                     {e.category} · {fromLabel[e.paidFrom] || e.paidFrom}
                   </p>
                   <p className="text-[11px] text-navy/45">
-                    {new Date(e.createdAt).toLocaleString('ar-EG')}
+                    {formatArDay(
+                      String(e.businessDate || e.createdAt).slice(0, 10),
+                    )}
                     {e.createdByName ? ` · ${e.createdByName}` : ''}
                     {e.note ? ` · ${e.note}` : ''}
                   </p>

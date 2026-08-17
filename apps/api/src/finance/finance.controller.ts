@@ -155,6 +155,7 @@ export class FinanceController {
       category: string;
       paidFrom: string;
       note?: string;
+      businessDate?: string;
     },
   ) {
     return this.cash.addExpense(user.userId, body, user.role);

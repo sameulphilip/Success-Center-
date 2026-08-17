@@ -423,7 +423,7 @@ export class CashService {
         this.balances(),
         this.prisma.cashExpense.findMany({
           where: expenseWhere,
-          orderBy: { createdAt: 'desc' },
+          orderBy: [{ businessDate: 'desc' }, { createdAt: 'desc' }],
           take: 80,
         }),
         this.prisma.cashHandover.findMany({
@@ -521,6 +521,7 @@ export class CashService {
       category: string;
       paidFrom: CashExpenseFrom | string;
       note?: string;
+      businessDate?: string;
     },
     role?: string,
   ) {
@@ -541,7 +542,14 @@ export class CashService {
       throw new BadRequestException('الاستقبال يصرف من الدرج أو الخزنة فقط');
     }
     const category = (body.category || 'أخرى').trim() || 'أخرى';
-    const ymd = cairoYmd();
+    const today = cairoYmd();
+    const ymd = String(body.businessDate || '').trim() || today;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+      throw new BadRequestException('التاريخ غير صالح');
+    }
+    if (ymd > today) {
+      throw new BadRequestException('لا يمكن تسجيل مصروف بتاريخ مستقبلي');
+    }
     const businessDate = dateOnly(ymd);
     const balances = await this.balances();
 
@@ -552,8 +560,8 @@ export class CashService {
       if (existing) {
         throw new BadRequestException(
           role === 'RECEPTION'
-            ? 'اليوم مقفول. سجّل المصروف من الخزنة.'
-            : 'اليوم مقفول. سجّل المصروف من الخزنة أو من فلوس صاحب السنتر.',
+            ? 'اليوم ده مقفول. سجّل المصروف من الخزنة.'
+            : 'اليوم ده مقفول. سجّل المصروف من الخزنة أو من فلوس صاحب السنتر.',
         );
       }
       const [collected, drawerExp, previous] = await Promise.all([
