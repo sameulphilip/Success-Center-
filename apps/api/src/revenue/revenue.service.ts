@@ -14,16 +14,13 @@ import {
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizePhone } from '../common/phone.util';
+import {
+  splitSessionNet,
+  teacherPercentFromCenter,
+} from '../ops/session-split';
 
 function receipt(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`;
-}
-
-function split(amount: number, teacherPercent: number) {
-  const teacherShare =
-    Math.round(amount * (teacherPercent / 100) * 100) / 100;
-  const centerShare = Math.round((amount - teacherShare) * 100) / 100;
-  return { teacherShare, centerShare };
 }
 
 function genCode() {
@@ -58,14 +55,24 @@ export class RevenueService {
     subjectId?: string;
     title: string;
     price: number;
-    teacherPercent: number;
+    teacherPercent?: number;
+    centerAmount?: number;
     notes?: string;
     codesCount?: number;
   }) {
     if (data.price < 0) throw new BadRequestException('السعر غير صالح');
-    if (data.teacherPercent < 0 || data.teacherPercent > 100) {
-      throw new BadRequestException('نسبة المدرس من 0 إلى 100');
+    const center =
+      data.centerAmount != null && !Number.isNaN(Number(data.centerAmount))
+        ? Number(data.centerAmount)
+        : data.teacherPercent != null
+          ? Math.round(
+              data.price * (1 - Number(data.teacherPercent) / 100) * 100,
+            ) / 100
+          : 0;
+    if (center < 0) {
+      throw new BadRequestException('مبلغ السنتر غير صالح');
     }
+    const teacherPercent = teacherPercentFromCenter(data.price, center);
     const count = Math.min(Math.max(data.codesCount ?? 20, 1), 200);
     const codes = Array.from({ length: count }, () => ({
       code: `ON-${genCode()}`,
@@ -77,7 +84,7 @@ export class RevenueService {
         subjectId: data.subjectId || null,
         title: data.title.trim(),
         price: data.price,
-        teacherPercent: data.teacherPercent,
+        teacherPercent,
         notes: data.notes,
         codes: { create: codes },
       },
@@ -156,10 +163,16 @@ export class RevenueService {
     }
 
     const unit = Number(offer.price);
-    const { teacherShare, centerShare } = split(
-      unit,
-      Number(offer.teacherPercent),
-    );
+    const centerAmt =
+      Math.round(
+        unit * (1 - Number(offer.teacherPercent) / 100) * 100,
+      ) / 100;
+    const { teacherShare, centerShare } = splitSessionNet({
+      net: unit,
+      feeAmount: unit,
+      centerAmount: centerAmt,
+      teacherPercent: offer.teacherPercent,
+    });
     const isCash = data.method === SessionPayMethod.CASH;
     const cashTo = cashToForRole(role);
     const buyerPhone = data.buyerPhone
@@ -257,19 +270,29 @@ export class RevenueService {
   createHandout(data: {
     title: string;
     price: number;
-    teacherPercent: number;
+    teacherPercent?: number;
+    centerAmount?: number;
     teacherId?: string;
     stock?: number;
   }) {
     if (data.price < 0) throw new BadRequestException('السعر غير صالح');
-    if (data.teacherPercent < 0 || data.teacherPercent > 100) {
-      throw new BadRequestException('نسبة المدرس من 0 إلى 100');
+    const center =
+      data.centerAmount != null && !Number.isNaN(Number(data.centerAmount))
+        ? Number(data.centerAmount)
+        : data.teacherPercent != null
+          ? Math.round(
+              data.price * (1 - Number(data.teacherPercent) / 100) * 100,
+            ) / 100
+          : 0;
+    if (center < 0) {
+      throw new BadRequestException('مبلغ السنتر غير صالح');
     }
+    const teacherPercent = teacherPercentFromCenter(data.price, center);
     return this.prisma.handoutProduct.create({
       data: {
         title: data.title.trim(),
         price: data.price,
-        teacherPercent: data.teacherPercent,
+        teacherPercent,
         teacherId: data.teacherId || null,
         stock: data.stock ?? 0,
       },
@@ -307,10 +330,16 @@ export class RevenueService {
 
     const unitPrice = Number(product.price);
     const amount = unitPrice * qty;
-    const { teacherShare, centerShare } = split(
-      amount,
-      Number(product.teacherPercent),
-    );
+    const centerAmt =
+      Math.round(
+        unitPrice * (1 - Number(product.teacherPercent) / 100) * 100,
+      ) / 100;
+    const { teacherShare, centerShare } = splitSessionNet({
+      net: amount,
+      feeAmount: unitPrice,
+      centerAmount: centerAmt,
+      teacherPercent: product.teacherPercent,
+    });
     const isCash = data.method === SessionPayMethod.CASH;
 
     return this.prisma.$transaction(async (tx) => {

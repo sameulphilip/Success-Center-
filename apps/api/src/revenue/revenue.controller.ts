@@ -39,7 +39,8 @@ export class RevenueController {
       subjectId?: string;
       title: string;
       price: number;
-      teacherPercent: number;
+      teacherPercent?: number;
+      centerAmount?: number;
       notes?: string;
       codesCount?: number;
     },
@@ -118,7 +119,8 @@ export class RevenueController {
     body: {
       title: string;
       price: number;
-      teacherPercent: number;
+      teacherPercent?: number;
+      centerAmount?: number;
       teacherId?: string;
       stock?: number;
     },

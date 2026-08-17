@@ -110,7 +110,7 @@ export default function RevenuePage() {
     subjectId: '',
     title: '',
     price: 0,
-    teacherPercent: 50,
+    centerAmount: 0,
     codesCount: 20,
   });
   const [sellOnline, setSellOnline] = useState({
@@ -123,7 +123,7 @@ export default function RevenuePage() {
   const [handoutForm, setHandoutForm] = useState({
     title: '',
     price: 0,
-    teacherPercent: 50,
+    centerAmount: 0,
     teacherId: '',
     stock: 50,
   });
@@ -460,18 +460,17 @@ export default function RevenuePage() {
                     }
                   />
                 </FieldLabel>
-                <FieldLabel label="نسبة المدرس %">
+                <FieldLabel label="مبلغ السنتر">
                   <input
                     className="field"
                     type="number"
                     min={0}
-                    max={100}
                     required
-                    value={offerForm.teacherPercent}
+                    value={offerForm.centerAmount}
                     onChange={(e) =>
                       setOfferForm({
                         ...offerForm,
-                        teacherPercent: Number(e.target.value),
+                        centerAmount: Number(e.target.value),
                       })
                     }
                   />
@@ -492,6 +491,15 @@ export default function RevenuePage() {
                   />
                 </FieldLabel>
               </div>
+              <p className="text-[11px] text-navy/45">
+                {Number(offerForm.centerAmount || 0) >
+                Number(offerForm.price || 0)
+                  ? 'مبلغ السنتر أكبر من السعر — المدرس مش هياخد من العرض ده'
+                  : `المدرس ياخد الباقي: ${(
+                      Number(offerForm.price || 0) -
+                      Number(offerForm.centerAmount || 0)
+                    ).toLocaleString('en-EG')} ج.م للكود`}
+              </p>
               <button
                 type="submit"
                 className="btn-primary w-full"
@@ -512,8 +520,13 @@ export default function RevenuePage() {
                     <span className="font-semibold block">{o.title}</span>
                     <span className="text-[11px] text-navy/45">
                       {o.teacher.firstName} ·{' '}
-                      {Number(o.price).toLocaleString('en-EG')} · مدرس{' '}
-                      {Number(o.teacherPercent)}% · أكواد {o._count?.codes ?? 0}
+                      {Number(o.price).toLocaleString('en-EG')} · سنتر{' '}
+                      {Math.round(
+                        Number(o.price) *
+                          (1 - Number(o.teacherPercent) / 100) *
+                          100,
+                      ) / 100}{' '}
+                      ج.م · أكواد {o._count?.codes ?? 0}
                     </span>
                   </button>
                 </li>
@@ -731,18 +744,17 @@ export default function RevenuePage() {
                     }
                   />
                 </FieldLabel>
-                <FieldLabel label="نسبة المدرس %">
+                <FieldLabel label="مبلغ السنتر">
                   <input
                     className="field"
                     type="number"
                     min={0}
-                    max={100}
                     required
-                    value={handoutForm.teacherPercent}
+                    value={handoutForm.centerAmount}
                     onChange={(e) =>
                       setHandoutForm({
                         ...handoutForm,
-                        teacherPercent: Number(e.target.value),
+                        centerAmount: Number(e.target.value),
                       })
                     }
                   />
@@ -762,6 +774,15 @@ export default function RevenuePage() {
                   />
                 </FieldLabel>
               </div>
+              <p className="text-[11px] text-navy/45">
+                {Number(handoutForm.centerAmount || 0) >
+                Number(handoutForm.price || 0)
+                  ? 'مبلغ السنتر أكبر من السعر — المدرس مش هياخد من الملزمة دي'
+                  : `المدرس ياخد الباقي: ${(
+                      Number(handoutForm.price || 0) -
+                      Number(handoutForm.centerAmount || 0)
+                    ).toLocaleString('en-EG')} ج.م للنسخة`}
+              </p>
               <button
                 type="submit"
                 className="btn-primary w-full"
@@ -780,7 +801,13 @@ export default function RevenuePage() {
                     <span className="font-semibold">{h.title}</span>
                     <span className="text-[11px] text-navy/45 block">
                       {Number(h.price).toLocaleString('en-EG')} · مخزون {h.stock}{' '}
-                      · مدرس {Number(h.teacherPercent)}%
+                      · سنتر{' '}
+                      {Math.round(
+                        Number(h.price) *
+                          (1 - Number(h.teacherPercent) / 100) *
+                          100,
+                      ) / 100}{' '}
+                      ج.م
                     </span>
                   </span>
                 </li>
