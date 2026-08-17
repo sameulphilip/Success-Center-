@@ -117,6 +117,11 @@ enum CashExpenseFrom {
   OWNER
 }
 
+enum ExtraRevenueCashTo {
+  DRAWER
+  OWNER
+}
+
 model User {
   id              String    @id @default(cuid())
   email           String    @unique
@@ -690,6 +695,7 @@ model OnlineCodeSale {
   confirmedAt       DateTime?
   confirmedByUserId String?
   soldByUserId      String?
+  cashTo            ExtraRevenueCashTo @default(DRAWER)
   note              String?
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
@@ -731,6 +737,7 @@ model HandoutSale {
   confirmedAt       DateTime?
   confirmedByUserId String?
   soldByUserId      String?
+  cashTo            ExtraRevenueCashTo @default(DRAWER)
   buyerPhone        String?
   note              String?
   createdAt         DateTime         @default(now())
@@ -757,6 +764,7 @@ model RoomRental {
   confirmedAt       DateTime?
   confirmedByUserId String?
   createdByUserId   String?
+  cashTo            ExtraRevenueCashTo @default(DRAWER)
   notes             String?
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt

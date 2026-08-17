@@ -9,7 +9,7 @@ import {
   PageHero,
   SectionCard,
 } from '@/components/ui';
-import { api } from '@/lib/api';
+import { api, getStoredUser } from '@/lib/api';
 
 type Teacher = { id: string; firstName: string; lastName: string };
 type Subject = { id: string; nameAr: string };
@@ -33,6 +33,7 @@ type OnlineSale = {
   centerShare: string | number;
   method: string;
   payStatus: string;
+  cashTo?: 'DRAWER' | 'OWNER';
   receiptNumber: string;
   buyerName?: string | null;
   buyerPhone?: string | null;
@@ -57,6 +58,7 @@ type HandoutSale = {
   centerShare: string | number;
   method: string;
   payStatus: string;
+  cashTo?: 'DRAWER' | 'OWNER';
   receiptNumber: string;
   product: { title: string };
 };
@@ -71,12 +73,20 @@ type Rental = {
   amount: string | number;
   method: string;
   payStatus: string;
+  cashTo?: 'DRAWER' | 'OWNER';
   status: string;
   receiptNumber?: string | null;
   classroom: Classroom;
 };
 
+function cashToLabel(to?: string) {
+  return to === 'OWNER' ? 'صاحب السنتر' : 'الدرج';
+}
+
 export default function RevenuePage() {
+  const me = getStoredUser();
+  const toOwner =
+    me?.role === 'SUPER_ADMIN' || me?.role === 'CENTER_MANAGER';
   const [tab, setTab] = useState<'online' | 'handouts' | 'rooms'>('online');
   const [error, setError] = useState('');
   const [msg, setMsg] = useState('');
@@ -108,7 +118,7 @@ export default function RevenuePage() {
     method: 'CASH',
     vodafoneTxn: '',
     buyerName: '',
-    buyerPhone: '',
+    qty: 1,
   });
   const [handoutForm, setHandoutForm] = useState({
     title: '',
@@ -203,22 +213,30 @@ export default function RevenuePage() {
     e.preventDefault();
     setBusy('sellOn');
     try {
-      const sale = await api<OnlineSale>(
+      const sale = await api<
+        OnlineSale & { count?: number; codes?: string[]; totalAmount?: number }
+      >(
         `/revenue/online/offers/${sellOnline.offerId}/sell`,
         {
           method: 'POST',
           body: JSON.stringify({
+            qty: sellOnline.qty,
             method: sellOnline.method,
             vodafoneTxn:
               sellOnline.method === 'VODAFONE_CASH'
                 ? sellOnline.vodafoneTxn
                 : undefined,
             buyerName: sellOnline.buyerName || undefined,
-            buyerPhone: sellOnline.buyerPhone || undefined,
           }),
         },
       );
-      setMsg(`تم البيع — الكود: ${sale.code.code}`);
+      const codesSold = sale.codes?.length
+        ? sale.codes.join(' · ')
+        : sale.code.code;
+      const n = sale.count || 1;
+      setMsg(
+        `تم البيع${n > 1 ? ` (${n} كود)` : ''} — ${codesSold} · الفلوس على ${cashToLabel(sale.cashTo)}`,
+      );
       await load();
       if (selectedOffer) await loadCodes(selectedOffer);
     } catch (err: any) {
@@ -258,19 +276,22 @@ export default function RevenuePage() {
     e.preventDefault();
     setBusy('sellHn');
     try {
-      await api(`/revenue/handouts/${sellHandout.productId}/sell`, {
-        method: 'POST',
-        body: JSON.stringify({
-          qty: sellHandout.qty,
-          method: sellHandout.method,
-          vodafoneTxn:
-            sellHandout.method === 'VODAFONE_CASH'
-              ? sellHandout.vodafoneTxn
-              : undefined,
-          buyerPhone: sellHandout.buyerPhone || undefined,
-        }),
-      });
-      setMsg('تم بيع الملزمة');
+      const sale = await api<HandoutSale>(
+        `/revenue/handouts/${sellHandout.productId}/sell`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            qty: sellHandout.qty,
+            method: sellHandout.method,
+            vodafoneTxn:
+              sellHandout.method === 'VODAFONE_CASH'
+                ? sellHandout.vodafoneTxn
+                : undefined,
+            buyerPhone: sellHandout.buyerPhone || undefined,
+          }),
+        },
+      );
+      setMsg(`تم بيع الملزمة · الفلوس على ${cashToLabel(sale.cashTo)}`);
       await load();
     } catch (err: any) {
       setError(err.message);
@@ -289,7 +310,7 @@ export default function RevenuePage() {
     e.preventDefault();
     setBusy('rental');
     try {
-      await api('/revenue/rentals', {
+      const rental = await api<Rental>('/revenue/rentals', {
         method: 'POST',
         body: JSON.stringify({
           ...rentalForm,
@@ -300,7 +321,7 @@ export default function RevenuePage() {
               : undefined,
         }),
       });
-      setMsg('تم حجز القاعة');
+      setMsg(`تم حجز القاعة · الفلوس على ${cashToLabel(rental.cashTo)}`);
       await load();
     } catch (err: any) {
       setError(err.message);
@@ -324,12 +345,20 @@ export default function RevenuePage() {
     <AppShell>
       <PageHeader
         title="إيرادات إضافية"
-        subtitle="أونلاين بالكود · ملازم · تأجير قاعات"
+        subtitle={
+          toOwner
+            ? 'تحصيلك أنت بيروح لصاحب السنتر · الاستقبال بيتحسب في الدرج'
+            : 'تحصيل الاستقبال بيتحسب في الدرج'
+        }
       />
       <PageHero
         eyebrow="REVENUE"
         title="مرحلة التحصيل الإضافي"
-        subtitle="كود أونلاين لمرة واحدة، بيع ملازم، وتأجير قاعة كاملة"
+        subtitle={
+          toOwner
+            ? 'كود أونلاين · ملازم · قاعات — المدير يدخلها لصاحب السنتر، الاستقبال للدرج'
+            : 'كود أونلاين لمرة واحدة، بيع ملازم، وتأجير قاعة — التحصيل يدخل الدرج'
+        }
         metrics={[
           { label: 'عروض أونلاين', value: offers.length, highlight: true },
           { label: 'ملازم', value: handouts.length },
@@ -524,19 +553,36 @@ export default function RevenuePage() {
                       }
                     />
                   </FieldLabel>
-                  <FieldLabel label="موبايل">
+                  <FieldLabel label="الكمية">
                     <input
                       className="field"
-                      value={sellOnline.buyerPhone}
+                      type="number"
+                      min={1}
+                      max={50}
+                      required
+                      value={sellOnline.qty}
                       onChange={(e) =>
                         setSellOnline({
                           ...sellOnline,
-                          buyerPhone: e.target.value,
+                          qty: Math.max(1, Number(e.target.value) || 1),
                         })
                       }
                     />
                   </FieldLabel>
                 </div>
+                {(() => {
+                  const offer = offers.find((o) => o.id === sellOnline.offerId);
+                  const unit = Number(offer?.price || 0);
+                  const total = unit * Number(sellOnline.qty || 1);
+                  return offer ? (
+                    <p className="text-[12px] text-navy/50">
+                      الإجمالي {total.toLocaleString('en-EG')} ج.م
+                      {sellOnline.qty > 1
+                        ? ` (${sellOnline.qty} × ${unit.toLocaleString('en-EG')})`
+                        : ''}
+                    </p>
+                  ) : null;
+                })()}
                 <FieldLabel label="الدفع">
                   <select
                     className="field"
@@ -589,7 +635,7 @@ export default function RevenuePage() {
                       {Number(s.amount).toLocaleString('en-EG')} · مدرس{' '}
                       {Number(s.teacherShare).toLocaleString('en-EG')} · سنتر{' '}
                       {Number(s.centerShare).toLocaleString('en-EG')} ·{' '}
-                      {s.payStatus}
+                      {cashToLabel(s.cashTo)} · {s.payStatus}
                     </p>
                     {s.payStatus === 'PENDING_CONFIRM' ? (
                       <button
@@ -836,7 +882,8 @@ export default function RevenuePage() {
                   <p className="text-[11px] text-navy/45">
                     ×{s.qty} · {Number(s.amount).toLocaleString('en-EG')} · مدرس{' '}
                     {Number(s.teacherShare).toLocaleString('en-EG')} · سنتر{' '}
-                    {Number(s.centerShare).toLocaleString('en-EG')}
+                    {Number(s.centerShare).toLocaleString('en-EG')} ·{' '}
+                    {cashToLabel(s.cashTo)}
                   </p>
                   {s.payStatus === 'PENDING_CONFIRM' ? (
                     <button
@@ -1014,8 +1061,8 @@ export default function RevenuePage() {
                     {new Date(r.endsAt).toLocaleString('ar-EG')}
                   </p>
                   <p className="text-[11px] text-navy/45">
-                    {Number(r.amount).toLocaleString('en-EG')} ج.م · {r.status} ·{' '}
-                    {r.payStatus}
+                    {Number(r.amount).toLocaleString('en-EG')} ج.م ·{' '}
+                    {cashToLabel(r.cashTo)} · {r.status} · {r.payStatus}
                   </p>
                   <div className="mt-2 flex gap-2">
                     {r.payStatus === 'PENDING_CONFIRM' ? (

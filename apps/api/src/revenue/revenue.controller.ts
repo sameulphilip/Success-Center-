@@ -70,10 +70,11 @@ export class RevenueController {
       buyerPhone?: string;
       buyerName?: string;
       note?: string;
+      qty?: number;
     },
-    @CurrentUser() user: { userId: string },
+    @CurrentUser() user: { userId: string; role?: string },
   ) {
-    return this.revenue.sellOnlineCode(id, body, user?.userId);
+    return this.revenue.sellOnlineCode(id, body, user?.userId, user?.role);
   }
 
   @Get('online/sales')
@@ -139,9 +140,9 @@ export class RevenueController {
       buyerPhone?: string;
       note?: string;
     },
-    @CurrentUser() user: { userId: string },
+    @CurrentUser() user: { userId: string; role?: string },
   ) {
-    return this.revenue.sellHandout(id, body, user?.userId);
+    return this.revenue.sellHandout(id, body, user?.userId, user?.role);
   }
 
   // Rooms
@@ -166,9 +167,9 @@ export class RevenueController {
       vodafoneTxn?: string;
       notes?: string;
     },
-    @CurrentUser() user: { userId: string },
+    @CurrentUser() user: { userId: string; role?: string },
   ) {
-    return this.revenue.createRental(body, user?.userId);
+    return this.revenue.createRental(body, user?.userId, user?.role);
   }
 
   @Post('rentals/:id/confirm')

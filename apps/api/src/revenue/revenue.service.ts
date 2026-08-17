@@ -4,8 +4,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  ExtraRevenueCashTo,
   OnlineCodeStatus,
   RentalStatus,
+  RoleCode,
   SessionPayMethod,
   SessionPayStatus,
 } from '@prisma/client';
@@ -26,6 +28,13 @@ function split(amount: number, teacherPercent: number) {
 
 function genCode() {
   return randomBytes(4).toString('hex').toUpperCase();
+}
+
+function cashToForRole(role?: string) {
+  if (role === RoleCode.SUPER_ADMIN || role === RoleCode.CENTER_MANAGER) {
+    return ExtraRevenueCashTo.OWNER;
+  }
+  return ExtraRevenueCashTo.DRAWER;
 }
 
 @Injectable()
@@ -118,8 +127,10 @@ export class RevenueService {
       buyerPhone?: string;
       buyerName?: string;
       note?: string;
+      qty?: number;
     },
     userId?: string,
+    role?: string,
   ) {
     const offer = await this.prisma.onlineOffer.findUnique({
       where: { id: offerId },
@@ -131,54 +142,79 @@ export class RevenueService {
       throw new BadRequestException('رقم عملية فودافون مطلوب');
     }
 
-    const available = await this.prisma.onlineAccessCode.findFirst({
+    const qty = Math.min(Math.max(Math.floor(Number(data.qty) || 1), 1), 50);
+    const available = await this.prisma.onlineAccessCode.findMany({
       where: { offerId, status: OnlineCodeStatus.AVAILABLE },
       orderBy: { createdAt: 'asc' },
+      take: qty,
     });
-    if (!available) throw new BadRequestException('لا توجد أكواد متاحة');
+    if (!available.length) throw new BadRequestException('لا توجد أكواد متاحة');
+    if (available.length < qty) {
+      throw new BadRequestException(
+        `المتاح ${available.length} كود بس. اختَر كمية أقل`,
+      );
+    }
 
-    const amount = Number(offer.price);
+    const unit = Number(offer.price);
     const { teacherShare, centerShare } = split(
-      amount,
+      unit,
       Number(offer.teacherPercent),
     );
     const isCash = data.method === SessionPayMethod.CASH;
+    const cashTo = cashToForRole(role);
+    const buyerPhone = data.buyerPhone
+      ? normalizePhone(data.buyerPhone)
+      : null;
 
-    return this.prisma.$transaction(async (tx) => {
-      await tx.onlineAccessCode.update({
-        where: { id: available.id },
-        data: { status: OnlineCodeStatus.SOLD },
-      });
-      return tx.onlineCodeSale.create({
-        data: {
-          offerId,
-          codeId: available.id,
-          studentId: data.studentId || null,
-          buyerPhone: data.buyerPhone
-            ? normalizePhone(data.buyerPhone)
-            : null,
-          buyerName: data.buyerName,
-          amount,
-          teacherShare,
-          centerShare,
-          method: data.method,
-          vodafoneTxn: data.vodafoneTxn?.trim() || null,
-          payStatus: isCash
-            ? SessionPayStatus.CONFIRMED
-            : SessionPayStatus.PENDING_CONFIRM,
-          receiptNumber: receipt('ON'),
-          confirmedAt: isCash ? new Date() : null,
-          confirmedByUserId: isCash ? userId : null,
-          soldByUserId: userId,
-          note: data.note,
-        },
-        include: {
-          code: true,
-          offer: { include: { teacher: true } },
-          student: true,
-        },
-      });
+    const sales = await this.prisma.$transaction(async (tx) => {
+      const created: any[] = [];
+      for (const code of available) {
+        await tx.onlineAccessCode.update({
+          where: { id: code.id },
+          data: { status: OnlineCodeStatus.SOLD },
+        });
+        created.push(
+          await tx.onlineCodeSale.create({
+            data: {
+              offerId,
+              codeId: code.id,
+              studentId: data.studentId || null,
+              buyerPhone,
+              buyerName: data.buyerName,
+              amount: unit,
+              teacherShare,
+              centerShare,
+              method: data.method,
+              vodafoneTxn: data.vodafoneTxn?.trim() || null,
+              payStatus: isCash
+                ? SessionPayStatus.CONFIRMED
+                : SessionPayStatus.PENDING_CONFIRM,
+              receiptNumber: receipt('ON'),
+              confirmedAt: isCash ? new Date() : null,
+              confirmedByUserId: isCash ? userId : null,
+              soldByUserId: userId,
+              cashTo,
+              note: data.note,
+            },
+            include: {
+              code: true,
+              offer: { include: { teacher: true } },
+              student: true,
+            },
+          }),
+        );
+      }
+      return created;
     });
+
+    return {
+      count: sales.length,
+      totalAmount: unit * sales.length,
+      cashTo,
+      codes: sales.map((s) => s.code.code),
+      sales,
+      ...sales[0],
+    };
   }
 
   async confirmOnlineSale(id: string, userId?: string) {
@@ -253,6 +289,7 @@ export class RevenueService {
       note?: string;
     },
     userId?: string,
+    role?: string,
   ) {
     const product = await this.prisma.handoutProduct.findUnique({
       where: { id: productId },
@@ -300,6 +337,7 @@ export class RevenueService {
           confirmedAt: isCash ? new Date() : null,
           confirmedByUserId: isCash ? userId : null,
           soldByUserId: userId,
+          cashTo: cashToForRole(role),
           buyerPhone: data.buyerPhone
             ? normalizePhone(data.buyerPhone)
             : null,
@@ -356,6 +394,7 @@ export class RevenueService {
       notes?: string;
     },
     userId?: string,
+    role?: string,
   ) {
     const startsAt = new Date(data.startsAt);
     const endsAt = new Date(data.endsAt);
@@ -403,6 +442,7 @@ export class RevenueService {
         confirmedAt: isCash ? new Date() : null,
         confirmedByUserId: isCash ? userId : null,
         createdByUserId: userId,
+        cashTo: cashToForRole(role),
         notes: data.notes,
       },
       include: { classroom: true },

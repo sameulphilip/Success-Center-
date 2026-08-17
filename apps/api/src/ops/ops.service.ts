@@ -144,9 +144,6 @@ export class OpsService {
     if (center < 0) {
       throw new BadRequestException('مبلغ السنتر غير صالح');
     }
-    if (center > feeAmount) {
-      throw new BadRequestException('مبلغ السنتر أكبر من سعر الحصة');
-    }
     return {
       centerAmount: center,
       teacherPercent: teacherPercentFromCenter(feeAmount, center),

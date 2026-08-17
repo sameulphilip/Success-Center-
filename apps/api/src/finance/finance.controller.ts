@@ -167,6 +167,16 @@ export class FinanceController {
     return this.cash.deleteExpense(id);
   }
 
+  @Delete('cash/extra-revenue/:kind/:id')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  @RequirePerms('finance.safe')
+  deleteExtraRevenue(
+    @Param('kind') kind: string,
+    @Param('id') id: string,
+  ) {
+    return this.cash.deleteExtraRevenue(kind, id);
+  }
+
   @Post('cash/close-day')
   @RequirePerms('finance.close')
   closeDay(

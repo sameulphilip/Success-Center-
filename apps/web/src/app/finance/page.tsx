@@ -91,6 +91,20 @@ type CashSnapshot = {
   }>;
   safeBalance: number;
   ownerBalance?: number;
+  ownerExtraRevenue?: number;
+  extraRevenueSales?: Array<{
+    id: string;
+    kind: 'online' | 'handout' | 'rental';
+    kindLabel: string;
+    title: string;
+    detail?: string | null;
+    amount: number;
+    method: string;
+    cashTo: 'DRAWER' | 'OWNER';
+    at: string;
+    receiptNumber?: string | null;
+    soldByName?: string | null;
+  }>;
   totalHandedToOwner?: number;
   ownerSpent?: number;
   viewerScope?: 'reception' | 'owner';
@@ -145,6 +159,17 @@ const fromLabel: Record<string, string> = {
   OWNER: 'صاحب السنتر',
 };
 
+const extraCashToLabel: Record<string, string> = {
+  DRAWER: 'الدرج',
+  OWNER: 'صاحب السنتر',
+};
+
+function payMethodLabel(method?: string) {
+  const m = String(method || '').toUpperCase();
+  if (m.includes('VODAFONE')) return 'فودافون';
+  return 'كاش';
+}
+
 export default function FinancePage() {
   const me = getStoredUser();
   const canReceipts = hasPerm(me?.permissions, 'finance.receipts');
@@ -177,10 +202,11 @@ export default function FinancePage() {
     canReceipts ? 'receipts' : canSafe ? 'safe' : 'close',
   );
   const [confirm, setConfirm] = useState<null | {
-    kind: 'close' | 'handover' | 'del-receipt' | 'del-expense';
+    kind: 'close' | 'handover' | 'del-receipt' | 'del-expense' | 'del-extra';
     id?: string;
     date?: string;
     source?: 'PAYMENT' | 'SESSION';
+    extraKind?: 'online' | 'handout' | 'rental';
     label?: string;
   }>(null);
 
@@ -247,6 +273,14 @@ export default function FinancePage() {
     if (!Number.isFinite(countedN)) return 0;
     return countedN - todayExpected;
   }, [countedN, todayExpected]);
+
+  const extraSales = cash?.extraRevenueSales ?? [];
+  const extraDrawerTotal = extraSales
+    .filter((s) => s.cashTo !== 'OWNER')
+    .reduce((n, s) => n + Number(s.amount || 0), 0);
+  const extraOwnerTotal = extraSales
+    .filter((s) => s.cashTo === 'OWNER')
+    .reduce((n, s) => n + Number(s.amount || 0), 0);
 
   async function submitExpense(e: FormEvent) {
     e.preventDefault();
@@ -351,6 +385,24 @@ export default function FinancePage() {
     }
   }
 
+  async function doDeleteExtra() {
+    if (!confirm?.id || !confirm.extraKind) return;
+    setBusy(`del-x-${confirm.id}`);
+    setError('');
+    try {
+      await api(
+        `/finance/cash/extra-revenue/${confirm.extraKind}/${confirm.id}`,
+        { method: 'DELETE' },
+      );
+      setConfirm(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'فشل مسح البيع');
+    } finally {
+      setBusy('');
+    }
+  }
+
   return (
     <AppShell>
       <PageHeader
@@ -439,7 +491,7 @@ export default function FinancePage() {
       <PageHero
         eyebrow="CASH"
         title="الخزنة والدرج"
-        subtitle="فودافون كاش بتتحسب كاش مع قفل اليوم. الاستقبال يصرف من الدرج أو الخزنة. صاحب السنتر يشوف الكل ويصرف بعد التسليم."
+        subtitle="فودافون كاش بتتحسب كاش مع قفل اليوم. إيراد إضافي من المدير عند صاحب السنتر، ومن الاستقبال في الدرج."
         metrics={[
           {
             label: 'المفروض في الدرج',
@@ -461,6 +513,91 @@ export default function FinancePage() {
           },
         ]}
       />
+
+      <SectionCard
+        className="mb-4"
+        title="مبيعات الإيرادات الإضافية"
+        subtitle={
+          isReception
+            ? 'المبيعات اللي دخلت الدرج من الأونلاين والملازم والقاعات'
+            : `الدرج ${money(extraDrawerTotal)} · صاحب السنتر ${money(extraOwnerTotal)}`
+        }
+      >
+        <div className="overflow-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-[11px] text-navy/40">
+                <th className="px-3 py-2 text-right font-medium">التاريخ</th>
+                <th className="px-3 py-2 text-right font-medium">النوع</th>
+                <th className="px-3 py-2 text-right font-medium">البيان</th>
+                <th className="px-3 py-2 text-right font-medium">مين سجّل</th>
+                <th className="px-3 py-2 text-right font-medium">راحت فين</th>
+                <th className="px-3 py-2 text-left font-medium">المبلغ</th>
+                {canDelete ? (
+                  <th className="px-3 py-2 text-left font-medium"></th>
+                ) : null}
+              </tr>
+            </thead>
+            <tbody>
+              {extraSales.map((s) => (
+                <tr key={`${s.kind}-${s.id}`} className="border-t border-navy/5">
+                  <td className="px-3 py-2 whitespace-nowrap text-[12px] text-navy/55">
+                    {new Date(s.at).toLocaleString('ar-EG')}
+                  </td>
+                  <td className="px-3 py-2 whitespace-nowrap">{s.kindLabel}</td>
+                  <td className="px-3 py-2">
+                    <p className="font-semibold text-navy">{s.title}</p>
+                    <p className="text-[11px] text-navy/40">
+                      {payMethodLabel(s.method)}
+                      {s.detail ? ` · ${s.detail}` : ''}
+                    </p>
+                  </td>
+                  <td className="px-3 py-2 text-[12px] text-navy/60">
+                    {s.soldByName || '—'}
+                  </td>
+                  <td className="px-3 py-2">
+                    <span
+                      className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-bold ${
+                        s.cashTo === 'OWNER'
+                          ? 'bg-amber-50 text-amber-900'
+                          : 'bg-sand text-navy/70'
+                      }`}
+                    >
+                      {extraCashToLabel[s.cashTo] || s.cashTo}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 tabular-nums text-left font-extrabold">
+                    {money(s.amount)}
+                  </td>
+                  {canDelete ? (
+                    <td className="px-3 py-2 text-left">
+                      <button
+                        type="button"
+                        className="text-xs font-bold text-rose-700 hover:underline"
+                        disabled={busy === `del-x-${s.id}`}
+                        onClick={() =>
+                          setConfirm({
+                            kind: 'del-extra',
+                            id: s.id,
+                            extraKind: s.kind,
+                            label: `${s.kindLabel} · ${s.title} · ${money(s.amount)}`,
+                          })
+                        }
+                      >
+                        مسح
+                      </button>
+                    </td>
+                  ) : null}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!extraSales.length ? (
+            <EmptyState>لا مبيعات إيراد إضافي بعد</EmptyState>
+          ) : null}
+        </div>
+      </SectionCard>
+
       <div className="grid gap-4 xl:grid-cols-2 mb-4">
         {tab === 'close' ? (
         <SectionCard
@@ -1156,6 +1293,16 @@ export default function FinancePage() {
         confirmLabel="مسح المصروف"
         cancelLabel="رجوع"
         onConfirm={() => void doDeleteExpense()}
+        onClose={() => setConfirm(null)}
+      />
+      <AppDialog
+        open={confirm?.kind === 'del-extra'}
+        tone="danger"
+        title="مسح بيع إيراد إضافي"
+        message={`هيتشال من السجل والدرج أو رصيد صاحب السنتر.\n${confirm?.label || ''}`}
+        confirmLabel="مسح البيع"
+        cancelLabel="رجوع"
+        onConfirm={() => void doDeleteExtra()}
         onClose={() => setConfirm(null)}
       />
     </AppShell>

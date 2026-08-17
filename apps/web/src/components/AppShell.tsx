@@ -103,7 +103,7 @@ function SideNav({
         </div>
       </div>
 
-      <nav className="flex-1 overflow-y-auto space-y-1 px-1">
+      <nav className="flex-1 overflow-y-auto overscroll-contain space-y-1 px-1 min-h-0">
         {nav.map((item) => {
           const active = pathname.startsWith(item.href);
           return (
@@ -212,12 +212,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     CENTER_NAME;
 
   return (
-    <div className="min-h-screen lg:grid lg:grid-cols-[272px_1fr]">
-      <aside className="brand-rail text-white p-4 hidden lg:flex lg:flex-col sticky top-0 h-screen">
+    <div className="min-h-screen lg:h-dvh lg:overflow-hidden lg:grid lg:grid-cols-[272px_minmax(0,1fr)]">
+      <aside className="brand-rail text-white p-4 hidden lg:flex lg:flex-col lg:h-dvh lg:min-h-0 lg:overflow-hidden lg:self-start">
         <SideNav user={user} pathname={pathname} onLogout={handleLogout} />
       </aside>
 
-      <div className="min-w-0 flex flex-col">
+      <div className="min-w-0 flex flex-col min-h-screen lg:min-h-0 lg:h-dvh lg:overflow-y-auto">
         <header className="sticky top-0 z-30 border-b border-mist/80 bg-white/85 backdrop-blur-md">
           <div className="flex items-center justify-between gap-3 px-3 sm:px-6 lg:px-8 h-14">
             <div className="flex items-center gap-3 min-w-0">

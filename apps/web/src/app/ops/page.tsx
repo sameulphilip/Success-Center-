@@ -778,13 +778,13 @@ export default function OpsPage() {
                 </FieldLabel>
               </div>
               <p className="text-[11px] text-navy/45">
-                المدرس ياخد الباقي:{' '}
-                {Math.max(
-                  0,
-                  Number(openForm.feeAmount || 0) -
-                    Number(openForm.centerAmount || 0),
-                ).toLocaleString('en-EG')}{' '}
-                ج.م للطالب
+                {Number(openForm.centerAmount || 0) >
+                Number(openForm.feeAmount || 0)
+                  ? 'مبلغ السنتر أكبر من سعر الحصة — المدرس مش هياخد من الحصة دي'
+                  : `المدرس ياخد الباقي: ${(
+                      Number(openForm.feeAmount || 0) -
+                      Number(openForm.centerAmount || 0)
+                    ).toLocaleString('en-EG')} ج.م للطالب`}
               </p>
               <button
                 type="submit"
@@ -1018,13 +1018,13 @@ export default function OpsPage() {
                       </FieldLabel>
                     </div>
                     <p className="text-[11px] text-navy/45">
-                      المدرس ياخد الباقي:{' '}
-                      {Math.max(
-                        0,
-                        Number(editForm.feeAmount || 0) -
-                          Number(editForm.centerAmount || 0),
-                      ).toLocaleString('en-EG')}{' '}
-                      ج.م للطالب · التحصيل اللي اتعمل قبل كده مش بيتغير
+                      {Number(editForm.centerAmount || 0) >
+                      Number(editForm.feeAmount || 0)
+                        ? 'مبلغ السنتر أكبر من سعر الحصة — المدرس مش هياخد من الحصة دي · التحصيل اللي اتعمل قبل كده مش بيتغير'
+                        : `المدرس ياخد الباقي: ${(
+                            Number(editForm.feeAmount || 0) -
+                            Number(editForm.centerAmount || 0)
+                          ).toLocaleString('en-EG')} ج.م للطالب · التحصيل اللي اتعمل قبل كده مش بيتغير`}
                     </p>
                     <button
                       type="submit"

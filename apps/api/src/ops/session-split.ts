@@ -25,7 +25,8 @@ export function splitSessionNet(opts: {
   const centerAmt = toNum(opts.centerAmount);
 
   if (centerAmt != null && fee > 0) {
-    const centerShare = Math.round(net * (centerAmt / fee) * 100) / 100;
+    const ratio = Math.min(1, centerAmt / fee);
+    const centerShare = Math.round(net * ratio * 100) / 100;
     const teacherShare = Math.round((net - centerShare) * 100) / 100;
     return { teacherShare, centerShare };
   }
@@ -38,6 +39,6 @@ export function splitSessionNet(opts: {
 
 export function teacherPercentFromCenter(feeAmount: number, centerAmount: number) {
   if (feeAmount <= 0) return 0;
-  const teacher = feeAmount - centerAmount;
+  const teacher = Math.max(0, feeAmount - centerAmount);
   return Math.round((teacher / feeAmount) * 10000) / 100;
 }

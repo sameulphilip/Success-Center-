@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { CashExpenseFrom, Prisma, SessionPayStatus } from '@prisma/client';
+import { CashExpenseFrom, ExtraRevenueCashTo, OnlineCodeStatus, Prisma, SessionPayStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 export const EXPENSE_CATEGORIES = [
@@ -103,6 +103,11 @@ export class CashService {
     const range = { gte: start, lte: end };
     const confirmed = SessionPayStatus.CONFIRMED;
 
+    const drawerRev = {
+      payStatus: confirmed,
+      confirmedAt: range,
+      cashTo: ExtraRevenueCashTo.DRAWER,
+    };
     const [payments, sessions, online, handouts, rentals] = await Promise.all([
       this.prisma.payment.findMany({
         where: { paidAt: range },
@@ -119,15 +124,15 @@ export class CashService {
         select: { amount: true, method: true },
       }),
       this.prisma.onlineCodeSale.findMany({
-        where: { payStatus: confirmed, confirmedAt: range },
+        where: drawerRev,
         select: { amount: true, method: true },
       }),
       this.prisma.handoutSale.findMany({
-        where: { payStatus: confirmed, confirmedAt: range },
+        where: drawerRev,
         select: { amount: true, method: true },
       }),
       this.prisma.roomRental.findMany({
-        where: { payStatus: confirmed, confirmedAt: range },
+        where: drawerRev,
         select: { amount: true, method: true },
       }),
     ]);
@@ -215,28 +220,179 @@ export class CashService {
   }
 
   private async balances() {
-    const [closes, safeExp, ownerExp, handovers] = await Promise.all([
-      this.prisma.cashDayClose.aggregate({ _sum: { transferredToSafe: true } }),
-      this.prisma.cashExpense.aggregate({
-        where: { paidFrom: CashExpenseFrom.SAFE },
-        _sum: { amount: true },
-      }),
-      this.prisma.cashExpense.aggregate({
-        where: { paidFrom: CashExpenseFrom.OWNER },
-        _sum: { amount: true },
-      }),
-      this.prisma.cashHandover.aggregate({ _sum: { amount: true } }),
-    ]);
+    const ownerRev = {
+      payStatus: SessionPayStatus.CONFIRMED,
+      cashTo: ExtraRevenueCashTo.OWNER,
+    };
+    const [closes, safeExp, ownerExp, handovers, onlineOwner, handoutOwner, rentalOwner] =
+      await Promise.all([
+        this.prisma.cashDayClose.aggregate({ _sum: { transferredToSafe: true } }),
+        this.prisma.cashExpense.aggregate({
+          where: { paidFrom: CashExpenseFrom.SAFE },
+          _sum: { amount: true },
+        }),
+        this.prisma.cashExpense.aggregate({
+          where: { paidFrom: CashExpenseFrom.OWNER },
+          _sum: { amount: true },
+        }),
+        this.prisma.cashHandover.aggregate({ _sum: { amount: true } }),
+        this.prisma.onlineCodeSale.aggregate({
+          where: ownerRev,
+          _sum: { amount: true },
+        }),
+        this.prisma.handoutSale.aggregate({
+          where: ownerRev,
+          _sum: { amount: true },
+        }),
+        this.prisma.roomRental.aggregate({
+          where: ownerRev,
+          _sum: { amount: true },
+        }),
+      ]);
     const intoSafe = money(closes._sum.transferredToSafe);
     const outSafeExp = money(safeExp._sum.amount);
     const handed = money(handovers._sum.amount);
     const ownerSpent = money(ownerExp._sum.amount);
+    const ownerExtraRevenue =
+      money(onlineOwner._sum.amount) +
+      money(handoutOwner._sum.amount) +
+      money(rentalOwner._sum.amount);
     return {
       safeBalance: intoSafe - outSafeExp - handed,
-      ownerBalance: handed - ownerSpent,
+      ownerBalance: handed - ownerSpent + ownerExtraRevenue,
       totalHandedToOwner: handed,
       ownerSpent,
+      ownerExtraRevenue,
     };
+  }
+
+  private async extraRevenueSales(forReception: boolean) {
+    const confirmed = SessionPayStatus.CONFIRMED;
+    const where = forReception
+      ? { payStatus: confirmed, cashTo: ExtraRevenueCashTo.DRAWER }
+      : { payStatus: confirmed };
+    const [online, handouts, rentals] = await Promise.all([
+      this.prisma.onlineCodeSale.findMany({
+        where,
+        select: {
+          id: true,
+          amount: true,
+          method: true,
+          cashTo: true,
+          confirmedAt: true,
+          createdAt: true,
+          soldByUserId: true,
+          receiptNumber: true,
+          buyerName: true,
+          buyerPhone: true,
+          offer: { select: { title: true } },
+        },
+        orderBy: { confirmedAt: 'desc' },
+        take: 80,
+      }),
+      this.prisma.handoutSale.findMany({
+        where,
+        select: {
+          id: true,
+          amount: true,
+          method: true,
+          cashTo: true,
+          confirmedAt: true,
+          createdAt: true,
+          soldByUserId: true,
+          receiptNumber: true,
+          qty: true,
+          product: { select: { title: true } },
+        },
+        orderBy: { confirmedAt: 'desc' },
+        take: 80,
+      }),
+      this.prisma.roomRental.findMany({
+        where,
+        select: {
+          id: true,
+          amount: true,
+          method: true,
+          cashTo: true,
+          confirmedAt: true,
+          createdAt: true,
+          createdByUserId: true,
+          receiptNumber: true,
+          renterName: true,
+          title: true,
+          classroom: { select: { name: true } },
+        },
+        orderBy: { confirmedAt: 'desc' },
+        take: 80,
+      }),
+    ]);
+
+    const rows = [
+      ...online.map((s) => ({
+        id: s.id,
+        kind: 'online' as const,
+        kindLabel: 'أونلاين',
+        title: s.offer.title,
+        detail: s.buyerName || s.receiptNumber,
+        amount: money(s.amount),
+        method: s.method,
+        cashTo: s.cashTo,
+        at: s.confirmedAt || s.createdAt,
+        soldByUserId: s.soldByUserId,
+        receiptNumber: s.receiptNumber,
+      })),
+      ...handouts.map((s) => ({
+        id: s.id,
+        kind: 'handout' as const,
+        kindLabel: 'مذكرة',
+        title: s.product.title,
+        detail: `×${s.qty} · ${s.receiptNumber}`,
+        amount: money(s.amount),
+        method: s.method,
+        cashTo: s.cashTo,
+        at: s.confirmedAt || s.createdAt,
+        soldByUserId: s.soldByUserId,
+        receiptNumber: s.receiptNumber,
+      })),
+      ...rentals.map((s) => ({
+        id: s.id,
+        kind: 'rental' as const,
+        kindLabel: 'قاعة',
+        title: s.title || s.classroom.name,
+        detail: s.renterName,
+        amount: money(s.amount),
+        method: s.method,
+        cashTo: s.cashTo,
+        at: s.confirmedAt || s.createdAt,
+        soldByUserId: s.createdByUserId,
+        receiptNumber: s.receiptNumber,
+      })),
+    ]
+      .sort((a, b) => +new Date(b.at) - +new Date(a.at))
+      .slice(0, 80);
+
+    const userIds = rows.map((r) => r.soldByUserId).filter(Boolean) as string[];
+    const users = userIds.length
+      ? await this.prisma.user.findMany({
+          where: { id: { in: [...new Set(userIds)] } },
+          select: { id: true, fullName: true },
+        })
+      : [];
+    const names = new Map(users.map((u) => [u.id, u.fullName]));
+
+    return rows.map((r) => ({
+      id: r.id,
+      kind: r.kind,
+      kindLabel: r.kindLabel,
+      title: r.title,
+      detail: r.detail,
+      amount: r.amount,
+      method: r.method,
+      cashTo: r.cashTo,
+      at: r.at,
+      receiptNumber: r.receiptNumber,
+      soldByName: r.soldByUserId ? names.get(r.soldByUserId) || null : null,
+    }));
   }
 
   async snapshot(ymd = cairoYmd(), viewer?: { userId: string; role?: string }) {
@@ -252,7 +408,7 @@ export class CashService {
       paidFrom: CashExpenseFrom.DRAWER,
       businessDate,
     };
-    const [collected, drawerExpAgg, drawerToday, close, balances, expenses, handovers, closes, unclosedPrevious] =
+    const [collected, drawerExpAgg, drawerToday, close, balances, expenses, handovers, closes, unclosedPrevious, extraRevenueSales] =
       await Promise.all([
         this.dayCollections(ymd),
         this.prisma.cashExpense.aggregate({
@@ -279,6 +435,7 @@ export class CashService {
           take: 14,
         }),
         this.unclosedPrevious(ymd),
+        this.extraRevenueSales(isReception),
       ]);
 
     const drawerExpenses = money(drawerExpAgg._sum.amount);
@@ -331,6 +488,8 @@ export class CashService {
       totalHandedToOwner: isReception
         ? undefined
         : balances.totalHandedToOwner,
+      ownerExtraRevenue: isReception ? undefined : balances.ownerExtraRevenue,
+      extraRevenueSales,
       viewerScope: isReception ? 'reception' : 'owner',
       canOwnerExpense: !isReception,
       categories: EXPENSE_CATEGORIES,
@@ -460,6 +619,43 @@ export class CashService {
     if (!expense) throw new NotFoundException('المصروف غير موجود');
     await this.prisma.cashExpense.delete({ where: { id } });
     return { ok: true, deletedId: id };
+  }
+
+  async deleteExtraRevenue(kind: string, id: string) {
+    const type = String(kind || '').toLowerCase();
+    if (type === 'online') {
+      const sale = await this.prisma.onlineCodeSale.findUnique({
+        where: { id },
+      });
+      if (!sale) throw new NotFoundException('البيع غير موجود');
+      await this.prisma.$transaction([
+        this.prisma.onlineCodeSale.delete({ where: { id } }),
+        this.prisma.onlineAccessCode.update({
+          where: { id: sale.codeId },
+          data: { status: OnlineCodeStatus.AVAILABLE },
+        }),
+      ]);
+      return { ok: true, deletedId: id, kind: 'online' };
+    }
+    if (type === 'handout') {
+      const sale = await this.prisma.handoutSale.findUnique({ where: { id } });
+      if (!sale) throw new NotFoundException('البيع غير موجود');
+      await this.prisma.$transaction([
+        this.prisma.handoutProduct.update({
+          where: { id: sale.productId },
+          data: { stock: { increment: sale.qty } },
+        }),
+        this.prisma.handoutSale.delete({ where: { id } }),
+      ]);
+      return { ok: true, deletedId: id, kind: 'handout' };
+    }
+    if (type === 'rental') {
+      const rental = await this.prisma.roomRental.findUnique({ where: { id } });
+      if (!rental) throw new NotFoundException('الحجز غير موجود');
+      await this.prisma.roomRental.delete({ where: { id } });
+      return { ok: true, deletedId: id, kind: 'rental' };
+    }
+    throw new BadRequestException('نوع البيع غير صالح');
   }
 
   async closeDay(
