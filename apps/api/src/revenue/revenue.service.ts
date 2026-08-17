@@ -15,7 +15,7 @@ import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizePhone } from '../common/phone.util';
 import {
-  splitSessionNet,
+  splitExtraRevenue,
   teacherPercentFromCenter,
 } from '../ops/session-split';
 
@@ -34,6 +34,22 @@ function cashToForRole(role?: string) {
   return ExtraRevenueCashTo.DRAWER;
 }
 
+function storedCenter(row: {
+  price: unknown;
+  teacherPercent: unknown;
+  centerAmount?: unknown;
+}) {
+  if (row.centerAmount != null && row.centerAmount !== '') {
+    const n = Number(row.centerAmount);
+    if (Number.isFinite(n)) return n;
+  }
+  const price = Number(row.price) || 0;
+  const pct = Number(row.teacherPercent) || 0;
+  return Math.round(price * (1 - pct / 100) * 100) / 100;
+}
+
+const MAX_OFFER_CODES = 5000;
+
 @Injectable()
 export class RevenueService {
   constructor(private readonly prisma: PrismaService) {}
@@ -50,6 +66,28 @@ export class RevenueService {
     });
   }
 
+  private resolveOfferShare(price: number, data: {
+    teacherPercent?: number;
+    centerAmount?: number;
+  }) {
+    if (price < 0) throw new BadRequestException('السعر غير صالح');
+    const center =
+      data.centerAmount != null && !Number.isNaN(Number(data.centerAmount))
+        ? Number(data.centerAmount)
+        : data.teacherPercent != null
+          ? Math.round(
+              price * (1 - Number(data.teacherPercent) / 100) * 100,
+            ) / 100
+          : 0;
+    if (center < 0) {
+      throw new BadRequestException('مبلغ السنتر غير صالح');
+    }
+    return {
+      center,
+      teacherPercent: teacherPercentFromCenter(price, center),
+    };
+  }
+
   async createOffer(data: {
     teacherId: string;
     subjectId?: string;
@@ -60,34 +98,30 @@ export class RevenueService {
     notes?: string;
     codesCount?: number;
   }) {
-    if (data.price < 0) throw new BadRequestException('السعر غير صالح');
-    const center =
-      data.centerAmount != null && !Number.isNaN(Number(data.centerAmount))
-        ? Number(data.centerAmount)
-        : data.teacherPercent != null
-          ? Math.round(
-              data.price * (1 - Number(data.teacherPercent) / 100) * 100,
-            ) / 100
-          : 0;
-    if (center < 0) {
-      throw new BadRequestException('مبلغ السنتر غير صالح');
-    }
-    const teacherPercent = teacherPercentFromCenter(data.price, center);
-    const count = Math.min(Math.max(data.codesCount ?? 20, 1), 200);
-    const codes = Array.from({ length: count }, () => ({
-      code: `ON-${genCode()}`,
-    }));
-
-    return this.prisma.onlineOffer.create({
+    const { teacherPercent, center } = this.resolveOfferShare(data.price, data);
+    const count = Math.min(
+      Math.max(data.codesCount ?? 20, 1),
+      MAX_OFFER_CODES,
+    );
+    const offer = await this.prisma.onlineOffer.create({
       data: {
         teacherId: data.teacherId,
         subjectId: data.subjectId || null,
         title: data.title.trim(),
         price: data.price,
         teacherPercent,
+        centerAmount: center,
         notes: data.notes,
-        codes: { create: codes },
       },
+    });
+    await this.prisma.onlineAccessCode.createMany({
+      data: Array.from({ length: count }, () => ({
+        offerId: offer.id,
+        code: `ON-${genCode()}`,
+      })),
+    });
+    return this.prisma.onlineOffer.findUniqueOrThrow({
+      where: { id: offer.id },
       include: {
         teacher: true,
         subject: true,
@@ -97,12 +131,102 @@ export class RevenueService {
     });
   }
 
+  async updateOffer(
+    id: string,
+    data: {
+      teacherId?: string;
+      subjectId?: string | null;
+      title?: string;
+      price?: number;
+      teacherPercent?: number;
+      centerAmount?: number;
+      notes?: string;
+      isActive?: boolean;
+    },
+  ) {
+    const offer = await this.prisma.onlineOffer.findUnique({ where: { id } });
+    if (!offer) throw new NotFoundException('العرض غير موجود');
+
+    const price =
+      data.price != null && !Number.isNaN(Number(data.price))
+        ? Number(data.price)
+        : Number(offer.price);
+    const hasShare =
+      data.centerAmount != null || data.teacherPercent != null || data.price != null;
+    const share = hasShare
+      ? this.resolveOfferShare(price, {
+          centerAmount:
+            data.centerAmount != null
+              ? Number(data.centerAmount)
+              : data.teacherPercent != null
+                ? undefined
+                : offer.centerAmount != null
+                  ? Number(offer.centerAmount)
+                  : Math.round(
+                      Number(offer.price) *
+                        (1 - Number(offer.teacherPercent) / 100) *
+                        100,
+                    ) / 100,
+          teacherPercent: data.teacherPercent,
+        })
+      : {
+          teacherPercent: Number(offer.teacherPercent),
+          center:
+            offer.centerAmount != null
+              ? Number(offer.centerAmount)
+              : Math.round(
+                  Number(offer.price) *
+                    (1 - Number(offer.teacherPercent) / 100) *
+                    100,
+                ) / 100,
+        };
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.onlineOffer.update({
+        where: { id },
+        data: {
+          ...(data.teacherId ? { teacherId: data.teacherId } : {}),
+          ...(data.subjectId !== undefined
+            ? { subjectId: data.subjectId || null }
+            : {}),
+          ...(data.title != null ? { title: data.title.trim() } : {}),
+          price,
+          teacherPercent: share.teacherPercent,
+          centerAmount: share.center,
+          ...(data.notes !== undefined ? { notes: data.notes } : {}),
+          ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+        },
+      });
+      const { teacherShare, centerShare } = splitExtraRevenue(
+        price,
+        share.center,
+      );
+      const sales = await tx.onlineCodeSale.updateMany({
+        where: { offerId: id },
+        data: {
+          amount: price,
+          teacherShare,
+          centerShare,
+        },
+      });
+      const offer = await tx.onlineOffer.findUniqueOrThrow({
+        where: { id: updated.id },
+        include: {
+          teacher: true,
+          subject: true,
+          _count: { select: { codes: true, sales: true } },
+        },
+      });
+      return { ...offer, updatedSales: sales.count };
+    });
+  }
+
   async addCodes(offerId: string, count = 10) {
     const offer = await this.prisma.onlineOffer.findUnique({
       where: { id: offerId },
     });
     if (!offer) throw new NotFoundException('العرض غير موجود');
-    const n = Math.min(Math.max(count, 1), 200);
+    const n = Math.min(Math.max(count, 1), MAX_OFFER_CODES);
     await this.prisma.onlineAccessCode.createMany({
       data: Array.from({ length: n }, () => ({
         offerId,
@@ -121,7 +245,7 @@ export class RevenueService {
       where: { offerId },
       include: { sale: true },
       orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
-      take: 300,
+      take: MAX_OFFER_CODES,
     });
   }
 
@@ -149,7 +273,10 @@ export class RevenueService {
       throw new BadRequestException('رقم عملية فودافون مطلوب');
     }
 
-    const qty = Math.min(Math.max(Math.floor(Number(data.qty) || 1), 1), 50);
+    const qty = Math.min(
+      Math.max(Math.floor(Number(data.qty) || 1), 1),
+      MAX_OFFER_CODES,
+    );
     const available = await this.prisma.onlineAccessCode.findMany({
       where: { offerId, status: OnlineCodeStatus.AVAILABLE },
       orderBy: { createdAt: 'asc' },
@@ -163,16 +290,11 @@ export class RevenueService {
     }
 
     const unit = Number(offer.price);
-    const centerAmt =
-      Math.round(
-        unit * (1 - Number(offer.teacherPercent) / 100) * 100,
-      ) / 100;
-    const { teacherShare, centerShare } = splitSessionNet({
-      net: unit,
-      feeAmount: unit,
-      centerAmount: centerAmt,
-      teacherPercent: offer.teacherPercent,
-    });
+    const centerAmt = storedCenter(offer);
+    const { teacherShare, centerShare } = splitExtraRevenue(
+      unit,
+      centerAmt,
+    );
     const isCash = data.method === SessionPayMethod.CASH;
     const cashTo = cashToForRole(role);
     const buyerPhone = data.buyerPhone
@@ -223,6 +345,8 @@ export class RevenueService {
     return {
       count: sales.length,
       totalAmount: unit * sales.length,
+      totalCenterShare: centerShare * sales.length,
+      totalTeacherShare: teacherShare * sales.length,
       cashTo,
       codes: sales.map((s) => s.code.code),
       sales,
@@ -293,6 +417,7 @@ export class RevenueService {
         title: data.title.trim(),
         price: data.price,
         teacherPercent,
+        centerAmount: center,
         teacherId: data.teacherId || null,
         stock: data.stock ?? 0,
       },
@@ -330,16 +455,11 @@ export class RevenueService {
 
     const unitPrice = Number(product.price);
     const amount = unitPrice * qty;
-    const centerAmt =
-      Math.round(
-        unitPrice * (1 - Number(product.teacherPercent) / 100) * 100,
-      ) / 100;
-    const { teacherShare, centerShare } = splitSessionNet({
-      net: amount,
-      feeAmount: unitPrice,
-      centerAmount: centerAmt,
-      teacherPercent: product.teacherPercent,
-    });
+    const { teacherShare, centerShare } = splitExtraRevenue(
+      unitPrice,
+      storedCenter(product),
+      qty,
+    );
     const isCash = data.method === SessionPayMethod.CASH;
 
     return this.prisma.$transaction(async (tx) => {

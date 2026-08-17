@@ -125,11 +125,11 @@ export class CashService {
       }),
       this.prisma.onlineCodeSale.findMany({
         where: drawerRev,
-        select: { amount: true, method: true },
+        select: { centerShare: true, method: true },
       }),
       this.prisma.handoutSale.findMany({
         where: drawerRev,
-        select: { amount: true, method: true },
+        select: { centerShare: true, method: true },
       }),
       this.prisma.roomRental.findMany({
         where: drawerRev,
@@ -154,11 +154,19 @@ export class CashService {
       }
     }
 
+    const onlineRows: MoneyRow[] = online.map((s) => ({
+      amount: s.centerShare,
+      method: s.method,
+    }));
+    const handoutRows: MoneyRow[] = handouts.map((s) => ({
+      amount: s.centerShare,
+      method: s.method,
+    }));
     const totals = splitMoney([
       ...payments,
       ...sessions,
-      ...online,
-      ...handouts,
+      ...onlineRows,
+      ...handoutRows,
       ...rentals,
     ]);
     const breakdown = [
@@ -166,8 +174,8 @@ export class CashService {
       bucket('groups', 'اشتراكات مجموعات', subscriptions),
       bucket('receipts', 'إيصالات أخرى', otherReceipts),
       bucket('sessions', 'حصص اليوم', sessions),
-      bucket('online', 'أكواد أونلاين', online),
-      bucket('handouts', 'مذكرات', handouts),
+      bucket('online', 'أكواد أونلاين', onlineRows),
+      bucket('handouts', 'مذكرات', handoutRows),
       bucket('rentals', 'تأجير قاعات', rentals),
     ].filter((b) => b.total > 0);
 
@@ -238,11 +246,11 @@ export class CashService {
         this.prisma.cashHandover.aggregate({ _sum: { amount: true } }),
         this.prisma.onlineCodeSale.aggregate({
           where: ownerRev,
-          _sum: { amount: true },
+          _sum: { centerShare: true },
         }),
         this.prisma.handoutSale.aggregate({
           where: ownerRev,
-          _sum: { amount: true },
+          _sum: { centerShare: true },
         }),
         this.prisma.roomRental.aggregate({
           where: ownerRev,
@@ -254,8 +262,8 @@ export class CashService {
     const handed = money(handovers._sum.amount);
     const ownerSpent = money(ownerExp._sum.amount);
     const ownerExtraRevenue =
-      money(onlineOwner._sum.amount) +
-      money(handoutOwner._sum.amount) +
+      money(onlineOwner._sum.centerShare) +
+      money(handoutOwner._sum.centerShare) +
       money(rentalOwner._sum.amount);
     return {
       safeBalance: intoSafe - outSafeExp - handed,
@@ -277,6 +285,8 @@ export class CashService {
         select: {
           id: true,
           amount: true,
+          teacherShare: true,
+          centerShare: true,
           method: true,
           cashTo: true,
           confirmedAt: true,
@@ -285,7 +295,12 @@ export class CashService {
           receiptNumber: true,
           buyerName: true,
           buyerPhone: true,
-          offer: { select: { title: true } },
+          offer: {
+            select: {
+              title: true,
+              teacher: { select: { firstName: true, lastName: true } },
+            },
+          },
         },
         orderBy: { confirmedAt: 'desc' },
         take: 80,
@@ -295,6 +310,8 @@ export class CashService {
         select: {
           id: true,
           amount: true,
+          teacherShare: true,
+          centerShare: true,
           method: true,
           cashTo: true,
           confirmedAt: true,
@@ -333,8 +350,17 @@ export class CashService {
         kind: 'online' as const,
         kindLabel: 'أونلاين',
         title: s.offer.title,
-        detail: s.buyerName || s.receiptNumber,
-        amount: money(s.amount),
+        detail: [
+          [s.offer.teacher.firstName, s.offer.teacher.lastName]
+            .filter((p) => p && p !== '-')
+            .join(' '),
+          s.buyerName || s.receiptNumber,
+        ]
+          .filter(Boolean)
+          .join(' · '),
+        amount: money(s.centerShare),
+        teacherShare: money(s.teacherShare),
+        grossAmount: money(s.amount),
         method: s.method,
         cashTo: s.cashTo,
         at: s.confirmedAt || s.createdAt,
@@ -347,7 +373,9 @@ export class CashService {
         kindLabel: 'مذكرة',
         title: s.product.title,
         detail: `×${s.qty} · ${s.receiptNumber}`,
-        amount: money(s.amount),
+        amount: money(s.centerShare),
+        teacherShare: money(s.teacherShare),
+        grossAmount: money(s.amount),
         method: s.method,
         cashTo: s.cashTo,
         at: s.confirmedAt || s.createdAt,
@@ -361,6 +389,8 @@ export class CashService {
         title: s.title || s.classroom.name,
         detail: s.renterName,
         amount: money(s.amount),
+        teacherShare: 0,
+        grossAmount: money(s.amount),
         method: s.method,
         cashTo: s.cashTo,
         at: s.confirmedAt || s.createdAt,
@@ -387,6 +417,8 @@ export class CashService {
       title: r.title,
       detail: r.detail,
       amount: r.amount,
+      teacherShare: r.teacherShare,
+      grossAmount: r.grossAmount,
       method: r.method,
       cashTo: r.cashTo,
       at: r.at,

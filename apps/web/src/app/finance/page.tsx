@@ -108,6 +108,8 @@ type CashSnapshot = {
     title: string;
     detail?: string | null;
     amount: number;
+    teacherShare?: number;
+    grossAmount?: number;
     method: string;
     cashTo: 'DRAWER' | 'OWNER';
     at: string;
@@ -531,8 +533,8 @@ export default function FinancePage() {
         title="مبيعات الإيرادات الإضافية"
         subtitle={
           isReception
-            ? 'المبيعات اللي دخلت الدرج من الأونلاين والملازم والقاعات'
-            : `الدرج ${money(extraDrawerTotal)} · صاحب السنتر ${money(extraOwnerTotal)}`
+            ? 'نصيب السنتر بس بيدخل الدرج · الباقي يتسجل للمدرس'
+            : `نصيب السنتر: الدرج ${money(extraDrawerTotal)} · صاحب السنتر ${money(extraOwnerTotal)}`
         }
       >
         <div className="overflow-auto">
@@ -544,7 +546,7 @@ export default function FinancePage() {
                 <th className="px-3 py-2 text-right font-medium">البيان</th>
                 <th className="px-3 py-2 text-right font-medium">مين سجّل</th>
                 <th className="px-3 py-2 text-right font-medium">راحت فين</th>
-                <th className="px-3 py-2 text-left font-medium">المبلغ</th>
+                <th className="px-3 py-2 text-left font-medium">نصيب السنتر</th>
                 {canDelete ? (
                   <th className="px-3 py-2 text-left font-medium"></th>
                 ) : null}
@@ -578,8 +580,16 @@ export default function FinancePage() {
                       {extraCashToLabel[s.cashTo] || s.cashTo}
                     </span>
                   </td>
-                  <td className="px-3 py-2 tabular-nums text-left font-extrabold">
-                    {money(s.amount)}
+                  <td className="px-3 py-2 tabular-nums text-left">
+                    <p className="font-extrabold">{money(s.amount)}</p>
+                    {Number(s.teacherShare || 0) > 0.009 ? (
+                      <p className="text-[11px] text-navy/40">
+                        مدرس {money(Number(s.teacherShare))}
+                        {s.grossAmount
+                          ? ` · كامل ${money(Number(s.grossAmount))}`
+                          : ''}
+                      </p>
+                    ) : null}
                   </td>
                   {canDelete ? (
                     <td className="px-3 py-2 text-left">

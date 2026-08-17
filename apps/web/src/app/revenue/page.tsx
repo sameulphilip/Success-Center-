@@ -11,7 +11,15 @@ import {
 } from '@/components/ui';
 import { api, getStoredUser } from '@/lib/api';
 
-type Teacher = { id: string; firstName: string; lastName: string };
+type Teacher = {
+  id: string;
+  firstName: string;
+  lastName: string;
+  subjects?: {
+    subjectId?: string;
+    subject?: { id: string; nameAr: string } | null;
+  }[];
+};
 type Subject = { id: string; nameAr: string };
 type Classroom = { id: string; name: string; capacity: number };
 
@@ -20,7 +28,10 @@ type Offer = {
   title: string;
   price: string | number;
   teacherPercent: string | number;
+  centerAmount?: string | number | null;
   isActive: boolean;
+  teacherId: string;
+  subjectId?: string | null;
   teacher: Teacher;
   subject?: Subject | null;
   _count?: { codes: number; sales: number };
@@ -46,6 +57,7 @@ type Handout = {
   title: string;
   price: string | number;
   teacherPercent: string | number;
+  centerAmount?: string | number | null;
   stock: number;
   teacher?: Teacher | null;
 };
@@ -83,6 +95,50 @@ function cashToLabel(to?: string) {
   return to === 'OWNER' ? 'صاحب السنتر' : 'الدرج';
 }
 
+function teacherName(t?: { firstName?: string; lastName?: string } | null) {
+  if (!t?.firstName) return '';
+  const last = t.lastName && t.lastName !== '-' ? t.lastName : '';
+  return `${t.firstName} ${last}`.trim();
+}
+
+function subjectsOf(t?: Teacher | null): { id: string; nameAr: string }[] {
+  const list = (t?.subjects || [])
+    .map((s) => s.subject || (s.subjectId ? { id: s.subjectId, nameAr: '' } : null))
+    .filter((s): s is { id: string; nameAr: string } => !!s?.id);
+  const seen = new Set<string>();
+  return list.filter((s) => {
+    if (seen.has(s.id)) return false;
+    seen.add(s.id);
+    return true;
+  });
+}
+
+function centerCutOf(
+  price: string | number,
+  teacherPercent: string | number,
+  centerAmount?: string | number | null,
+) {
+  if (centerAmount != null && centerAmount !== '') {
+    const n = Number(centerAmount);
+    if (Number.isFinite(n)) return n;
+  }
+  return (
+    Math.round(
+      Number(price) * (1 - Number(teacherPercent) / 100) * 100,
+    ) / 100
+  );
+}
+
+const emptyOfferForm = {
+  teacherId: '',
+  subjectId: '',
+  title: '',
+  price: 0,
+  centerAmount: 0,
+  codesCount: 20,
+  isActive: true,
+};
+
 export default function RevenuePage() {
   const me = getStoredUser();
   const toOwner =
@@ -105,14 +161,8 @@ export default function RevenuePage() {
   const [handoutSales, setHandoutSales] = useState<HandoutSale[]>([]);
   const [rentals, setRentals] = useState<Rental[]>([]);
 
-  const [offerForm, setOfferForm] = useState({
-    teacherId: '',
-    subjectId: '',
-    title: '',
-    price: 0,
-    centerAmount: 0,
-    codesCount: 20,
-  });
+  const [offerForm, setOfferForm] = useState({ ...emptyOfferForm });
+  const [editingOfferId, setEditingOfferId] = useState('');
   const [sellOnline, setSellOnline] = useState({
     offerId: '',
     method: 'CASH',
@@ -165,15 +215,26 @@ export default function RevenuePage() {
     setHandouts(h);
     setHandoutSales(hs);
     setRentals(r);
-    if (!offerForm.teacherId && t[0]) {
-      setOfferForm((f) => ({ ...f, teacherId: t[0].id }));
+    if (!editingOfferId) {
+      setOfferForm((f) => {
+        const teacherId = f.teacherId || t[0]?.id || '';
+        const teacher = t.find((x) => x.id === teacherId);
+        const subs = subjectsOf(teacher);
+        const subjectId =
+          (f.subjectId && subs.some((x) => x.id === f.subjectId)
+            ? f.subjectId
+            : subs[0]?.id) || f.subjectId || '';
+        return { ...f, teacherId, subjectId };
+      });
     }
     if (!rentalForm.classroomId && c[0]) {
       setRentalForm((f) => ({ ...f, classroomId: c[0].id }));
     }
-    if (!sellOnline.offerId && o[0]) {
-      setSellOnline((f) => ({ ...f, offerId: o[0].id }));
-    }
+    const activeOffers = o.filter((x) => x.isActive);
+    setSellOnline((f) => {
+      if (f.offerId && activeOffers.some((x) => x.id === f.offerId)) return f;
+      return { ...f, offerId: activeOffers[0]?.id || '' };
+    });
     if (!sellHandout.productId && h[0]) {
       setSellHandout((f) => ({ ...f, productId: h[0].id }));
     }
@@ -188,19 +249,47 @@ export default function RevenuePage() {
     setCodes(await api(`/revenue/online/offers/${offerId}/codes`));
   }
 
-  async function createOffer(e: FormEvent) {
+  async function saveOffer(e: FormEvent) {
     e.preventDefault();
     setBusy('offer');
     setError('');
     try {
-      await api('/revenue/online/offers', {
-        method: 'POST',
-        body: JSON.stringify({
-          ...offerForm,
-          subjectId: offerForm.subjectId || undefined,
-        }),
-      });
-      setMsg('تم إنشاء عرض الأونلاين والأكواد');
+      if (editingOfferId) {
+        const updated = await api<{ updatedSales?: number }>(
+          `/revenue/online/offers/${editingOfferId}/update`,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              teacherId: offerForm.teacherId,
+              subjectId: offerForm.subjectId || null,
+              title: offerForm.title,
+              price: Number(offerForm.price),
+              centerAmount: Number(offerForm.centerAmount),
+              isActive: offerForm.isActive,
+            }),
+          },
+        );
+        const n = updated.updatedSales || 0;
+        setMsg(
+          n
+            ? `تم تعديل العرض وتحديث ${n} كود مباع والحسابات`
+            : 'تم تعديل العرض',
+        );
+        setEditingOfferId('');
+        setOfferForm({
+          ...emptyOfferForm,
+          teacherId: offerForm.teacherId,
+        });
+      } else {
+        await api('/revenue/online/offers', {
+          method: 'POST',
+          body: JSON.stringify({
+            ...offerForm,
+            subjectId: offerForm.subjectId || undefined,
+          }),
+        });
+        setMsg('تم إنشاء عرض الأونلاين والأكواد');
+      }
       await load();
     } catch (err: any) {
       setError(err.message);
@@ -209,12 +298,54 @@ export default function RevenuePage() {
     }
   }
 
+  function startEditOffer(o: Offer) {
+    setEditingOfferId(o.id);
+    setOfferForm({
+      teacherId: o.teacherId || o.teacher.id,
+      subjectId: o.subjectId || o.subject?.id || '',
+      title: o.title,
+      price: Number(o.price),
+      centerAmount: centerCutOf(o.price, o.teacherPercent, o.centerAmount),
+      codesCount: 20,
+      isActive: o.isActive,
+    });
+    setError('');
+    setMsg('');
+  }
+
+  function applyTeacher(teacherId: string) {
+    const teacher = teachers.find((x) => x.id === teacherId);
+    const subs = subjectsOf(teacher);
+    setOfferForm((f) => ({
+      ...f,
+      teacherId,
+      subjectId: subs[0]?.id || '',
+    }));
+  }
+
+  function cancelEditOffer() {
+    setEditingOfferId('');
+    const teacherId = teachers[0]?.id || '';
+    const subs = subjectsOf(teachers.find((x) => x.id === teacherId));
+    setOfferForm({
+      ...emptyOfferForm,
+      teacherId,
+      subjectId: subs[0]?.id || '',
+    });
+  }
+
   async function sellCode(e: FormEvent) {
     e.preventDefault();
     setBusy('sellOn');
     try {
       const sale = await api<
-        OnlineSale & { count?: number; codes?: string[]; totalAmount?: number }
+        OnlineSale & {
+          count?: number;
+          codes?: string[];
+          totalAmount?: number;
+          totalCenterShare?: number;
+          totalTeacherShare?: number;
+        }
       >(
         `/revenue/online/offers/${sellOnline.offerId}/sell`,
         {
@@ -234,8 +365,14 @@ export default function RevenuePage() {
         ? sale.codes.join(' · ')
         : sale.code.code;
       const n = sale.count || 1;
+      const center = Number(
+        sale.totalCenterShare ?? Number(sale.centerShare) * n,
+      );
+      const teacher = Number(
+        sale.totalTeacherShare ?? Number(sale.teacherShare) * n,
+      );
       setMsg(
-        `تم البيع${n > 1 ? ` (${n} كود)` : ''} — ${codesSold} · الفلوس على ${cashToLabel(sale.cashTo)}`,
+        `تم البيع${n > 1 ? ` (${n} كود)` : ''} — ${codesSold} · سنتر ${center.toLocaleString('en-EG')} على ${cashToLabel(sale.cashTo)} · مدرس ${teacher.toLocaleString('en-EG')}`,
       );
       await load();
       if (selectedOffer) await loadCodes(selectedOffer);
@@ -291,7 +428,9 @@ export default function RevenuePage() {
           }),
         },
       );
-      setMsg(`تم بيع الملزمة · الفلوس على ${cashToLabel(sale.cashTo)}`);
+      setMsg(
+        `تم بيع الملزمة · سنتر ${Number(sale.centerShare).toLocaleString('en-EG')} على ${cashToLabel(sale.cashTo)} · مدرس ${Number(sale.teacherShare).toLocaleString('en-EG')}`,
+      );
       await load();
     } catch (err: any) {
       setError(err.message);
@@ -340,6 +479,11 @@ export default function RevenuePage() {
     await api(`/revenue/rentals/${id}/cancel`, { method: 'POST' });
     await load();
   }
+
+  const teacherSubjects = subjectsOf(
+    teachers.find((t) => t.id === offerForm.teacherId),
+  );
+  const subjectOptions = teacherSubjects.length ? teacherSubjects : subjects;
 
   return (
     <AppShell>
@@ -400,8 +544,19 @@ export default function RevenuePage() {
 
       {tab === 'online' ? (
         <div className="grid gap-4 xl:grid-cols-2">
-          <SectionCard title="إنشاء عرض أونلاين + أكواد">
-            <form onSubmit={createOffer} className="space-y-2">
+          <SectionCard
+            title={
+              editingOfferId
+                ? 'تعديل عرض أونلاين'
+                : 'إنشاء عرض أونلاين + أكواد'
+            }
+            subtitle={
+              editingOfferId
+                ? 'تعديل السعر ومبلغ السنتر هيطبّق على كل الأكواد اللي اتباعت من العرض ده'
+                : undefined
+            }
+          >
+            <form onSubmit={saveOffer} className="space-y-2">
               <FieldLabel label="العنوان">
                 <input
                   className="field"
@@ -417,9 +572,7 @@ export default function RevenuePage() {
                   className="field"
                   required
                   value={offerForm.teacherId}
-                  onChange={(e) =>
-                    setOfferForm({ ...offerForm, teacherId: e.target.value })
-                  }
+                  onChange={(e) => applyTeacher(e.target.value)}
                 >
                   {teachers.map((t) => (
                     <option key={t.id} value={t.id}>
@@ -437,7 +590,7 @@ export default function RevenuePage() {
                   }
                 >
                   <option value="">—</option>
-                  {subjects.map((s) => (
+                  {subjectOptions.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.nameAr}
                     </option>
@@ -475,60 +628,98 @@ export default function RevenuePage() {
                     }
                   />
                 </FieldLabel>
-                <FieldLabel label="عدد أكواد">
-                  <input
-                    className="field"
-                    type="number"
-                    min={1}
-                    max={200}
-                    value={offerForm.codesCount}
-                    onChange={(e) =>
-                      setOfferForm({
-                        ...offerForm,
-                        codesCount: Number(e.target.value),
-                      })
-                    }
-                  />
+                <FieldLabel label={editingOfferId ? 'نشط' : 'عدد أكواد'}>
+                  {editingOfferId ? (
+                    <select
+                      className="field"
+                      value={offerForm.isActive ? '1' : '0'}
+                      onChange={(e) =>
+                        setOfferForm({
+                          ...offerForm,
+                          isActive: e.target.value === '1',
+                        })
+                      }
+                    >
+                      <option value="1">ظاهر للبيع</option>
+                      <option value="0">متوقف</option>
+                    </select>
+                  ) : (
+                    <input
+                      className="field"
+                      type="number"
+                      min={1}
+                      max={5000}
+                      value={offerForm.codesCount}
+                      onChange={(e) =>
+                        setOfferForm({
+                          ...offerForm,
+                          codesCount: Number(e.target.value),
+                        })
+                      }
+                    />
+                  )}
                 </FieldLabel>
               </div>
               <p className="text-[11px] text-navy/45">
                 {Number(offerForm.centerAmount || 0) >
                 Number(offerForm.price || 0)
-                  ? 'مبلغ السنتر أكبر من السعر — المدرس مش هياخد من العرض ده'
+                  ? `السعر ${Number(offerForm.price || 0).toLocaleString('en-EG')} · السنتر ${Number(offerForm.centerAmount || 0).toLocaleString('en-EG')} ج.م للكود — المدرس 0`
                   : `المدرس ياخد الباقي: ${(
                       Number(offerForm.price || 0) -
                       Number(offerForm.centerAmount || 0)
                     ).toLocaleString('en-EG')} ج.م للكود`}
               </p>
-              <button
-                type="submit"
-                className="btn-primary w-full"
-                disabled={busy === 'offer'}
-              >
-                إنشاء العرض
-              </button>
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  className="btn-primary flex-1"
+                  disabled={busy === 'offer'}
+                >
+                  {editingOfferId ? 'حفظ التعديل' : 'إنشاء العرض'}
+                </button>
+                {editingOfferId ? (
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    onClick={cancelEditOffer}
+                  >
+                    إلغاء
+                  </button>
+                ) : null}
+              </div>
             </form>
 
             <ul className="mt-4 space-y-2 max-h-56 overflow-auto">
               {offers.map((o) => (
-                <li key={o.id}>
+                <li
+                  key={o.id}
+                  className={`rounded-xl bg-sand px-3 py-2 ${
+                    editingOfferId === o.id ? 'ring-2 ring-navy/25' : ''
+                  } ${o.isActive ? '' : 'opacity-55'}`}
+                >
                   <button
                     type="button"
-                    className="w-full rounded-xl bg-sand px-3 py-2 text-right text-sm"
+                    className="w-full text-right text-sm"
                     onClick={() => loadCodes(o.id)}
                   >
                     <span className="font-semibold block">{o.title}</span>
                     <span className="text-[11px] text-navy/45">
                       {o.teacher.firstName} ·{' '}
                       {Number(o.price).toLocaleString('en-EG')} · سنتر{' '}
-                      {Math.round(
-                        Number(o.price) *
-                          (1 - Number(o.teacherPercent) / 100) *
-                          100,
-                      ) / 100}{' '}
-                      ج.م · أكواد {o._count?.codes ?? 0}
+                      {centerCutOf(o.price, o.teacherPercent, o.centerAmount)} ج.م · أكواد{' '}
+                      {o._count?.codes ?? 0}
+                      {!o.isActive ? ' · متوقف' : ''}
                     </span>
                   </button>
+                  {toOwner ? (
+                    <button
+                      type="button"
+                      className="mt-1 text-xs font-bold text-navy/70 hover:underline"
+                      onClick={() => startEditOffer(o)}
+                    >
+                      تعديل
+                    </button>
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -546,7 +737,9 @@ export default function RevenuePage() {
                       setSellOnline({ ...sellOnline, offerId: e.target.value })
                     }
                   >
-                    {offers.map((o) => (
+                    {offers
+                      .filter((o) => o.isActive)
+                      .map((o) => (
                       <option key={o.id} value={o.id}>
                         {o.title}
                       </option>
@@ -571,7 +764,7 @@ export default function RevenuePage() {
                       className="field"
                       type="number"
                       min={1}
-                      max={50}
+                      max={5000}
                       required
                       value={sellOnline.qty}
                       onChange={(e) =>
@@ -641,7 +834,13 @@ export default function RevenuePage() {
                     className="rounded-xl border border-mist px-3 py-2"
                   >
                     <div className="flex justify-between gap-2">
-                      <span className="font-semibold">{s.offer.title}</span>
+                      <span>
+                        <span className="font-semibold block">{s.offer.title}</span>
+                        <span className="text-[11px] text-navy/45">
+                          {teacherName(s.offer.teacher)}
+                          {s.buyerName ? ` · ${s.buyerName}` : ''}
+                        </span>
+                      </span>
                       <span className="font-mono text-xs">{s.code.code}</span>
                     </div>
                     <p className="text-[11px] text-navy/45 mt-1">
@@ -777,7 +976,7 @@ export default function RevenuePage() {
               <p className="text-[11px] text-navy/45">
                 {Number(handoutForm.centerAmount || 0) >
                 Number(handoutForm.price || 0)
-                  ? 'مبلغ السنتر أكبر من السعر — المدرس مش هياخد من الملزمة دي'
+                  ? `السعر ${Number(handoutForm.price || 0).toLocaleString('en-EG')} · السنتر ${Number(handoutForm.centerAmount || 0).toLocaleString('en-EG')} ج.م للنسخة — المدرس 0`
                   : `المدرس ياخد الباقي: ${(
                       Number(handoutForm.price || 0) -
                       Number(handoutForm.centerAmount || 0)
@@ -802,12 +1001,7 @@ export default function RevenuePage() {
                     <span className="text-[11px] text-navy/45 block">
                       {Number(h.price).toLocaleString('en-EG')} · مخزون {h.stock}{' '}
                       · سنتر{' '}
-                      {Math.round(
-                        Number(h.price) *
-                          (1 - Number(h.teacherPercent) / 100) *
-                          100,
-                      ) / 100}{' '}
-                      ج.م
+                      {centerCutOf(h.price, h.teacherPercent, h.centerAmount)} ج.م
                     </span>
                   </span>
                 </li>

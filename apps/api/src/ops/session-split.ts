@@ -42,3 +42,18 @@ export function teacherPercentFromCenter(feeAmount: number, centerAmount: number
   const teacher = Math.max(0, feeAmount - centerAmount);
   return Math.round((teacher / feeAmount) * 10000) / 100;
 }
+
+/** Extra revenue: center cut is absolute and may be larger than price (price can be 0). */
+export function splitExtraRevenue(
+  unitPrice: number,
+  centerAmount: number,
+  qty = 1,
+) {
+  const price = Math.max(0, Number(unitPrice) || 0);
+  const center = Math.max(0, Number(centerAmount) || 0);
+  const teacherUnit = Math.max(0, price - center);
+  return {
+    teacherShare: Math.round(teacherUnit * qty * 100) / 100,
+    centerShare: Math.round(center * qty * 100) / 100,
+  };
+}

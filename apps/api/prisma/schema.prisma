@@ -655,6 +655,8 @@ model OnlineOffer {
   title          String
   price          Decimal           @db.Decimal(12, 2)
   teacherPercent Decimal           @db.Decimal(5, 2)
+  /** Center cut per code in EGP. May exceed price (price can be 0). */
+  centerAmount   Decimal?          @db.Decimal(12, 2)
   isActive       Boolean           @default(true)
   notes          String?
   codes          OnlineAccessCode[]
@@ -710,6 +712,8 @@ model HandoutProduct {
   title          String
   price          Decimal       @db.Decimal(12, 2)
   teacherPercent Decimal       @db.Decimal(5, 2)
+  /** Center cut per copy in EGP. May exceed price (price can be 0). */
+  centerAmount   Decimal?      @db.Decimal(12, 2)
   stock          Int           @default(0)
   isActive       Boolean       @default(true)
   sales          HandoutSale[]

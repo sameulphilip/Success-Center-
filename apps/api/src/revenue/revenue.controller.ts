@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -46,6 +47,44 @@ export class RevenueController {
     },
   ) {
     return this.revenue.createOffer(body);
+  }
+
+  @Post('online/offers/:id/update')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  updateOfferPost(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      teacherId?: string;
+      subjectId?: string | null;
+      title?: string;
+      price?: number;
+      teacherPercent?: number;
+      centerAmount?: number;
+      notes?: string;
+      isActive?: boolean;
+    },
+  ) {
+    return this.revenue.updateOffer(id, body);
+  }
+
+  @Patch('online/offers/:id')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  updateOffer(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      teacherId?: string;
+      subjectId?: string | null;
+      title?: string;
+      price?: number;
+      teacherPercent?: number;
+      centerAmount?: number;
+      notes?: string;
+      isActive?: boolean;
+    },
+  ) {
+    return this.revenue.updateOffer(id, body);
   }
 
   @Get('online/offers/:id/codes')
