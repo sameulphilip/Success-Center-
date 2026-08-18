@@ -3,7 +3,14 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { CashExpenseFrom, ExtraRevenueCashTo, OnlineCodeStatus, Prisma, SessionPayStatus } from '@prisma/client';
+import {
+  BookingStatus,
+  CashExpenseFrom,
+  ExtraRevenueCashTo,
+  OnlineCodeStatus,
+  Prisma,
+  SessionPayStatus,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 export const EXPENSE_CATEGORIES = [
@@ -68,6 +75,51 @@ export type OpenDayFigures = {
 
 function money(n: Prisma.Decimal | number | null | undefined) {
   return Number(n || 0);
+}
+
+function personName(p?: { firstName?: string | null; lastName?: string | null } | null) {
+  if (!p) return '';
+  return [p.firstName, p.lastName && p.lastName !== '-' ? p.lastName : '']
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+}
+
+function methodAr(method?: string | null) {
+  return isVodafone(method) ? 'فودافون' : 'كاش';
+}
+
+function formatNumRanges(nums: number[], prefix = '') {
+  const u = [...new Set(nums.filter((n) => Number.isFinite(n)))].sort(
+    (a, b) => a - b,
+  );
+  if (!u.length) return '—';
+  const parts: string[] = [];
+  let start = u[0];
+  let prev = u[0];
+  const flush = () => {
+    if (start === prev) parts.push(`${prefix}${start}`);
+    else parts.push(`من ${prefix}${start} إلى ${prefix}${prev}`);
+  };
+  for (let i = 1; i < u.length; i++) {
+    if (u[i] === prev + 1) {
+      prev = u[i];
+      continue;
+    }
+    flush();
+    start = prev = u[i];
+  }
+  flush();
+  return parts.join(' · ');
+}
+
+function formatStrRange(values: string[]) {
+  const sorted = [...new Set(values.filter(Boolean))].sort((a, b) =>
+    a.localeCompare(b, 'en', { numeric: true }),
+  );
+  if (!sorted.length) return '—';
+  if (sorted.length === 1) return sorted[0];
+  return `من ${sorted[0]} إلى ${sorted[sorted.length - 1]}`;
 }
 
 function isVodafone(method?: string | null) {
@@ -1058,6 +1110,366 @@ export class CashService {
         closedByUserId: userId,
       },
     });
+  }
+
+  /** Printable reception day sheet: drawer collections, expenses, close, teacher-hold sales. */
+  async daySheet(rawDate?: string) {
+    const today = cairoYmd();
+    const ymd = String(rawDate || '').trim() || today;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+      throw new BadRequestException('تاريخ غير صالح');
+    }
+    const { start, end } = cairoBounds(ymd);
+    const range = { gte: start, lte: end };
+    const confirmed = SessionPayStatus.CONFIRMED;
+    const businessDate = dateOnly(ymd);
+
+    const [payments, sessions, online, handouts, rentals, expenses, close] =
+      await Promise.all([
+        this.prisma.payment.findMany({
+          where: { paidAt: range },
+          include: {
+            student: { select: { firstName: true, lastName: true } },
+            invoice: {
+              select: {
+                note: true,
+                groupId: true,
+                group: {
+                  select: {
+                    name: true,
+                    subject: { select: { nameAr: true, nameEn: true } },
+                  },
+                },
+              },
+            },
+          },
+          orderBy: { paidAt: 'asc' },
+        }),
+        this.prisma.sessionEntry.findMany({
+          where: { payStatus: confirmed, confirmedAt: range },
+          include: {
+            student: { select: { firstName: true, lastName: true } },
+            session: {
+              select: {
+                title: true,
+                teacher: { select: { firstName: true, lastName: true } },
+                subject: { select: { nameAr: true, nameEn: true } },
+              },
+            },
+          },
+          orderBy: { confirmedAt: 'asc' },
+        }),
+        this.prisma.onlineCodeSale.findMany({
+          where: { payStatus: confirmed, confirmedAt: range },
+          include: {
+            code: { select: { code: true } },
+            offer: {
+              select: {
+                id: true,
+                title: true,
+                teacher: { select: { firstName: true, lastName: true } },
+              },
+            },
+          },
+          orderBy: { confirmedAt: 'asc' },
+        }),
+        this.prisma.handoutSale.findMany({
+          where: { payStatus: confirmed, confirmedAt: range },
+          include: {
+            product: {
+              select: {
+                id: true,
+                title: true,
+                teacher: { select: { firstName: true, lastName: true } },
+              },
+            },
+          },
+          orderBy: { confirmedAt: 'asc' },
+        }),
+        this.prisma.roomRental.findMany({
+          where: { payStatus: confirmed, confirmedAt: range },
+          include: { classroom: { select: { name: true } } },
+          orderBy: { confirmedAt: 'asc' },
+        }),
+        this.prisma.cashExpense.findMany({
+          where: { paidFrom: CashExpenseFrom.DRAWER, businessDate },
+          orderBy: { createdAt: 'asc' },
+        }),
+        this.prisma.cashDayClose.findUnique({ where: { businessDate } }),
+      ]);
+
+    const bkReceipts = payments
+      .map((p) => p.receiptNumber)
+      .filter((r) => r.startsWith('BK-'));
+    const bookings = await this.prisma.bookingSubmission.findMany({
+      where: {
+        status: BookingStatus.PAID,
+        OR: [
+          { paidAt: range },
+          ...(bkReceipts.length
+            ? [{ receiptNumber: { in: bkReceipts } }]
+            : []),
+        ],
+      },
+      select: {
+        formId: true,
+        formSerial: true,
+        totalAmount: true,
+        receiptNumber: true,
+        form: { select: { title: true, gradeLabel: true } },
+      },
+    });
+
+    type TallyRow = {
+      key: string;
+      kind: string;
+      label: string;
+      count: number;
+      unit: string;
+      amount: number;
+      serials: string;
+      note?: string;
+    };
+
+    const bookingByForm = new Map<
+      string,
+      {
+        label: string;
+        count: number;
+        amount: number;
+        serials: number[];
+      }
+    >();
+    for (const b of bookings) {
+      const cur = bookingByForm.get(b.formId) || {
+        label: `${b.form.title}${b.form.gradeLabel ? ` · ${b.form.gradeLabel}` : ''}`,
+        count: 0,
+        amount: 0,
+        serials: [] as number[],
+      };
+      cur.count += 1;
+      cur.amount += money(b.totalAmount);
+      if (b.formSerial != null) cur.serials.push(b.formSerial);
+      bookingByForm.set(b.formId, cur);
+    }
+
+    const codeByOffer = new Map<
+      string,
+      {
+        label: string;
+        count: number;
+        amount: number;
+        codes: string[];
+        hold: boolean;
+      }
+    >();
+    for (const s of online) {
+      const cur = codeByOffer.get(s.offer.id) || {
+        label: [s.offer.title, personName(s.offer.teacher)]
+          .filter(Boolean)
+          .join(' · '),
+        count: 0,
+        amount: 0,
+        codes: [] as string[],
+        hold: false,
+      };
+      cur.count += 1;
+      cur.amount += money(s.amount);
+      if (s.code?.code) cur.codes.push(s.code.code);
+      if (s.cashTo === ExtraRevenueCashTo.TEACHER_HOLD) cur.hold = true;
+      codeByOffer.set(s.offer.id, cur);
+    }
+
+    const handByProduct = new Map<
+      string,
+      {
+        label: string;
+        count: number;
+        amount: number;
+        receipts: string[];
+        hold: boolean;
+      }
+    >();
+    for (const s of handouts) {
+      const cur = handByProduct.get(s.product.id) || {
+        label: [s.product.title, personName(s.product.teacher)]
+          .filter(Boolean)
+          .join(' · '),
+        count: 0,
+        amount: 0,
+        receipts: [] as string[],
+        hold: false,
+      };
+      cur.count += s.qty;
+      cur.amount += money(s.amount);
+      if (s.receiptNumber) cur.receipts.push(s.receiptNumber);
+      if (s.cashTo === ExtraRevenueCashTo.TEACHER_HOLD) cur.hold = true;
+      handByProduct.set(s.product.id, cur);
+    }
+
+    const groupPays = payments.filter((p) => p.invoice?.groupId);
+    const sessionReceipts = sessions.map((e) => e.receiptNumber).filter(Boolean);
+    const rentalRows = rentals.filter(
+      (s) => s.cashTo === ExtraRevenueCashTo.DRAWER,
+    );
+
+    const tallies: TallyRow[] = [
+      ...[...bookingByForm.entries()].map(([id, r]) => ({
+        key: `bk-${id}`,
+        kind: 'booking',
+        label: r.label,
+        count: r.count,
+        unit: 'استمارة',
+        amount: r.amount,
+        serials: formatNumRanges(r.serials, 'م '),
+      })),
+      ...[...codeByOffer.entries()].map(([id, r]) => ({
+        key: `on-${id}`,
+        kind: 'online',
+        label: r.label,
+        count: r.count,
+        unit: 'كود',
+        amount: r.amount,
+        serials: formatStrRange(r.codes),
+        note: r.hold
+          ? 'على حساب المدرس — مش في عدّ الدرج'
+          : undefined,
+      })),
+      ...[...handByProduct.entries()].map(([id, r]) => ({
+        key: `hn-${id}`,
+        kind: 'handout',
+        label: r.label,
+        count: r.count,
+        unit: 'ملزمة',
+        amount: r.amount,
+        serials:
+          r.receipts.length > 1
+            ? formatStrRange(r.receipts)
+            : r.receipts[0] || '—',
+        note: r.hold
+          ? 'على حساب المدرس — مش في عدّ الدرج'
+          : undefined,
+      })),
+    ];
+
+    if (sessions.length) {
+      tallies.push({
+        key: 'sessions',
+        kind: 'session',
+        label: 'حصص اليوم',
+        count: sessions.length,
+        unit: 'طالب',
+        amount: sessions.reduce((n, e) => n + money(e.amount), 0),
+        serials: formatStrRange(sessionReceipts),
+      });
+    }
+    if (groupPays.length) {
+      tallies.push({
+        key: 'groups',
+        kind: 'group',
+        label: 'اشتراكات مجموعات',
+        count: groupPays.length,
+        unit: 'إيصال',
+        amount: groupPays.reduce((n, p) => n + money(p.amount), 0),
+        serials: formatStrRange(groupPays.map((p) => p.receiptNumber)),
+      });
+    }
+    if (rentalRows.length) {
+      tallies.push({
+        key: 'rentals',
+        kind: 'rental',
+        label: 'تأجير قاعات',
+        count: rentalRows.length,
+        unit: 'حجز',
+        amount: rentalRows.reduce((n, s) => n + money(s.amount), 0),
+        serials: formatStrRange(
+          rentalRows.map((s) => s.receiptNumber || '').filter(Boolean),
+        ),
+      });
+    }
+
+    const collected = await this.dayCollections(ymd);
+    const drawerExpenses = expenses.reduce((n, e) => n + money(e.amount), 0);
+    const userIds = [
+      ...expenses.map((e) => e.createdByUserId),
+      close?.closedByUserId,
+    ].filter(Boolean) as string[];
+    const users = userIds.length
+      ? await this.prisma.user.findMany({
+          where: { id: { in: [...new Set(userIds)] } },
+          select: { id: true, fullName: true },
+        })
+      : [];
+    const names = new Map(users.map((u) => [u.id, u.fullName]));
+
+    const dateLabel = new Date(`${ymd}T12:00:00+03:00`).toLocaleDateString(
+      'ar-EG',
+      { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' },
+    );
+
+    const holdOnline = online.filter(
+      (s) => s.cashTo === ExtraRevenueCashTo.TEACHER_HOLD,
+    );
+    const holdHand = handouts.filter(
+      (s) => s.cashTo === ExtraRevenueCashTo.TEACHER_HOLD,
+    );
+
+    return {
+      generatedAt: new Date().toISOString(),
+      businessDate: ymd,
+      dateLabel,
+      closed: !!close,
+      close: close
+        ? {
+            cashCollected: money(close.cashCollected),
+            vodafoneCollected: money(close.vodafoneCollected),
+            drawerExpenses: money(close.drawerExpenses),
+            expectedAmount: money(close.expectedAmount),
+            countedAmount: money(close.countedAmount),
+            difference: money(close.difference),
+            transferredToSafe: money(close.transferredToSafe),
+            note: close.note,
+            closedAt: close.closedAt.toISOString(),
+            closedByName: close.closedByUserId
+              ? names.get(close.closedByUserId) || null
+              : null,
+          }
+        : null,
+      collectedCash: collected.cash,
+      collectedVodafone: collected.vodafone,
+      collectedTotal: collected.total,
+      drawerExpenses,
+      expected: collected.total - drawerExpenses,
+      breakdown: collected.breakdown,
+      tallies,
+      summaryCounts: {
+        forms: [...bookingByForm.values()].reduce((n, r) => n + r.count, 0),
+        formsAmount: [...bookingByForm.values()].reduce((n, r) => n + r.amount, 0),
+        codes: online.length,
+        codesAmount: online.reduce((n, s) => n + money(s.amount), 0),
+        handouts: handouts.reduce((n, s) => n + s.qty, 0),
+        handoutsAmount: handouts.reduce((n, s) => n + money(s.amount), 0),
+        sessions: sessions.length,
+      },
+      expenses: expenses.map((e) => ({
+        id: e.id,
+        amount: money(e.amount),
+        category: e.category,
+        note: e.note,
+        createdByName: e.createdByUserId
+          ? names.get(e.createdByUserId) || null
+          : null,
+      })),
+      holdGross:
+        holdOnline.reduce((n, s) => n + money(s.amount), 0) +
+        holdHand.reduce((n, s) => n + money(s.amount), 0),
+      holdTeacher:
+        holdOnline.reduce((n, s) => n + money(s.teacherShare), 0) +
+        holdHand.reduce((n, s) => n + money(s.teacherShare), 0),
+      holdCenter:
+        holdOnline.reduce((n, s) => n + money(s.centerShare), 0) +
+        holdHand.reduce((n, s) => n + money(s.centerShare), 0),
+    };
   }
 
   async handover(userId: string, body: { amount: number; note?: string }) {

@@ -145,6 +145,12 @@ export class FinanceController {
     return this.cash.snapshot(undefined, user);
   }
 
+  @Get('cash/day-sheet')
+  @RequirePerms('finance.close', 'finance.safe')
+  daySheet(@Query('date') date?: string) {
+    return this.cash.daySheet(date);
+  }
+
   @Post('cash/expenses')
   @RequirePerms('finance.safe')
   addExpense(

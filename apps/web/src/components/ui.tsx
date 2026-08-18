@@ -50,11 +50,13 @@ export function PageHero({
         {metrics?.length ? (
           <div
             className={`w-full grid gap-2 sm:gap-3 text-center ${
-              metrics.length >= 4
-                ? 'grid-cols-2 sm:grid-cols-4'
-                : metrics.length === 3
-                  ? 'grid-cols-3'
-                  : 'grid-cols-2'
+              metrics.length >= 5
+                ? 'grid-cols-2 sm:grid-cols-5'
+                : metrics.length === 4
+                  ? 'grid-cols-2 sm:grid-cols-4'
+                  : metrics.length === 3
+                    ? 'grid-cols-1 min-[420px]:grid-cols-3'
+                    : 'grid-cols-2'
             }`}
           >
             {metrics.map((m, i) => {
@@ -63,6 +65,7 @@ export function PageHero({
                 'from-sky-400/25 to-sky-400/5',
                 'from-teal-400/25 to-teal-400/5',
                 'from-emerald-400/25 to-emerald-400/5',
+                'from-amber-300/25 to-amber-300/5',
               ];
               return (
                 <div

@@ -60,8 +60,11 @@ export class OpsController {
   }
 
   @Get('sessions')
-  list(@Query('status') status?: ClassSessionStatus) {
-    return this.ops.listSessions(status);
+  list(
+    @Query('status') status?: ClassSessionStatus,
+    @Query('date') date?: string,
+  ) {
+    return this.ops.listSessions(status, date);
   }
 
   @Get('sessions/open')

@@ -45,6 +45,7 @@ type Session = {
   settledTeacherAmount?: string | number | null;
   settledCenterAmount?: string | number | null;
   teacherPaidAt?: string | null;
+  sessionDate: string;
   teacher: Teacher;
   subject?: Subject | null;
   _count?: { entries: number };
@@ -114,12 +115,44 @@ function subjectsOf(t?: Teacher | null): { id: string; nameAr: string }[] {
 const OPS_SCANNER_ID = 'ops-desk-qr';
 const OTHER_TEACHER = '__other__';
 
+function cairoYmd(d = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Cairo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
+}
+
+function sessionDayKey(value?: string | null) {
+  if (!value) return '';
+  return String(value).slice(0, 10);
+}
+
+function formatSessionDay(value?: string | null, compact = false) {
+  const ymd = sessionDayKey(value);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return '';
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(
+    'ar-EG',
+    compact
+      ? { day: 'numeric', month: 'short', timeZone: 'UTC' }
+      : {
+          weekday: 'long',
+          day: 'numeric',
+          month: 'short',
+          timeZone: 'UTC',
+        },
+  );
+}
+
 export default function OpsPage() {
   const me = getStoredUser();
   const isManager =
     me?.role === 'SUPER_ADMIN' || me?.role === 'CENTER_MANAGER';
 
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [sessionDate, setSessionDate] = useState(cairoYmd);
   const [selectedId, setSelectedId] = useState('');
   const [detail, setDetail] = useState<Session | null>(null);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
@@ -179,15 +212,19 @@ export default function OpsPage() {
   });
 
   async function loadLists() {
+    const qs = sessionDate ? `?date=${sessionDate}` : '';
     const [s, t, b] = await Promise.all([
-      api<Session[]>('/ops/sessions'),
+      api<Session[]>(`/ops/sessions${qs}`),
       api<Teacher[]>('/teachers'),
       api<Block[]>('/ops/blocks'),
     ]);
     setSessions(s);
     setTeachers(t);
     setBlocks(b);
-    if (!selectedId && s[0]) setSelectedId(s[0].id);
+    if (s.length && (!selectedId || !s.some((x) => x.id === selectedId))) {
+      setSelectedId(s[0].id);
+    }
+    if (!s.length) setSelectedId('');
     setOpenForm((f) => {
       if (f.teacherId === OTHER_TEACHER) return f;
       const teacherId = f.teacherId || t[0]?.id || '';
@@ -211,7 +248,7 @@ export default function OpsPage() {
 
   useEffect(() => {
     loadLists().catch((e) => setError(e.message));
-  }, []);
+  }, [sessionDate]);
 
   useEffect(() => {
     if (selectedId) loadDetail(selectedId).catch((e) => setError(e.message));
@@ -648,7 +685,10 @@ export default function OpsPage() {
         subtitle="افتح جلسة، حصّل، أكّد فودافون، سجّل حضور، واقفل الحساب"
         metrics={[
           { label: 'جلسات مفتوحة', value: openCount, highlight: true },
-          { label: 'كل الجلسات', value: sessions.length },
+          {
+            label: sessionDate ? 'جلسات اليوم' : 'كل الجلسات',
+            value: sessions.length,
+          },
           { label: 'حظر نشط', value: blocks.length },
         ]}
       />
@@ -664,8 +704,8 @@ export default function OpsPage() {
         </div>
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-[300px_1fr]">
-        <div className="space-y-4">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)] lg:items-start">
+        <div className="space-y-4 min-w-0">
           <SectionCard title="فتح جلسة مرنة" subtitle="استقبال فقط · سعر الحصة ومبلغ السنتر">
             <form onSubmit={openSession} className="space-y-2">
               <FieldLabel label="المدرس">
@@ -796,48 +836,131 @@ export default function OpsPage() {
             </form>
           </SectionCard>
 
-          <SectionCard title="الجلسات">
-            <ul className="space-y-2 max-h-80 overflow-auto">
+          <SectionCard
+            title="الجلسات"
+            subtitle={
+              sessionDate
+                ? formatSessionDay(`${sessionDate}T00:00:00.000Z`)
+                : 'كل التواريخ'
+            }
+          >
+            <div className="mb-3 grid grid-cols-1 min-[420px]:grid-cols-[minmax(0,1fr)_auto] gap-2">
+              <input
+                className="field mt-0 min-h-11 min-w-0"
+                type="date"
+                aria-label="تصفية حسب التاريخ"
+                value={sessionDate}
+                onChange={(e) => setSessionDate(e.target.value)}
+              />
+              {sessionDate ? (
+                <button
+                  type="button"
+                  className="btn-ghost min-h-11 w-full min-[420px]:w-auto px-4"
+                  onClick={() => setSessionDate('')}
+                >
+                  الكل
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn-ghost min-h-11 w-full min-[420px]:w-auto px-4"
+                  onClick={() => setSessionDate(cairoYmd())}
+                >
+                  اليوم
+                </button>
+              )}
+            </div>
+            <ul className="space-y-2 overflow-auto overscroll-contain max-h-[min(22rem,50dvh)] lg:max-h-[min(38rem,calc(100dvh-16rem))]">
               {sessions.map((s) => (
                 <li key={s.id}>
                   <button
                     type="button"
                     onClick={() => setSelectedId(s.id)}
-                    className={`w-full rounded-xl px-3 py-2 text-right text-sm ${
+                    className={`w-full min-h-11 rounded-xl px-3 py-2.5 text-right text-sm transition ${
                       selectedId === s.id
                         ? 'bg-[#0B2545] text-white'
                         : 'bg-sand text-navy'
                     }`}
                   >
-                    <span className="font-semibold block">
-                      {s.teacher.firstName} {s.teacher.lastName}
-                      {s.title ? ` · ${s.title}` : ''}
+                    <span className="flex items-start justify-between gap-2">
+                      <span className="min-w-0 font-semibold leading-snug break-words">
+                        {s.teacher.firstName}{' '}
+                        {s.teacher.lastName === '-' ? '' : s.teacher.lastName}
+                        {s.title ? (
+                          <span
+                            className={`font-medium ${
+                              selectedId === s.id
+                                ? 'text-white/70'
+                                : 'text-navy/55'
+                            }`}
+                          >
+                            {' '}
+                            · {s.title}
+                          </span>
+                        ) : null}
+                      </span>
+                      <span
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                          s.status === 'OPEN'
+                            ? selectedId === s.id
+                              ? 'bg-emerald-400/20 text-emerald-100'
+                              : 'bg-emerald-50 text-emerald-800'
+                            : selectedId === s.id
+                              ? 'bg-white/15 text-white/80'
+                              : 'bg-amber-50 text-amber-800'
+                        }`}
+                      >
+                        {s.status === 'OPEN' ? 'مفتوحة' : 'مقفولة'}
+                      </span>
                     </span>
                     <span
-                      className={`text-[11px] ${
-                        selectedId === s.id ? 'text-white/60' : 'text-navy/45'
+                      className={`mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] leading-5 ${
+                        selectedId === s.id ? 'text-white/70' : 'text-navy/50'
                       }`}
                     >
-                      {s.status === 'OPEN' ? 'مفتوحة' : 'مقفولة'} ·{' '}
-                      {Number(s.feeAmount).toLocaleString('en-EG')} ج.م · سنتر{' '}
-                      {centerCutOf(s).toLocaleString('en-EG')} · مدرس{' '}
-                      {teacherCutOf(s).toLocaleString('en-EG')} ·{' '}
-                      {s._count?.entries ?? 0} قيد
+                      <span
+                        className={`rounded-md px-1.5 py-0.5 font-bold tabular-nums ${
+                          selectedId === s.id
+                            ? 'bg-white/10 text-white'
+                            : 'bg-white text-navy/70'
+                        }`}
+                      >
+                        {formatSessionDay(s.sessionDate, true)}
+                      </span>
+                      <span className="tabular-nums">
+                        {Number(s.feeAmount).toLocaleString('en-EG')} ج.م
+                      </span>
+                      <span className="opacity-50">·</span>
+                      <span className="tabular-nums">
+                        سنتر {centerCutOf(s).toLocaleString('en-EG')}
+                      </span>
+                      <span className="opacity-50">·</span>
+                      <span className="tabular-nums">
+                        مدرس {teacherCutOf(s).toLocaleString('en-EG')}
+                      </span>
+                      <span className="opacity-50">·</span>
+                      <span>{s._count?.entries ?? 0} قيد</span>
                     </span>
                   </button>
                 </li>
               ))}
-              {!sessions.length ? <EmptyState>لا توجد جلسات</EmptyState> : null}
+              {!sessions.length ? (
+                <EmptyState>
+                  {sessionDate
+                    ? 'لا توجد جلسات في اليوم ده'
+                    : 'لا توجد جلسات'}
+                </EmptyState>
+              ) : null}
             </ul>
           </SectionCard>
         </div>
 
-        <div className="space-y-4">
+        <div className="space-y-4 min-w-0">
           {detail ? (
             <>
               <SectionCard
                 title={`${detail.teacher.firstName} ${detail.teacher.lastName}`}
-                subtitle={`${detail.subject?.nameAr || 'بدون مادة'} · سعر ${Number(detail.feeAmount).toLocaleString('en-EG')} · سنتر ${centerCutOf(detail).toLocaleString('en-EG')} · مدرس ${teacherCutOf(detail).toLocaleString('en-EG')}`}
+                subtitle={`${formatSessionDay(detail.sessionDate)}${formatSessionDay(detail.sessionDate) ? ' · ' : ''}${detail.subject?.nameAr || 'بدون مادة'} · سعر ${Number(detail.feeAmount).toLocaleString('en-EG')} · سنتر ${centerCutOf(detail).toLocaleString('en-EG')} · مدرس ${teacherCutOf(detail).toLocaleString('en-EG')}`}
                 badge={
                   <span
                     className={
@@ -848,19 +971,19 @@ export default function OpsPage() {
                   </span>
                 }
                 action={
-                  <div className="flex flex-wrap items-center gap-2 justify-end">
+                  <div className="flex flex-col min-[480px]:flex-row min-[480px]:flex-wrap items-stretch min-[480px]:items-center gap-2 w-full">
                     {detail.status === 'OPEN' ? (
                       <button
                         type="button"
-                        className="btn-ghost"
+                        className="btn-ghost w-full min-[480px]:w-auto"
                         disabled={busy === 'close'}
                         onClick={closeSession}
                       >
                         قفل وتسوية
                       </button>
                     ) : (
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-xs text-navy/50">
+                      <div className="flex flex-col min-[480px]:flex-row min-[480px]:flex-wrap items-stretch min-[480px]:items-center gap-2">
+                        <span className="text-xs text-navy/50 leading-5">
                           مدرس:{' '}
                           {Number(detail.settledTeacherAmount || 0).toLocaleString(
                             'en-EG',
@@ -871,11 +994,11 @@ export default function OpsPage() {
                           )}
                         </span>
                         {detail.teacherPaidAt ? (
-                          <span className="badge-ok">اتدفع للمدرس</span>
+                          <span className="badge-ok self-start">اتدفع للمدرس</span>
                         ) : (
                           <button
                             type="button"
-                            className="btn-primary !py-1.5 !px-3 text-xs"
+                            className="btn-primary w-full min-[480px]:w-auto !py-1.5 !px-3 text-xs"
                             disabled={busy === 'pay-teacher'}
                             onClick={() => setSettle(detail)}
                           >
@@ -887,7 +1010,7 @@ export default function OpsPage() {
                     {isManager ? (
                       <button
                         type="button"
-                        className="btn-ghost text-rose-700"
+                        className="btn-ghost text-rose-700 w-full min-[480px]:w-auto"
                         disabled={busy === 'delete'}
                         onClick={deleteSession}
                       >

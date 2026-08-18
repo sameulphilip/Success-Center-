@@ -102,16 +102,22 @@ export class OpsService {
     });
   }
 
-  listSessions(status?: ClassSessionStatus) {
+  listSessions(status?: ClassSessionStatus, date?: string) {
+    const where: { status?: ClassSessionStatus; sessionDate?: Date } = {};
+    if (status) where.status = status;
+    const ymd = String(date || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+      where.sessionDate = new Date(`${ymd}T00:00:00.000Z`);
+    }
     return this.prisma.classSession.findMany({
-      where: status ? { status } : undefined,
+      where: Object.keys(where).length ? where : undefined,
       include: {
         teacher: true,
         subject: true,
         _count: { select: { entries: true } },
       },
       orderBy: [{ sessionDate: 'desc' }, { createdAt: 'desc' }],
-      take: 100,
+      take: ymd ? 200 : 100,
     });
   }
 

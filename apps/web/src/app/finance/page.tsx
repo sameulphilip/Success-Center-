@@ -23,6 +23,10 @@ function money(n: number) {
   return `${Math.round(Number(n) || 0).toLocaleString('en-EG')} ج.م`;
 }
 
+function daySheetHref(ymd: string, autoPrint = false) {
+  return `/finance/close/${ymd}/print${autoPrint ? '?print=1' : ''}`;
+}
+
 function cairoYmd() {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Africa/Cairo',
@@ -235,6 +239,7 @@ export default function FinancePage() {
   const [closeNote, setCloseNote] = useState('');
   const [handAmount, setHandAmount] = useState('');
   const [handNote, setHandNote] = useState('');
+  const [showExtraSales, setShowExtraSales] = useState(false);
   const [tab, setTab] = useState<'receipts' | 'safe' | 'close'>(
     canReceipts ? 'receipts' : canSafe ? 'safe' : 'close',
   );
@@ -372,7 +377,9 @@ export default function FinancePage() {
       });
       setConfirm(null);
       if (!ymd) setCloseNote('');
+      const closedDate = ymd || cash?.businessDate || cairoYmd();
       await load();
+      window.open(daySheetHref(closedDate, true), '_blank', 'noopener,noreferrer');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'فشل قفل اليوم');
     } finally {
@@ -585,78 +592,193 @@ export default function FinancePage() {
         ]}
       />
 
+      {teacherHolds.length ? (
       <SectionCard
         className="mb-4"
-        title="حسابات المدرسين — أكواد وملازم"
-        subtitle="فلوس الاستقبال من الأكواد والملازم متتقفلش مع اليوم. تتصفى مع المدرس، وبعدين نصيب السنتر يدخل الخزنة."
+        title="حسابات مدرسين مفتوحة"
+        subtitle="فلوس أكواد وملازم الاستقبال — تتصفى مع المدرس وبعدين نصيب السنتر يدخل الخزنة"
       >
-        {teacherHolds.length ? (
-          <div className="grid gap-3 md:grid-cols-2">
-            {teacherHolds.map((h) => (
-              <div
-                key={h.teacherId}
-                className="rounded-xl border border-navy/10 bg-white p-4"
-              >
-                <div className="mb-3 flex items-start justify-between gap-3">
-                  <div>
-                    <p className="font-extrabold text-navy">{h.teacherName}</p>
-                    <p className="text-[12px] text-navy/45">
-                      {h.onlineCount
-                        ? `${h.onlineCount.toLocaleString('en-EG')} كود`
-                        : null}
-                      {h.onlineCount && h.handoutCount ? ' · ' : null}
-                      {h.handoutCount
-                        ? `${h.handoutCount.toLocaleString('en-EG')} ملزمة`
-                        : null}
-                    </p>
-                  </div>
-                  <p className="tabular-nums text-lg font-black text-navy">
-                    {money(h.gross)}
+        <div className="grid gap-3 md:grid-cols-2">
+          {teacherHolds.map((h) => (
+            <div
+              key={h.teacherId}
+              className="rounded-xl border border-navy/10 bg-white p-4"
+            >
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-extrabold text-navy">{h.teacherName}</p>
+                  <p className="text-[12px] text-navy/45">
+                    {h.onlineCount
+                      ? `${h.onlineCount.toLocaleString('en-EG')} كود`
+                      : null}
+                    {h.onlineCount && h.handoutCount ? ' · ' : null}
+                    {h.handoutCount
+                      ? `${h.handoutCount.toLocaleString('en-EG')} ملزمة`
+                      : null}
                   </p>
                 </div>
-                <div className="mb-3 grid grid-cols-2 gap-2 text-[12px]">
-                  <div className="rounded-lg bg-sand px-3 py-2">
-                    <p className="text-navy/45">يدفع للمدرس</p>
-                    <p className="font-bold tabular-nums">
-                      {money(h.teacherShare)}
-                    </p>
-                  </div>
-                  <div className="rounded-lg bg-emerald-50 px-3 py-2">
-                    <p className="text-navy/45">يدخل الخزنة</p>
-                    <p className="font-bold tabular-nums text-emerald-900">
-                      {money(h.centerShare)}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="btn-primary w-full"
-                  disabled={busy === `settle-${h.teacherId}`}
-                  onClick={() =>
-                    setConfirm({
-                      kind: 'settle-hold',
-                      teacherId: h.teacherId,
-                      teacherName: h.teacherName,
-                      teacherPaid: h.teacherShare,
-                      centerToSafe: h.centerShare,
-                    })
-                  }
-                >
-                  تصفية مع المدرس
-                </button>
+                <p className="tabular-nums text-lg font-black text-navy">
+                  {money(h.gross)}
+                </p>
               </div>
-            ))}
+              <div className="mb-3 grid grid-cols-2 gap-2 text-[12px]">
+                <div className="rounded-lg bg-sand px-3 py-2">
+                  <p className="text-navy/45">يدفع للمدرس</p>
+                  <p className="font-bold tabular-nums">
+                    {money(h.teacherShare)}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-emerald-50 px-3 py-2">
+                  <p className="text-navy/45">يدخل الخزنة</p>
+                  <p className="font-bold tabular-nums text-emerald-900">
+                    {money(h.centerShare)}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn-primary w-full"
+                disabled={busy === `settle-${h.teacherId}`}
+                onClick={() =>
+                  setConfirm({
+                    kind: 'settle-hold',
+                    teacherId: h.teacherId,
+                    teacherName: h.teacherName,
+                    teacherPaid: h.teacherShare,
+                    centerToSafe: h.centerShare,
+                  })
+                }
+              >
+                تصفية مع المدرس
+              </button>
+            </div>
+          ))}
+        </div>
+      </SectionCard>
+      ) : null}
+
+      <SectionCard
+        className="mb-4"
+        title="مبيعات الإيرادات الإضافية"
+        subtitle={
+          isReception
+            ? 'القاعات في الدرج · الأكواد والملازم على حساب المدرس لحد التصفية'
+            : `الدرج ${money(extraDrawerTotal)} · حساب مدرس ${money(cash?.teacherHoldTotal ?? 0)} · صاحب السنتر ${money(extraOwnerTotal)}`
+        }
+        badge={
+          extraSales.length ? (
+            <span className="badge-navy">{extraSales.length}</span>
+          ) : null
+        }
+        action={
+          extraSales.length ? (
+            <button
+              type="button"
+              className="btn-ghost min-h-11 w-full sm:w-auto"
+              onClick={() => setShowExtraSales((v) => !v)}
+            >
+              {showExtraSales ? 'إخفاء الجدول' : 'عرض الجدول'}
+            </button>
+          ) : null
+        }
+      >
+        {showExtraSales && extraSales.length ? (
+          <div className="max-h-64 overflow-auto">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-white">
+                <tr className="text-[11px] text-navy/40">
+                  <th className="px-3 py-2 text-right font-medium">التاريخ</th>
+                  <th className="px-3 py-2 text-right font-medium">النوع</th>
+                  <th className="px-3 py-2 text-right font-medium">البيان</th>
+                  <th className="px-3 py-2 text-right font-medium">مين سجّل</th>
+                  <th className="px-3 py-2 text-right font-medium">راحت فين</th>
+                  <th className="px-3 py-2 text-left font-medium">نصيب السنتر</th>
+                  {canDelete ? (
+                    <th className="px-3 py-2 text-left font-medium"></th>
+                  ) : null}
+                </tr>
+              </thead>
+              <tbody>
+                {extraSales.map((s) => (
+                  <tr key={`${s.kind}-${s.id}`} className="border-t border-navy/5">
+                    <td className="px-3 py-2 whitespace-nowrap text-[12px] text-navy/55">
+                      {new Date(s.at).toLocaleString('ar-EG')}
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap">{s.kindLabel}</td>
+                    <td className="px-3 py-2">
+                      <p className="font-semibold text-navy">{s.title}</p>
+                      <p className="text-[11px] text-navy/40">
+                        {payMethodLabel(s.method)}
+                        {s.detail ? ` · ${s.detail}` : ''}
+                      </p>
+                    </td>
+                    <td className="px-3 py-2 text-[12px] text-navy/60">
+                      {s.soldByName || '—'}
+                    </td>
+                    <td className="px-3 py-2">
+                      <span
+                        className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-bold ${
+                          s.cashTo === 'OWNER'
+                            ? 'bg-amber-50 text-amber-900'
+                            : s.cashTo === 'TEACHER_HOLD'
+                              ? 'bg-indigo-50 text-indigo-900'
+                              : s.cashTo === 'SAFE'
+                                ? 'bg-emerald-50 text-emerald-900'
+                                : 'bg-sand text-navy/70'
+                        }`}
+                      >
+                        {extraCashToLabel[s.cashTo] || s.cashTo}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 tabular-nums text-left">
+                      <p className="font-extrabold">{money(s.amount)}</p>
+                      {Number(s.teacherShare || 0) > 0.009 ? (
+                        <p className="text-[11px] text-navy/40">
+                          مدرس {money(Number(s.teacherShare))}
+                          {s.grossAmount
+                            ? ` · كامل ${money(Number(s.grossAmount))}`
+                            : ''}
+                        </p>
+                      ) : null}
+                    </td>
+                    {canDelete ? (
+                      <td className="px-3 py-2 text-left">
+                        <button
+                          type="button"
+                          className="text-xs font-bold text-rose-700 hover:underline"
+                          disabled={busy === `del-x-${s.id}`}
+                          onClick={() =>
+                            setConfirm({
+                              kind: 'del-extra',
+                              id: s.id,
+                              extraKind: s.kind,
+                              label: `${s.kindLabel} · ${s.title} · ${money(s.amount)}`,
+                            })
+                          }
+                        >
+                          مسح
+                        </button>
+                      </td>
+                    ) : null}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
+        ) : extraSales.length ? (
+          <p className="text-sm text-navy/50">
+            اضغط عرض الجدول لو محتاج تراجع البيوع.
+          </p>
         ) : (
-          <EmptyState>لا يوجد حساب مفتوح لمدرس من بيع الاستقبال</EmptyState>
+          <EmptyState>لا مبيعات إيراد إضافي بعد</EmptyState>
         )}
         {(cash?.extraSettlements || []).length ? (
-          <div className="mt-4 overflow-auto">
+          <div className="mt-4 max-h-40 overflow-auto">
             <p className="mb-2 text-[11px] font-semibold text-navy/55">
-              تصفيات سابقة
+              تصفيات مدرسين سابقة
             </p>
             <table className="w-full text-sm">
-              <thead>
+              <thead className="sticky top-0 bg-white">
                 <tr className="text-[11px] text-navy/40">
                   <th className="px-3 py-2 text-right font-medium">التاريخ</th>
                   <th className="px-3 py-2 text-right font-medium">المدرس</th>
@@ -693,104 +815,9 @@ export default function FinancePage() {
         ) : null}
       </SectionCard>
 
-      <SectionCard
-        className="mb-4"
-        title="مبيعات الإيرادات الإضافية"
-        subtitle={
-          isReception
-            ? 'القاعات في الدرج · الأكواد والملازم على حساب المدرس لحد التصفية'
-            : `الدرج ${money(extraDrawerTotal)} · حساب مدرس ${money(cash?.teacherHoldTotal ?? 0)} · صاحب السنتر ${money(extraOwnerTotal)}`
-        }
-      >
-        <div className="overflow-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-[11px] text-navy/40">
-                <th className="px-3 py-2 text-right font-medium">التاريخ</th>
-                <th className="px-3 py-2 text-right font-medium">النوع</th>
-                <th className="px-3 py-2 text-right font-medium">البيان</th>
-                <th className="px-3 py-2 text-right font-medium">مين سجّل</th>
-                <th className="px-3 py-2 text-right font-medium">راحت فين</th>
-                <th className="px-3 py-2 text-left font-medium">نصيب السنتر</th>
-                {canDelete ? (
-                  <th className="px-3 py-2 text-left font-medium"></th>
-                ) : null}
-              </tr>
-            </thead>
-            <tbody>
-              {extraSales.map((s) => (
-                <tr key={`${s.kind}-${s.id}`} className="border-t border-navy/5">
-                  <td className="px-3 py-2 whitespace-nowrap text-[12px] text-navy/55">
-                    {new Date(s.at).toLocaleString('ar-EG')}
-                  </td>
-                  <td className="px-3 py-2 whitespace-nowrap">{s.kindLabel}</td>
-                  <td className="px-3 py-2">
-                    <p className="font-semibold text-navy">{s.title}</p>
-                    <p className="text-[11px] text-navy/40">
-                      {payMethodLabel(s.method)}
-                      {s.detail ? ` · ${s.detail}` : ''}
-                    </p>
-                  </td>
-                  <td className="px-3 py-2 text-[12px] text-navy/60">
-                    {s.soldByName || '—'}
-                  </td>
-                  <td className="px-3 py-2">
-                    <span
-                      className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-bold ${
-                        s.cashTo === 'OWNER'
-                          ? 'bg-amber-50 text-amber-900'
-                          : s.cashTo === 'TEACHER_HOLD'
-                            ? 'bg-indigo-50 text-indigo-900'
-                            : s.cashTo === 'SAFE'
-                              ? 'bg-emerald-50 text-emerald-900'
-                              : 'bg-sand text-navy/70'
-                      }`}
-                    >
-                      {extraCashToLabel[s.cashTo] || s.cashTo}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 tabular-nums text-left">
-                    <p className="font-extrabold">{money(s.amount)}</p>
-                    {Number(s.teacherShare || 0) > 0.009 ? (
-                      <p className="text-[11px] text-navy/40">
-                        مدرس {money(Number(s.teacherShare))}
-                        {s.grossAmount
-                          ? ` · كامل ${money(Number(s.grossAmount))}`
-                          : ''}
-                      </p>
-                    ) : null}
-                  </td>
-                  {canDelete ? (
-                    <td className="px-3 py-2 text-left">
-                      <button
-                        type="button"
-                        className="text-xs font-bold text-rose-700 hover:underline"
-                        disabled={busy === `del-x-${s.id}`}
-                        onClick={() =>
-                          setConfirm({
-                            kind: 'del-extra',
-                            id: s.id,
-                            extraKind: s.kind,
-                            label: `${s.kindLabel} · ${s.title} · ${money(s.amount)}`,
-                          })
-                        }
-                      >
-                        مسح
-                      </button>
-                    </td>
-                  ) : null}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {!extraSales.length ? (
-            <EmptyState>لا مبيعات إيراد إضافي بعد</EmptyState>
-          ) : null}
-        </div>
-      </SectionCard>
-
-      <div className="grid gap-4 xl:grid-cols-2 mb-4">
+      <div className="grid gap-4 lg:grid-cols-2 mb-4">
         {tab === 'close' ? (
+        <>
         <SectionCard
           title="قفل اليوم"
           subtitle={
@@ -878,6 +905,14 @@ export default function FinancePage() {
                     >
                       قفل {formatArDay(d.date)} وتحويل للخزنة
                     </button>
+                    <a
+                      href={daySheetHref(d.date)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn-ghost mt-2 w-full"
+                    >
+                      طباعة ورقة {formatArDay(d.date)}
+                    </a>
                   </div>
                 );
               })}
@@ -972,13 +1007,23 @@ export default function FinancePage() {
           ) : null}
 
           {todayClosed ? (
-            <p className="text-sm text-navy/70">
-              اتقفل بواسطة {cash.close?.closedByName || 'موظف'} · فرق العدّ{' '}
-              <strong className="tabular-nums">
-                {money(Number(cash.close?.difference || 0))}
-              </strong>
-              {cash.close?.note ? ` · ${cash.close.note}` : ''}
-            </p>
+            <div className="space-y-3">
+              <p className="text-sm text-navy/70">
+                اتقفل بواسطة {cash.close?.closedByName || 'موظف'} · فرق العدّ{' '}
+                <strong className="tabular-nums">
+                  {money(Number(cash.close?.difference || 0))}
+                </strong>
+                {cash.close?.note ? ` · ${cash.close.note}` : ''}
+              </p>
+              <a
+                href={daySheetHref(cash.businessDate, true)}
+                target="_blank"
+                rel="noreferrer"
+                className="btn-primary w-full"
+              >
+                طباعة ورقة اليوم
+              </a>
+            </div>
           ) : (
             <div className="space-y-3">
               <FieldLabel label="العدّ الفعلي (بعد تحويل فودافون)">
@@ -1020,9 +1065,67 @@ export default function FinancePage() {
               >
                 قفل اليوم وتحويل للخزنة
               </button>
+              <a
+                href={daySheetHref(cash?.businessDate || cairoYmd())}
+                target="_blank"
+                rel="noreferrer"
+                className="btn-ghost w-full"
+              >
+                معاينة / طباعة الورقة
+              </a>
             </div>
           )}
         </SectionCard>
+        <SectionCard
+          className="h-full"
+          title="آخر أيام اتقفلت"
+          badge={
+            cash?.closes?.length ? (
+              <span className="badge-navy">{cash.closes.length}</span>
+            ) : null
+          }
+        >
+          {cash?.closes?.length ? (
+            <ul className="max-h-52 space-y-1.5 overflow-auto overscroll-contain text-sm lg:max-h-[28rem]">
+              {cash.closes.map((c) => {
+                const ymd = String(c.businessDate).slice(0, 10);
+                return (
+                <li
+                  key={c.id}
+                  className="flex justify-between gap-2 rounded-lg border border-mist px-3 py-1.5"
+                >
+                  <div className="min-w-0">
+                    <p className="font-semibold">
+                      قفل {ymd}
+                    </p>
+                    <p className="truncate text-[11px] text-navy/45">
+                      فودافون {money(Number(c.vodafoneCollected))} · فرق{' '}
+                      {money(Number(c.difference))}
+                      {c.closedByName ? ` · ${c.closedByName}` : ''}
+                    </p>
+                  </div>
+                  <div className="shrink-0 text-left">
+                    <p className="font-extrabold tabular-nums">
+                      {money(Number(c.countedAmount))}
+                    </p>
+                    <a
+                      href={daySheetHref(ymd)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs font-bold text-sky-800 hover:underline"
+                    >
+                      طباعة
+                    </a>
+                  </div>
+                </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <EmptyState>لا يوجد قفل يوم بعد</EmptyState>
+          )}
+        </SectionCard>
+        </>
         ) : null}
 
         {tab === 'safe' ? (
@@ -1120,182 +1223,181 @@ export default function FinancePage() {
           </form>
         </SectionCard>
         ) : null}
+
+        {tab === 'safe' ? (
+        <SectionCard
+          title="تسليم لصاحب السنتر"
+          subtitle="فلوس الخزنة اللي بتديها لصاحب السنتر (عادة مرة في الأسبوع)"
+        >
+          <div className="space-y-3">
+            <p className="rounded-xl bg-sand px-3 py-2 text-sm text-navy/70">
+              المتاح في الخزنة الآن{' '}
+              <span className="font-extrabold tabular-nums text-navy">
+                {money(cash?.safeBalance ?? 0)}
+              </span>
+            </p>
+            <FieldLabel label="المبلغ">
+              <input
+                className="field"
+                type="number"
+                min={1}
+                value={handAmount}
+                onChange={(e) => setHandAmount(e.target.value)}
+              />
+            </FieldLabel>
+            <FieldLabel label="ملاحظة">
+              <input
+                className="field"
+                value={handNote}
+                onChange={(e) => setHandNote(e.target.value)}
+                placeholder="تسليم أسبوعي"
+              />
+            </FieldLabel>
+            <button
+              type="button"
+              className="btn-primary w-full"
+              disabled={busy === 'handover' || (cash?.safeBalance ?? 0) <= 0}
+              onClick={() => setConfirm({ kind: 'handover' })}
+            >
+              تسليم من الخزنة
+            </button>
+          </div>
+        </SectionCard>
+        ) : null}
       </div>
 
       {tab === 'safe' ? (
       <>
-      <SectionCard
-        className="mb-4"
-        title="تسليم لصاحب السنتر"
-        subtitle="فلوس الخزنة اللي بتديها لصاحب السنتر (عادة مرة في الأسبوع)"
-      >
-        <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] items-end">
-          <FieldLabel label="المبلغ">
-            <input
-              className="field"
-              type="number"
-              min={1}
-              value={handAmount}
-              onChange={(e) => setHandAmount(e.target.value)}
-            />
-          </FieldLabel>
-          <FieldLabel label="ملاحظة">
-            <input
-              className="field"
-              value={handNote}
-              onChange={(e) => setHandNote(e.target.value)}
-              placeholder="تسليم أسبوعي"
-            />
-          </FieldLabel>
-          <button
-            type="button"
-            className="btn-primary w-full sm:w-auto min-h-[42px]"
-            disabled={busy === 'handover' || (cash?.safeBalance ?? 0) <= 0}
-            onClick={() => setConfirm({ kind: 'handover' })}
-          >
-            تسليم من الخزنة
-          </button>
-        </div>
-        <p className="mt-2 text-xs text-navy/45">
-          المتاح في الخزنة الآن {money(cash?.safeBalance ?? 0)}
-        </p>
-      </SectionCard>
-
-      <div className="grid gap-4 xl:grid-cols-2 mb-4">
+      <div className="grid gap-4 lg:grid-cols-2 mb-4">
         <SectionCard
           title={
             canOwnerExpense
               ? 'كل المصروفات'
               : 'مصروفاتك (الدرج والخزنة)'
           }
+          badge={
+            cash?.expenses?.length ? (
+              <span className="badge-navy">{cash.expenses.length}</span>
+            ) : null
+          }
         >
-          <ul className="space-y-2 text-sm">
-            {(cash?.expenses || []).map((e) => (
-              <li
-                key={e.id}
-                className="rounded-xl border border-mist px-3 py-2 flex items-start justify-between gap-2"
-              >
-                <div className="min-w-0">
-                  <p className="font-semibold text-navy">
-                    {e.category} · {fromLabel[e.paidFrom] || e.paidFrom}
-                  </p>
-                  <p className="text-[11px] text-navy/45">
-                    {formatArDay(
-                      String(e.businessDate || e.createdAt).slice(0, 10),
-                    )}
-                    {e.createdByName ? ` · ${e.createdByName}` : ''}
-                    {e.note ? ` · ${e.note}` : ''}
-                  </p>
-                </div>
-                <div className="shrink-0 text-left space-y-1">
-                  <p className="font-extrabold tabular-nums text-rose-700">
-                    {money(Number(e.amount))}
-                  </p>
-                  {canDelete ? (
-                    <button
-                      type="button"
-                      className="text-xs font-bold text-rose-700 hover:underline"
-                      disabled={busy === `del-e-${e.id}`}
-                      onClick={() =>
-                        setConfirm({
-                          kind: 'del-expense',
-                          id: e.id,
-                          label: `${e.category} · ${money(Number(e.amount))}`,
-                        })
-                      }
-                    >
-                      مسح
-                    </button>
-                  ) : null}
-                </div>
-              </li>
-            ))}
-            {!cash?.expenses?.length ? (
-              <EmptyState>لا توجد مصروفات بعد</EmptyState>
-            ) : null}
-          </ul>
+          {cash?.expenses?.length ? (
+            <ul className="max-h-52 space-y-1.5 overflow-auto overscroll-contain text-sm">
+              {cash.expenses.map((e) => (
+                <li
+                  key={e.id}
+                  className="flex items-start justify-between gap-2 rounded-lg border border-mist px-3 py-1.5"
+                >
+                  <div className="min-w-0">
+                    <p className="font-semibold text-navy">
+                      {e.category} · {fromLabel[e.paidFrom] || e.paidFrom}
+                    </p>
+                    <p className="truncate text-[11px] text-navy/45">
+                      {formatArDay(
+                        String(e.businessDate || e.createdAt).slice(0, 10),
+                      )}
+                      {e.createdByName ? ` · ${e.createdByName}` : ''}
+                      {e.note ? ` · ${e.note}` : ''}
+                    </p>
+                  </div>
+                  <div className="shrink-0 space-y-0.5 text-left">
+                    <p className="font-extrabold tabular-nums text-rose-700">
+                      {money(Number(e.amount))}
+                    </p>
+                    {canDelete ? (
+                      <button
+                        type="button"
+                        className="text-xs font-bold text-rose-700 hover:underline"
+                        disabled={busy === `del-e-${e.id}`}
+                        onClick={() =>
+                          setConfirm({
+                            kind: 'del-expense',
+                            id: e.id,
+                            label: `${e.category} · ${money(Number(e.amount))}`,
+                          })
+                        }
+                      >
+                        مسح
+                      </button>
+                    ) : null}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyState>لا توجد مصروفات بعد</EmptyState>
+          )}
         </SectionCard>
-        <SectionCard title="التسليمات وقفل الأيام">
-          <ul className="space-y-2 text-sm mb-3">
-            {(cash?.handovers || []).map((h) => (
-              <li
-                key={h.id}
-                className="rounded-xl bg-sand px-3 py-2 flex justify-between gap-2"
-              >
-                <div>
-                  <p className="font-semibold">تسليم لصاحب السنتر</p>
-                  <p className="text-[11px] text-navy/45">
-                    {new Date(h.createdAt).toLocaleString('ar-EG')}
-                    {h.createdByName ? ` · ${h.createdByName}` : ''}
-                    {h.note ? ` · ${h.note}` : ''}
+        <SectionCard
+          title="التسليمات وقفل الأيام"
+          badge={
+            (cash?.handovers?.length || 0) + (cash?.closes?.length || 0) ? (
+              <span className="badge-navy">
+                {(cash?.handovers?.length || 0) + (cash?.closes?.length || 0)}
+              </span>
+            ) : null
+          }
+        >
+          {cash?.handovers?.length || cash?.closes?.length ? (
+            <div className="max-h-52 space-y-1.5 overflow-auto overscroll-contain text-sm">
+              {(cash?.handovers || []).map((h) => (
+                <div
+                  key={h.id}
+                  className="flex justify-between gap-2 rounded-lg bg-sand px-3 py-1.5"
+                >
+                  <div className="min-w-0">
+                    <p className="font-semibold">تسليم لصاحب السنتر</p>
+                    <p className="truncate text-[11px] text-navy/45">
+                      {new Date(h.createdAt).toLocaleString('ar-EG')}
+                      {h.createdByName ? ` · ${h.createdByName}` : ''}
+                      {h.note ? ` · ${h.note}` : ''}
+                    </p>
+                  </div>
+                  <p className="shrink-0 font-extrabold tabular-nums">
+                    {money(Number(h.amount))}
                   </p>
                 </div>
-                <p className="font-extrabold tabular-nums">
-                  {money(Number(h.amount))}
-                </p>
-              </li>
-            ))}
-          </ul>
-          <ul className="space-y-2 text-sm">
-            {(cash?.closes || []).map((c) => (
-              <li
-                key={c.id}
-                className="rounded-xl border border-mist px-3 py-2 flex justify-between gap-2"
-              >
-                <div>
-                  <p className="font-semibold">
-                    قفل{' '}
-                    {String(c.businessDate).slice(0, 10)}
-                  </p>
-                  <p className="text-[11px] text-navy/45">
-                    فودافون {money(Number(c.vodafoneCollected))} · فرق{' '}
-                    {money(Number(c.difference))}
-                    {c.closedByName ? ` · ${c.closedByName}` : ''}
-                  </p>
+              ))}
+              {(cash?.closes || []).map((c) => {
+                const ymd = String(c.businessDate).slice(0, 10);
+                return (
+                <div
+                  key={c.id}
+                  className="flex justify-between gap-2 rounded-lg border border-mist px-3 py-1.5"
+                >
+                  <div className="min-w-0">
+                    <p className="font-semibold">قفل {ymd}</p>
+                    <p className="truncate text-[11px] text-navy/45">
+                      فودافون {money(Number(c.vodafoneCollected))} · فرق{' '}
+                      {money(Number(c.difference))}
+                      {c.closedByName ? ` · ${c.closedByName}` : ''}
+                    </p>
+                  </div>
+                  <div className="shrink-0 text-left">
+                    <p className="font-extrabold tabular-nums">
+                      {money(Number(c.countedAmount))}
+                    </p>
+                    <a
+                      href={daySheetHref(ymd)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs font-bold text-sky-800 hover:underline"
+                    >
+                      طباعة
+                    </a>
+                  </div>
                 </div>
-                <p className="font-extrabold tabular-nums">
-                  {money(Number(c.countedAmount))}
-                </p>
-              </li>
-            ))}
-            {!cash?.handovers?.length && !cash?.closes?.length ? (
-              <EmptyState>لا توجد حركات خزنة بعد</EmptyState>
-            ) : null}
-          </ul>
+                );
+              })}
+            </div>
+          ) : (
+            <EmptyState>لا توجد حركات خزنة بعد</EmptyState>
+          )}
         </SectionCard>
       </div>
       </>
       ) : null}
 
-      {tab === 'close' ? (
-        <SectionCard className="mb-4" title="آخر أيام اتقفلت">
-          <ul className="space-y-2 text-sm">
-            {(cash?.closes || []).map((c) => (
-              <li
-                key={c.id}
-                className="rounded-xl border border-mist px-3 py-2 flex justify-between gap-2"
-              >
-                <div>
-                  <p className="font-semibold">
-                    قفل {String(c.businessDate).slice(0, 10)}
-                  </p>
-                  <p className="text-[11px] text-navy/45">
-                    فودافون {money(Number(c.vodafoneCollected))} · فرق{' '}
-                    {money(Number(c.difference))}
-                    {c.closedByName ? ` · ${c.closedByName}` : ''}
-                  </p>
-                </div>
-                <p className="font-extrabold tabular-nums">
-                  {money(Number(c.countedAmount))}
-                </p>
-              </li>
-            ))}
-            {!cash?.closes?.length ? (
-              <EmptyState>لا يوجد قفل يوم بعد</EmptyState>
-            ) : null}
-          </ul>
-        </SectionCard>
-      ) : null}
       </>
       ) : canReceipts ? (
       <>
