@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { AppShell } from '@/components/AppShell';
 import { PageHeader } from '@/components/PageHeader';
+import { AppDialog } from '@/components/AppDialog';
 import {
   EmptyState,
   FieldLabel,
@@ -44,7 +45,7 @@ type OnlineSale = {
   centerShare: string | number;
   method: string;
   payStatus: string;
-  cashTo?: 'DRAWER' | 'OWNER';
+  cashTo?: 'DRAWER' | 'OWNER' | 'TEACHER_HOLD' | 'SAFE';
   receiptNumber: string;
   buyerName?: string | null;
   buyerPhone?: string | null;
@@ -70,7 +71,7 @@ type HandoutSale = {
   centerShare: string | number;
   method: string;
   payStatus: string;
-  cashTo?: 'DRAWER' | 'OWNER';
+  cashTo?: 'DRAWER' | 'OWNER' | 'TEACHER_HOLD' | 'SAFE';
   receiptNumber: string;
   product: { title: string };
 };
@@ -85,14 +86,17 @@ type Rental = {
   amount: string | number;
   method: string;
   payStatus: string;
-  cashTo?: 'DRAWER' | 'OWNER';
+  cashTo?: 'DRAWER' | 'OWNER' | 'TEACHER_HOLD' | 'SAFE';
   status: string;
   receiptNumber?: string | null;
   classroom: Classroom;
 };
 
 function cashToLabel(to?: string) {
-  return to === 'OWNER' ? 'صاحب السنتر' : 'الدرج';
+  if (to === 'OWNER') return 'صاحب السنتر';
+  if (to === 'TEACHER_HOLD') return 'حساب المدرس';
+  if (to === 'SAFE') return 'الخزنة';
+  return 'الدرج';
 }
 
 function teacherName(t?: { firstName?: string; lastName?: string } | null) {
@@ -163,6 +167,11 @@ export default function RevenuePage() {
 
   const [offerForm, setOfferForm] = useState({ ...emptyOfferForm });
   const [editingOfferId, setEditingOfferId] = useState('');
+  const [confirm, setConfirm] = useState<null | {
+    kind: 'sale' | 'offer';
+    id: string;
+    label: string;
+  }>(null);
   const [sellOnline, setSellOnline] = useState({
     offerId: '',
     method: 'CASH',
@@ -480,6 +489,37 @@ export default function RevenuePage() {
     await load();
   }
 
+  async function doDeleteConfirm() {
+    if (!confirm) return;
+    const key = `${confirm.kind}-${confirm.id}`;
+    setBusy(key);
+    setError('');
+    try {
+      if (confirm.kind === 'offer') {
+        await api(`/revenue/online/offers/${confirm.id}`, { method: 'DELETE' });
+        if (selectedOffer === confirm.id) {
+          setSelectedOffer('');
+          setCodes([]);
+        }
+        if (sellOnline.offerId === confirm.id) {
+          setSellOnline((s) => ({ ...s, offerId: '' }));
+        }
+        if (editingOfferId === confirm.id) cancelEditOffer();
+        setMsg('تم مسح العرض وكل أكواده');
+      } else {
+        await api(`/revenue/online/sales/${confirm.id}`, { method: 'DELETE' });
+        setMsg('تم مسح البيع والكود رجع متاح');
+        if (selectedOffer) await loadCodes(selectedOffer);
+      }
+      setConfirm(null);
+      await load();
+    } catch (err: any) {
+      setError(err.message || 'فشل المسح');
+    } finally {
+      setBusy('');
+    }
+  }
+
   const teacherSubjects = subjectsOf(
     teachers.find((t) => t.id === offerForm.teacherId),
   );
@@ -712,13 +752,29 @@ export default function RevenuePage() {
                     </span>
                   </button>
                   {toOwner ? (
+                    <div className="mt-1 flex gap-3">
                     <button
                       type="button"
-                      className="mt-1 text-xs font-bold text-navy/70 hover:underline"
+                      className="text-xs font-bold text-navy/70 hover:underline"
                       onClick={() => startEditOffer(o)}
                     >
                       تعديل
                     </button>
+                    <button
+                      type="button"
+                      className="text-xs font-bold text-rose-700 hover:underline"
+                      disabled={busy === `offer-${o.id}`}
+                      onClick={() =>
+                        setConfirm({
+                          kind: 'offer',
+                          id: o.id,
+                          label: `${o.title} · ${o._count?.codes ?? 0} كود · ${o._count?.sales ?? 0} مباع`,
+                        })
+                      }
+                    >
+                      مسح العرض
+                    </button>
+                    </div>
                   ) : null}
                 </li>
               ))}
@@ -785,6 +841,9 @@ export default function RevenuePage() {
                       الإجمالي {total.toLocaleString('en-EG')} ج.م
                       {sellOnline.qty > 1
                         ? ` (${sellOnline.qty} × ${unit.toLocaleString('en-EG')})`
+                        : ''}
+                      {!toOwner
+                        ? ' · على حساب المدرس (متدخلش قفل اليوم)'
                         : ''}
                     </p>
                   ) : null;
@@ -858,6 +917,22 @@ export default function RevenuePage() {
                         تأكيد فودافون
                       </button>
                     ) : null}
+                    {toOwner ? (
+                      <button
+                        type="button"
+                        className="mt-2 text-xs font-bold text-rose-700 hover:underline"
+                        disabled={busy === `sale-${s.id}`}
+                        onClick={() =>
+                          setConfirm({
+                            kind: 'sale',
+                            id: s.id,
+                            label: `${s.offer.title} · ${s.code.code}`,
+                          })
+                        }
+                      >
+                        مسح البيع
+                      </button>
+                    ) : null}
                   </li>
                 ))}
                 {!onlineSales.length ? <EmptyState>لا مبيعات بعد</EmptyState> : null}
@@ -870,7 +945,24 @@ export default function RevenuePage() {
                   {codes.map((c) => (
                     <li key={c.id} className="flex justify-between gap-2">
                       <span>{c.code}</span>
-                      <span>{c.status}</span>
+                      <span className="flex items-center gap-2">
+                        <span>{c.status}</span>
+                        {toOwner && c.status === 'SOLD' && c.sale?.id ? (
+                          <button
+                            type="button"
+                            className="font-sans font-bold text-rose-700 hover:underline"
+                            onClick={() =>
+                              setConfirm({
+                                kind: 'sale',
+                                id: c.sale.id,
+                                label: c.code,
+                              })
+                            }
+                          >
+                            مسح
+                          </button>
+                        ) : null}
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -1058,6 +1150,11 @@ export default function RevenuePage() {
                   />
                 </FieldLabel>
               </div>
+              {!toOwner ? (
+                <p className="text-[11px] text-navy/45">
+                  على حساب المدرس · متدخلش قفل اليوم · بعد التصفية نصيب السنتر يدخل الخزنة
+                </p>
+              ) : null}
               <FieldLabel label="الدفع">
                 <select
                   className="field"
@@ -1312,6 +1409,20 @@ export default function RevenuePage() {
           </SectionCard>
         </div>
       ) : null}
+      <AppDialog
+        open={!!confirm}
+        tone="danger"
+        title={confirm?.kind === 'offer' ? 'مسح عرض الأكواد' : 'مسح كود متباع'}
+        message={
+          confirm?.kind === 'offer'
+            ? `هيتشال العرض «${confirm.label}» وكل الأكواد والمبيعات المرتبطة بيه.`
+            : `هيتشال البيع والكود يرجع متاح.\n${confirm?.label || ''}`
+        }
+        confirmLabel={busy.startsWith('sale-') || busy.startsWith('offer-') ? 'جاري المسح...' : 'مسح'}
+        cancelLabel="رجوع"
+        onConfirm={() => void doDeleteConfirm()}
+        onClose={() => setConfirm(null)}
+      />
     </AppShell>
   );
 }

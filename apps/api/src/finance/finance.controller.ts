@@ -178,6 +178,15 @@ export class FinanceController {
     return this.cash.deleteExtraRevenue(kind, id);
   }
 
+  @Post('cash/teacher-holds/settle')
+  @RequirePerms('finance.safe')
+  settleTeacherHold(
+    @CurrentUser() user: { userId: string },
+    @Body() body: { teacherId?: string | null },
+  ) {
+    return this.cash.settleTeacherHold(user.userId, body?.teacherId);
+  }
+
   @Post('cash/close-day')
   @RequirePerms('finance.close')
   closeDay(

@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -129,6 +130,18 @@ export class RevenueController {
     @CurrentUser() user: { userId: string },
   ) {
     return this.revenue.confirmOnlineSale(id, user?.userId);
+  }
+
+  @Delete('online/sales/:id')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  deleteOnlineSale(@Param('id') id: string) {
+    return this.revenue.deleteOnlineSale(id);
+  }
+
+  @Delete('online/offers/:id')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  deleteOffer(@Param('id') id: string) {
+    return this.revenue.deleteOffer(id);
   }
 
   // Handouts

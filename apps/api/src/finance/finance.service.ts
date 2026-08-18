@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { BookingStatus, PaymentStatus, PayoutStatus } from '@prisma/client';
+import { BookingStatus, ExtraRevenueCashTo, PaymentStatus, PayoutStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { splitSessionNet } from '../ops/session-split';
 
@@ -402,6 +402,7 @@ export class FinanceService {
         where: {
           ...paid,
           offer: { teacherId },
+          cashTo: { notIn: [ExtraRevenueCashTo.TEACHER_HOLD, ExtraRevenueCashTo.SAFE] },
           OR: [
             { confirmedAt: { gte: fromDate, lte: toDate } },
             {
@@ -415,6 +416,7 @@ export class FinanceService {
         where: {
           ...paid,
           product: { teacherId },
+          cashTo: { notIn: [ExtraRevenueCashTo.TEACHER_HOLD, ExtraRevenueCashTo.SAFE] },
           OR: [
             { confirmedAt: { gte: fromDate, lte: toDate } },
             {

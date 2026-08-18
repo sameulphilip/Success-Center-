@@ -232,7 +232,7 @@ export class CashService {
       payStatus: SessionPayStatus.CONFIRMED,
       cashTo: ExtraRevenueCashTo.OWNER,
     };
-    const [closes, safeExp, ownerExp, handovers, onlineOwner, handoutOwner, rentalOwner] =
+    const [closes, safeExp, ownerExp, handovers, onlineOwner, handoutOwner, rentalOwner, settledCenter] =
       await Promise.all([
         this.prisma.cashDayClose.aggregate({ _sum: { transferredToSafe: true } }),
         this.prisma.cashExpense.aggregate({
@@ -256,8 +256,12 @@ export class CashService {
           where: ownerRev,
           _sum: { amount: true },
         }),
+        this.prisma.extraTeacherSettlement.aggregate({
+          _sum: { centerToSafe: true },
+        }),
       ]);
-    const intoSafe = money(closes._sum.transferredToSafe);
+    const intoSafe =
+      money(closes._sum.transferredToSafe) + money(settledCenter._sum.centerToSafe);
     const outSafeExp = money(safeExp._sum.amount);
     const handed = money(handovers._sum.amount);
     const ownerSpent = money(ownerExp._sum.amount);
@@ -277,7 +281,16 @@ export class CashService {
   private async extraRevenueSales(forReception: boolean) {
     const confirmed = SessionPayStatus.CONFIRMED;
     const where = forReception
-      ? { payStatus: confirmed, cashTo: ExtraRevenueCashTo.DRAWER }
+      ? {
+          payStatus: confirmed,
+          cashTo: {
+            in: [
+              ExtraRevenueCashTo.DRAWER,
+              ExtraRevenueCashTo.TEACHER_HOLD,
+              ExtraRevenueCashTo.SAFE,
+            ],
+          },
+        }
       : { payStatus: confirmed };
     const [online, handouts, rentals] = await Promise.all([
       this.prisma.onlineCodeSale.findMany({
@@ -319,7 +332,12 @@ export class CashService {
           soldByUserId: true,
           receiptNumber: true,
           qty: true,
-          product: { select: { title: true } },
+          product: {
+            select: {
+              title: true,
+              teacher: { select: { firstName: true, lastName: true } },
+            },
+          },
         },
         orderBy: { confirmedAt: 'desc' },
         take: 80,
@@ -372,7 +390,14 @@ export class CashService {
         kind: 'handout' as const,
         kindLabel: 'مذكرة',
         title: s.product.title,
-        detail: `×${s.qty} · ${s.receiptNumber}`,
+        detail: [
+          [s.product.teacher?.firstName, s.product.teacher?.lastName]
+            .filter((p) => p && p !== '-')
+            .join(' '),
+          `×${s.qty} · ${s.receiptNumber}`,
+        ]
+          .filter(Boolean)
+          .join(' · '),
         amount: money(s.centerShare),
         teacherShare: money(s.teacherShare),
         grossAmount: money(s.amount),
@@ -427,6 +452,243 @@ export class CashService {
     }));
   }
 
+  private holdTeacherId(raw?: string | null) {
+    const id = String(raw || '').trim();
+    if (!id || id === 'none') return null;
+    return id;
+  }
+
+  private async teacherHolds() {
+    const where = {
+      payStatus: SessionPayStatus.CONFIRMED,
+      cashTo: ExtraRevenueCashTo.TEACHER_HOLD,
+      settlementId: null,
+    };
+    const [online, handouts] = await Promise.all([
+      this.prisma.onlineCodeSale.findMany({
+        where,
+        select: {
+          amount: true,
+          teacherShare: true,
+          centerShare: true,
+          offer: {
+            select: {
+              teacherId: true,
+              teacher: { select: { firstName: true, lastName: true } },
+            },
+          },
+        },
+      }),
+      this.prisma.handoutSale.findMany({
+        where,
+        select: {
+          amount: true,
+          teacherShare: true,
+          centerShare: true,
+          product: {
+            select: {
+              teacherId: true,
+              teacher: { select: { firstName: true, lastName: true } },
+            },
+          },
+        },
+      }),
+    ]);
+
+    type Hold = {
+      teacherId: string;
+      teacherName: string;
+      onlineCount: number;
+      handoutCount: number;
+      gross: number;
+      teacherShare: number;
+      centerShare: number;
+    };
+    const map = new Map<string, Hold>();
+    const bump = (
+      teacherId: string | null,
+      teacher: { firstName: string; lastName: string } | null | undefined,
+      kind: 'online' | 'handout',
+      row: { amount: Prisma.Decimal | number; teacherShare: Prisma.Decimal | number; centerShare: Prisma.Decimal | number },
+    ) => {
+      const key = teacherId || 'none';
+      const curr = map.get(key) || {
+        teacherId: key,
+        teacherName: teacher
+          ? [teacher.firstName, teacher.lastName !== '-' ? teacher.lastName : '']
+              .filter(Boolean)
+              .join(' ')
+              .trim() || 'بدون مدرس'
+          : 'بدون مدرس',
+        onlineCount: 0,
+        handoutCount: 0,
+        gross: 0,
+        teacherShare: 0,
+        centerShare: 0,
+      };
+      if (kind === 'online') curr.onlineCount += 1;
+      else curr.handoutCount += 1;
+      curr.gross += money(row.amount);
+      curr.teacherShare += money(row.teacherShare);
+      curr.centerShare += money(row.centerShare);
+      map.set(key, curr);
+    };
+
+    for (const s of online) {
+      bump(s.offer.teacherId, s.offer.teacher, 'online', s);
+    }
+    for (const s of handouts) {
+      bump(s.product.teacherId, s.product.teacher, 'handout', s);
+    }
+
+    return [...map.values()]
+      .map((h) => ({
+        ...h,
+        gross: Math.round(h.gross * 100) / 100,
+        teacherShare: Math.round(h.teacherShare * 100) / 100,
+        centerShare: Math.round(h.centerShare * 100) / 100,
+      }))
+      .sort((a, b) => b.gross - a.gross);
+  }
+
+  private async extraSettlements() {
+    const rows = await this.prisma.extraTeacherSettlement.findMany({
+      include: {
+        teacher: { select: { firstName: true, lastName: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    });
+    const userIds = rows.map((r) => r.settledByUserId).filter(Boolean) as string[];
+    const users = userIds.length
+      ? await this.prisma.user.findMany({
+          where: { id: { in: [...new Set(userIds)] } },
+          select: { id: true, fullName: true },
+        })
+      : [];
+    const names = new Map(users.map((u) => [u.id, u.fullName]));
+    return rows.map((r) => ({
+      id: r.id,
+      teacherId: r.teacherId,
+      teacherName: r.teacher
+        ? [r.teacher.firstName, r.teacher.lastName !== '-' ? r.teacher.lastName : '']
+            .filter(Boolean)
+            .join(' ')
+            .trim() || 'بدون مدرس'
+        : 'بدون مدرس',
+      teacherPaid: money(r.teacherPaid),
+      centerToSafe: money(r.centerToSafe),
+      grossAmount: money(r.grossAmount),
+      onlineCount: r.onlineCount,
+      handoutCount: r.handoutCount,
+      createdAt: r.createdAt,
+      settledByName: r.settledByUserId
+        ? names.get(r.settledByUserId) || null
+        : null,
+    }));
+  }
+
+  async settleTeacherHold(userId: string, teacherIdRaw?: string | null) {
+    const teacherId = this.holdTeacherId(teacherIdRaw);
+    if (teacherId) {
+      const teacher = await this.prisma.teacher.findUnique({
+        where: { id: teacherId },
+        select: { id: true },
+      });
+      if (!teacher) throw new NotFoundException('المدرس غير موجود');
+    }
+
+    const holdWhere = {
+      payStatus: SessionPayStatus.CONFIRMED,
+      cashTo: ExtraRevenueCashTo.TEACHER_HOLD,
+      settlementId: null,
+    };
+
+    return this.prisma.$transaction(async (tx) => {
+      const [online, handouts] = await Promise.all([
+        teacherId
+          ? tx.onlineCodeSale.findMany({
+              where: { ...holdWhere, offer: { teacherId } },
+              select: {
+                id: true,
+                amount: true,
+                teacherShare: true,
+                centerShare: true,
+              },
+            })
+          : Promise.resolve([] as Array<{
+              id: string;
+              amount: Prisma.Decimal;
+              teacherShare: Prisma.Decimal;
+              centerShare: Prisma.Decimal;
+            }>),
+        tx.handoutSale.findMany({
+          where: { ...holdWhere, product: { teacherId } },
+          select: {
+            id: true,
+            amount: true,
+            teacherShare: true,
+            centerShare: true,
+          },
+        }),
+      ]);
+      if (!online.length && !handouts.length) {
+        throw new BadRequestException('لا يوجد حساب مفتوح لهذا المدرس');
+      }
+
+      const teacherPaid = [...online, ...handouts].reduce(
+        (n, s) => n + money(s.teacherShare),
+        0,
+      );
+      const centerToSafe = [...online, ...handouts].reduce(
+        (n, s) => n + money(s.centerShare),
+        0,
+      );
+      const grossAmount = [...online, ...handouts].reduce(
+        (n, s) => n + money(s.amount),
+        0,
+      );
+
+      const settlement = await tx.extraTeacherSettlement.create({
+        data: {
+          teacherId,
+          teacherPaid: Math.round(teacherPaid * 100) / 100,
+          centerToSafe: Math.round(centerToSafe * 100) / 100,
+          grossAmount: Math.round(grossAmount * 100) / 100,
+          onlineCount: online.length,
+          handoutCount: handouts.length,
+          settledByUserId: userId,
+        },
+      });
+
+      if (online.length) {
+        await tx.onlineCodeSale.updateMany({
+          where: { id: { in: online.map((s) => s.id) } },
+          data: {
+            cashTo: ExtraRevenueCashTo.SAFE,
+            settlementId: settlement.id,
+          },
+        });
+      }
+      if (handouts.length) {
+        await tx.handoutSale.updateMany({
+          where: { id: { in: handouts.map((s) => s.id) } },
+          data: {
+            cashTo: ExtraRevenueCashTo.SAFE,
+            settlementId: settlement.id,
+          },
+        });
+      }
+
+      return {
+        ...settlement,
+        teacherPaid: money(settlement.teacherPaid),
+        centerToSafe: money(settlement.centerToSafe),
+        grossAmount: money(settlement.grossAmount),
+      };
+    });
+  }
+
   async snapshot(ymd = cairoYmd(), viewer?: { userId: string; role?: string }) {
     const isReception = viewer?.role === 'RECEPTION';
     const expenseWhere: Prisma.CashExpenseWhereInput = isReception
@@ -440,7 +702,7 @@ export class CashService {
       paidFrom: CashExpenseFrom.DRAWER,
       businessDate,
     };
-    const [collected, drawerExpAgg, drawerToday, close, balances, expenses, handovers, closes, unclosedPrevious, extraRevenueSales] =
+    const [collected, drawerExpAgg, drawerToday, close, balances, expenses, handovers, closes, unclosedPrevious, extraRevenueSales, teacherHolds, extraSettlements] =
       await Promise.all([
         this.dayCollections(ymd),
         this.prisma.cashExpense.aggregate({
@@ -468,6 +730,8 @@ export class CashService {
         }),
         this.unclosedPrevious(ymd),
         this.extraRevenueSales(isReception),
+        this.teacherHolds(),
+        this.extraSettlements(),
       ]);
 
     const drawerExpenses = money(drawerExpAgg._sum.amount);
@@ -522,6 +786,9 @@ export class CashService {
         : balances.totalHandedToOwner,
       ownerExtraRevenue: isReception ? undefined : balances.ownerExtraRevenue,
       extraRevenueSales,
+      teacherHolds,
+      teacherHoldTotal: teacherHolds.reduce((n, h) => n + h.gross, 0),
+      extraSettlements,
       viewerScope: isReception ? 'reception' : 'owner',
       canOwnerExpense: !isReception,
       categories: EXPENSE_CATEGORIES,
@@ -668,18 +935,53 @@ export class CashService {
         where: { id },
       });
       if (!sale) throw new NotFoundException('البيع غير موجود');
-      await this.prisma.$transaction([
-        this.prisma.onlineCodeSale.delete({ where: { id } }),
-        this.prisma.onlineAccessCode.update({
+      await this.prisma.$transaction(async (tx) => {
+        if (sale.settlementId) {
+          const st = await tx.extraTeacherSettlement.findUnique({
+            where: { id: sale.settlementId },
+          });
+          if (st) {
+            const teacherPaid = Math.max(
+              0,
+              Number(st.teacherPaid) - Number(sale.teacherShare || 0),
+            );
+            const centerToSafe = Math.max(
+              0,
+              Number(st.centerToSafe) - Number(sale.centerShare || 0),
+            );
+            const grossAmount = Math.max(
+              0,
+              Number(st.grossAmount) - Number(sale.amount || 0),
+            );
+            const onlineCount = Math.max(0, st.onlineCount - 1);
+            await tx.onlineCodeSale.delete({ where: { id } });
+            if (onlineCount === 0 && st.handoutCount === 0) {
+              await tx.extraTeacherSettlement.delete({ where: { id: st.id } });
+            } else {
+              await tx.extraTeacherSettlement.update({
+                where: { id: st.id },
+                data: { teacherPaid, centerToSafe, grossAmount, onlineCount },
+              });
+            }
+          } else {
+            await tx.onlineCodeSale.delete({ where: { id } });
+          }
+        } else {
+          await tx.onlineCodeSale.delete({ where: { id } });
+        }
+        await tx.onlineAccessCode.update({
           where: { id: sale.codeId },
           data: { status: OnlineCodeStatus.AVAILABLE },
-        }),
-      ]);
+        });
+      });
       return { ok: true, deletedId: id, kind: 'online' };
     }
     if (type === 'handout') {
       const sale = await this.prisma.handoutSale.findUnique({ where: { id } });
       if (!sale) throw new NotFoundException('البيع غير موجود');
+      if (sale.settlementId) {
+        throw new BadRequestException('البيع اتصفّى مع المدرس ومش هيتشال');
+      }
       await this.prisma.$transaction([
         this.prisma.handoutProduct.update({
           where: { id: sale.productId },

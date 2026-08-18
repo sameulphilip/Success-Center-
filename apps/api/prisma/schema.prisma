@@ -120,6 +120,8 @@ enum CashExpenseFrom {
 enum ExtraRevenueCashTo {
   DRAWER
   OWNER
+  TEACHER_HOLD
+  SAFE
 }
 
 model User {
@@ -251,6 +253,7 @@ model Teacher {
   studentBlocks StudentBlock[]
   onlineOffers  OnlineOffer[]
   handoutProducts HandoutProduct[]
+  extraSettlements ExtraTeacherSettlement[]
   createdAt   DateTime         @default(now())
   updatedAt   DateTime         @updatedAt
 }
@@ -698,11 +701,14 @@ model OnlineCodeSale {
   confirmedByUserId String?
   soldByUserId      String?
   cashTo            ExtraRevenueCashTo @default(DRAWER)
+  settlementId      String?
+  settlement        ExtraTeacherSettlement? @relation(fields: [settlementId], references: [id])
   note              String?
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 
   @@index([offerId, createdAt])
+  @@index([cashTo, settlementId])
 }
 
 model HandoutProduct {
@@ -742,12 +748,15 @@ model HandoutSale {
   confirmedByUserId String?
   soldByUserId      String?
   cashTo            ExtraRevenueCashTo @default(DRAWER)
+  settlementId      String?
+  settlement        ExtraTeacherSettlement? @relation(fields: [settlementId], references: [id])
   buyerPhone        String?
   note              String?
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 
   @@index([productId, createdAt])
+  @@index([cashTo, settlementId])
 }
 
 model RoomRental {
@@ -775,6 +784,25 @@ model RoomRental {
 
   @@index([classroomId, startsAt])
   @@index([status, startsAt])
+}
+
+/// Reception extra-revenue hold settled with a teacher; center share then enters the safe.
+model ExtraTeacherSettlement {
+  id              String   @id @default(cuid())
+  teacherId       String?
+  teacher         Teacher? @relation(fields: [teacherId], references: [id])
+  teacherPaid     Decimal  @db.Decimal(12, 2)
+  centerToSafe    Decimal  @db.Decimal(12, 2)
+  grossAmount     Decimal  @db.Decimal(12, 2)
+  onlineCount     Int      @default(0)
+  handoutCount    Int      @default(0)
+  note            String?
+  settledByUserId String?
+  createdAt       DateTime @default(now())
+  onlineSales     OnlineCodeSale[]
+  handoutSales    HandoutSale[]
+
+  @@index([teacherId, createdAt])
 }
 
 /// End-of-day till close: cash + converted Vodafone go into the safe

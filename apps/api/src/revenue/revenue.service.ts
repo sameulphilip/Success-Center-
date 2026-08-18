@@ -6,6 +6,7 @@ import {
 import {
   ExtraRevenueCashTo,
   OnlineCodeStatus,
+  Prisma,
   RentalStatus,
   RoleCode,
   SessionPayMethod,
@@ -27,11 +28,15 @@ function genCode() {
   return randomBytes(4).toString('hex').toUpperCase();
 }
 
-function cashToForRole(role?: string) {
+function cashToForRole(
+  role?: string,
+  kind: 'hold' | 'drawer' = 'hold',
+) {
   if (role === RoleCode.SUPER_ADMIN || role === RoleCode.CENTER_MANAGER) {
     return ExtraRevenueCashTo.OWNER;
   }
-  return ExtraRevenueCashTo.DRAWER;
+  if (kind === 'drawer') return ExtraRevenueCashTo.DRAWER;
+  return ExtraRevenueCashTo.TEACHER_HOLD;
 }
 
 function storedCenter(row: {
@@ -383,6 +388,95 @@ export class RevenueService {
     });
   }
 
+  private async unwindOnlineSale(
+    tx: Prisma.TransactionClient,
+    sale: {
+      id: string;
+      codeId: string;
+      amount: unknown;
+      teacherShare: unknown;
+      centerShare: unknown;
+      settlementId: string | null;
+    },
+    restoreCode: boolean,
+  ) {
+    if (sale.settlementId) {
+      const st = await tx.extraTeacherSettlement.findUnique({
+        where: { id: sale.settlementId },
+      });
+      if (st) {
+        const teacherPaid = Math.max(
+          0,
+          Number(st.teacherPaid) - Number(sale.teacherShare || 0),
+        );
+        const centerToSafe = Math.max(
+          0,
+          Number(st.centerToSafe) - Number(sale.centerShare || 0),
+        );
+        const grossAmount = Math.max(
+          0,
+          Number(st.grossAmount) - Number(sale.amount || 0),
+        );
+        const onlineCount = Math.max(0, st.onlineCount - 1);
+        if (onlineCount === 0 && st.handoutCount === 0) {
+          await tx.onlineCodeSale.delete({ where: { id: sale.id } });
+          await tx.extraTeacherSettlement.delete({ where: { id: st.id } });
+        } else {
+          await tx.onlineCodeSale.delete({ where: { id: sale.id } });
+          await tx.extraTeacherSettlement.update({
+            where: { id: st.id },
+            data: { teacherPaid, centerToSafe, grossAmount, onlineCount },
+          });
+        }
+      } else {
+        await tx.onlineCodeSale.delete({ where: { id: sale.id } });
+      }
+    } else {
+      await tx.onlineCodeSale.delete({ where: { id: sale.id } });
+    }
+    if (restoreCode) {
+      await tx.onlineAccessCode.update({
+        where: { id: sale.codeId },
+        data: { status: OnlineCodeStatus.AVAILABLE },
+      });
+    }
+  }
+
+  async deleteOnlineSale(id: string) {
+    const sale = await this.prisma.onlineCodeSale.findUnique({ where: { id } });
+    if (!sale) throw new NotFoundException('البيع غير موجود');
+    await this.prisma.$transaction((tx) =>
+      this.unwindOnlineSale(tx, sale, true),
+    );
+    return { ok: true, deletedId: id };
+  }
+
+  async deleteOffer(id: string) {
+    const offer = await this.prisma.onlineOffer.findUnique({
+      where: { id },
+      select: { id: true, title: true },
+    });
+    if (!offer) throw new NotFoundException('العرض غير موجود');
+    await this.prisma.$transaction(async (tx) => {
+      const sales = await tx.onlineCodeSale.findMany({
+        where: { offerId: id },
+        select: {
+          id: true,
+          codeId: true,
+          amount: true,
+          teacherShare: true,
+          centerShare: true,
+          settlementId: true,
+        },
+      });
+      for (const sale of sales) {
+        await this.unwindOnlineSale(tx, sale, false);
+      }
+      await tx.onlineOffer.delete({ where: { id } });
+    });
+    return { ok: true, deletedId: id, title: offer.title };
+  }
+
   // —— Handouts ——
   listHandouts() {
     return this.prisma.handoutProduct.findMany({
@@ -591,7 +685,7 @@ export class RevenueService {
         confirmedAt: isCash ? new Date() : null,
         confirmedByUserId: isCash ? userId : null,
         createdByUserId: userId,
-        cashTo: cashToForRole(role),
+        cashTo: cashToForRole(role, 'drawer'),
         notes: data.notes,
       },
       include: { classroom: true },

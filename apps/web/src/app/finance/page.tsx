@@ -111,11 +111,33 @@ type CashSnapshot = {
     teacherShare?: number;
     grossAmount?: number;
     method: string;
-    cashTo: 'DRAWER' | 'OWNER';
+    cashTo: 'DRAWER' | 'OWNER' | 'TEACHER_HOLD' | 'SAFE';
     at: string;
     receiptNumber?: string | null;
     soldByName?: string | null;
   }>;
+  extraSettlements?: Array<{
+    id: string;
+    teacherId: string | null;
+    teacherName: string;
+    teacherPaid: number;
+    centerToSafe: number;
+    grossAmount: number;
+    onlineCount: number;
+    handoutCount: number;
+    createdAt: string;
+    settledByName?: string | null;
+  }>;
+  teacherHolds?: Array<{
+    teacherId: string;
+    teacherName: string;
+    onlineCount: number;
+    handoutCount: number;
+    gross: number;
+    teacherShare: number;
+    centerShare: number;
+  }>;
+  teacherHoldTotal?: number;
   totalHandedToOwner?: number;
   ownerSpent?: number;
   viewerScope?: 'reception' | 'owner';
@@ -174,6 +196,8 @@ const fromLabel: Record<string, string> = {
 const extraCashToLabel: Record<string, string> = {
   DRAWER: 'الدرج',
   OWNER: 'صاحب السنتر',
+  TEACHER_HOLD: 'حساب المدرس',
+  SAFE: 'الخزنة',
 };
 
 function payMethodLabel(method?: string) {
@@ -215,11 +239,21 @@ export default function FinancePage() {
     canReceipts ? 'receipts' : canSafe ? 'safe' : 'close',
   );
   const [confirm, setConfirm] = useState<null | {
-    kind: 'close' | 'handover' | 'del-receipt' | 'del-expense' | 'del-extra';
+    kind:
+      | 'close'
+      | 'handover'
+      | 'del-receipt'
+      | 'del-expense'
+      | 'del-extra'
+      | 'settle-hold';
     id?: string;
     date?: string;
     source?: 'PAYMENT' | 'SESSION';
     extraKind?: 'online' | 'handout' | 'rental';
+    teacherId?: string;
+    teacherName?: string;
+    teacherPaid?: number;
+    centerToSafe?: number;
     label?: string;
   }>(null);
 
@@ -289,11 +323,12 @@ export default function FinancePage() {
 
   const extraSales = cash?.extraRevenueSales ?? [];
   const extraDrawerTotal = extraSales
-    .filter((s) => s.cashTo !== 'OWNER')
+    .filter((s) => s.cashTo === 'DRAWER')
     .reduce((n, s) => n + Number(s.amount || 0), 0);
   const extraOwnerTotal = extraSales
     .filter((s) => s.cashTo === 'OWNER')
     .reduce((n, s) => n + Number(s.amount || 0), 0);
+  const teacherHolds = cash?.teacherHolds ?? [];
 
   async function submitExpense(e: FormEvent) {
     e.preventDefault();
@@ -417,6 +452,24 @@ export default function FinancePage() {
     }
   }
 
+  async function doSettleHold() {
+    if (!confirm?.teacherId) return;
+    setBusy(`settle-${confirm.teacherId}`);
+    setError('');
+    try {
+      await api('/finance/cash/teacher-holds/settle', {
+        method: 'POST',
+        body: JSON.stringify({ teacherId: confirm.teacherId }),
+      });
+      setConfirm(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'فشل تصفية حساب المدرس');
+    } finally {
+      setBusy('');
+    }
+  }
+
   return (
     <AppShell>
       <PageHeader
@@ -505,7 +558,7 @@ export default function FinancePage() {
       <PageHero
         eyebrow="CASH"
         title="الخزنة والدرج"
-        subtitle="فودافون كاش بتتحسب كاش مع قفل اليوم. إيراد إضافي من المدير عند صاحب السنتر، ومن الاستقبال في الدرج."
+        subtitle="فودافون كاش بتتحسب كاش مع قفل اليوم. قاعات الاستقبال في الدرج. أكواد وملازم الاستقبال على حساب المدرس لحد التصفية، وبعدين نصيب السنتر يدخل الخزنة."
         metrics={[
           {
             label: 'المفروض في الدرج',
@@ -513,6 +566,10 @@ export default function FinancePage() {
             highlight: true,
           },
           { label: 'رصيد الخزنة', value: money(cash?.safeBalance ?? 0) },
+          {
+            label: 'حسابات المدرسين',
+            value: money(cash?.teacherHoldTotal ?? 0),
+          },
           ...(canOwnerExpense || cash?.canOwnerExpense
             ? [
                 {
@@ -530,11 +587,119 @@ export default function FinancePage() {
 
       <SectionCard
         className="mb-4"
+        title="حسابات المدرسين — أكواد وملازم"
+        subtitle="فلوس الاستقبال من الأكواد والملازم متتقفلش مع اليوم. تتصفى مع المدرس، وبعدين نصيب السنتر يدخل الخزنة."
+      >
+        {teacherHolds.length ? (
+          <div className="grid gap-3 md:grid-cols-2">
+            {teacherHolds.map((h) => (
+              <div
+                key={h.teacherId}
+                className="rounded-xl border border-navy/10 bg-white p-4"
+              >
+                <div className="mb-3 flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-extrabold text-navy">{h.teacherName}</p>
+                    <p className="text-[12px] text-navy/45">
+                      {h.onlineCount
+                        ? `${h.onlineCount.toLocaleString('en-EG')} كود`
+                        : null}
+                      {h.onlineCount && h.handoutCount ? ' · ' : null}
+                      {h.handoutCount
+                        ? `${h.handoutCount.toLocaleString('en-EG')} ملزمة`
+                        : null}
+                    </p>
+                  </div>
+                  <p className="tabular-nums text-lg font-black text-navy">
+                    {money(h.gross)}
+                  </p>
+                </div>
+                <div className="mb-3 grid grid-cols-2 gap-2 text-[12px]">
+                  <div className="rounded-lg bg-sand px-3 py-2">
+                    <p className="text-navy/45">يدفع للمدرس</p>
+                    <p className="font-bold tabular-nums">
+                      {money(h.teacherShare)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg bg-emerald-50 px-3 py-2">
+                    <p className="text-navy/45">يدخل الخزنة</p>
+                    <p className="font-bold tabular-nums text-emerald-900">
+                      {money(h.centerShare)}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn-primary w-full"
+                  disabled={busy === `settle-${h.teacherId}`}
+                  onClick={() =>
+                    setConfirm({
+                      kind: 'settle-hold',
+                      teacherId: h.teacherId,
+                      teacherName: h.teacherName,
+                      teacherPaid: h.teacherShare,
+                      centerToSafe: h.centerShare,
+                    })
+                  }
+                >
+                  تصفية مع المدرس
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <EmptyState>لا يوجد حساب مفتوح لمدرس من بيع الاستقبال</EmptyState>
+        )}
+        {(cash?.extraSettlements || []).length ? (
+          <div className="mt-4 overflow-auto">
+            <p className="mb-2 text-[11px] font-semibold text-navy/55">
+              تصفيات سابقة
+            </p>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-[11px] text-navy/40">
+                  <th className="px-3 py-2 text-right font-medium">التاريخ</th>
+                  <th className="px-3 py-2 text-right font-medium">المدرس</th>
+                  <th className="px-3 py-2 text-left font-medium">للمدرس</th>
+                  <th className="px-3 py-2 text-left font-medium">للخزنة</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(cash?.extraSettlements || []).map((s) => (
+                  <tr key={s.id} className="border-t border-navy/5">
+                    <td className="px-3 py-2 whitespace-nowrap text-[12px] text-navy/55">
+                      {new Date(s.createdAt).toLocaleString('ar-EG')}
+                    </td>
+                    <td className="px-3 py-2">
+                      <p className="font-semibold">{s.teacherName}</p>
+                      <p className="text-[11px] text-navy/40">
+                        {s.onlineCount ? `${s.onlineCount} كود` : null}
+                        {s.onlineCount && s.handoutCount ? ' · ' : null}
+                        {s.handoutCount ? `${s.handoutCount} ملزمة` : null}
+                        {s.settledByName ? ` · ${s.settledByName}` : ''}
+                      </p>
+                    </td>
+                    <td className="px-3 py-2 tabular-nums text-left">
+                      {money(s.teacherPaid)}
+                    </td>
+                    <td className="px-3 py-2 tabular-nums text-left font-bold text-emerald-800">
+                      {money(s.centerToSafe)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </SectionCard>
+
+      <SectionCard
+        className="mb-4"
         title="مبيعات الإيرادات الإضافية"
         subtitle={
           isReception
-            ? 'نصيب السنتر بس بيدخل الدرج · الباقي يتسجل للمدرس'
-            : `نصيب السنتر: الدرج ${money(extraDrawerTotal)} · صاحب السنتر ${money(extraOwnerTotal)}`
+            ? 'القاعات في الدرج · الأكواد والملازم على حساب المدرس لحد التصفية'
+            : `الدرج ${money(extraDrawerTotal)} · حساب مدرس ${money(cash?.teacherHoldTotal ?? 0)} · صاحب السنتر ${money(extraOwnerTotal)}`
         }
       >
         <div className="overflow-auto">
@@ -574,7 +739,11 @@ export default function FinancePage() {
                       className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-bold ${
                         s.cashTo === 'OWNER'
                           ? 'bg-amber-50 text-amber-900'
-                          : 'bg-sand text-navy/70'
+                          : s.cashTo === 'TEACHER_HOLD'
+                            ? 'bg-indigo-50 text-indigo-900'
+                            : s.cashTo === 'SAFE'
+                              ? 'bg-emerald-50 text-emerald-900'
+                              : 'bg-sand text-navy/70'
                       }`}
                     >
                       {extraCashToLabel[s.cashTo] || s.cashTo}
@@ -1340,10 +1509,22 @@ export default function FinancePage() {
         open={confirm?.kind === 'del-extra'}
         tone="danger"
         title="مسح بيع إيراد إضافي"
-        message={`هيتشال من السجل والدرج أو رصيد صاحب السنتر.\n${confirm?.label || ''}`}
+        message={`هيتشال من السجل والدرج أو حساب المدرس.\n${confirm?.label || ''}`}
         confirmLabel="مسح البيع"
         cancelLabel="رجوع"
         onConfirm={() => void doDeleteExtra()}
+        onClose={() => setConfirm(null)}
+      />
+      <AppDialog
+        open={confirm?.kind === 'settle-hold'}
+        tone="info"
+        title={`تصفية مع ${confirm?.teacherName || 'المدرس'}`}
+        message={`هتدفع للمدرس ${money(Number(confirm?.teacherPaid || 0))} وهتحط نصيب السنتر ${money(Number(confirm?.centerToSafe || 0))} في الخزنة.`}
+        confirmLabel={
+          busy.startsWith('settle-') ? 'جاري التصفية...' : 'تأكيد التصفية'
+        }
+        cancelLabel="رجوع"
+        onConfirm={() => void doSettleHold()}
         onClose={() => setConfirm(null)}
       />
     </AppShell>
