@@ -131,6 +131,8 @@ model User {
   fullName        String
   phone           String?   @unique
   mustSetPassword Boolean   @default(false)
+  /// Last known student PIN for admin view (not used for login checks)
+  portalPin       String?
   isActive        Boolean   @default(true)
   roleId          String
   role            Role      @relation(fields: [roleId], references: [id])

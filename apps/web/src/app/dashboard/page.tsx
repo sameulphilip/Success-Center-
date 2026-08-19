@@ -60,8 +60,21 @@ type DashboardStats = {
     outstandingAmount: number;
     newStudentsMonth: number;
     markedToday: number;
+    intakeToday?: number;
+    sessionsTodayAmount?: number;
+    extraToday?: number;
+    openSessions?: number;
+    pendingSessionPay?: number;
   };
   collectionTrend?: { date: string; amount: number }[];
+  intakeTrend?: {
+    date: string;
+    receipts: number;
+    sessions: number;
+    extra: number;
+    total: number;
+  }[];
+  opsTrend?: { date: string; students: number; amount: number }[];
   attendanceTrend?: {
     date: string;
     present: number;
@@ -100,6 +113,68 @@ type DashboardStats = {
     classroom: string;
     enrolled: number;
   }[];
+  finance?: {
+    receiptsToday: { cash: number; electronic: number; total: number; count: number };
+    sessionsToday: {
+      cash: number;
+      electronic: number;
+      total: number;
+      count: number;
+      centerCut: number;
+      checkedIn: number;
+    };
+    extraToday: {
+      codes: number;
+      codesCount: number;
+      handouts: number;
+      handoutsCount: number;
+      rentals: number;
+      rentalsCount: number;
+      total: number;
+    };
+    extraMonth: number;
+    mixToday: { receipts: number; sessions: number; extra: number; bookings: number };
+    intakeToday: number;
+    expensesToday: number;
+    expensesCount: number;
+    dayClosed: boolean;
+    closeDiff: number | null;
+    bookings: { pending: number; paidToday: number; paidTodayCount: number };
+    onlineWallet: {
+      confirmedAmount: number;
+      pendingAmount: number;
+      confirmedCount: number;
+      pendingCount: number;
+    };
+  };
+  ops?: {
+    openCount: number;
+    closedToday: number;
+    pendingPay: number;
+    unpaidTeachers: number;
+    entriesToday: number;
+    checkedInToday: number;
+    amountToday: number;
+    centerCutToday: number;
+    teacherCutToday: number;
+    cashToday: number;
+    electronicToday: number;
+    openSessions: {
+      id: string;
+      title?: string | null;
+      teacher: string;
+      subject: string;
+      fee: number;
+      entries: number;
+    }[];
+    topTeachers: {
+      teacherId: string;
+      name: string;
+      students: number;
+      amount: number;
+      centerCut: number;
+    }[];
+  };
 };
 
 const STATUS_AR: Record<string, string> = {
@@ -137,12 +212,17 @@ const CHART = {
 const PIE_COLORS = ['#0B2545', '#C99612', '#163A5F', '#64748B', '#059669'];
 
 function money(n: number) {
-  return `${Number(n || 0).toLocaleString('en-EG')} EGP`;
+  return `${Math.round(Number(n || 0)).toLocaleString('en-EG')} ج.م`;
 }
 
 function shortDay(date: string) {
-  const d = new Date(date);
-  return d.toLocaleDateString('ar-EG', { weekday: 'short', day: 'numeric' });
+  const [y, m, d] = String(date).slice(0, 10).split('-').map(Number);
+  const dt = new Date(Date.UTC(y || 2026, (m || 1) - 1, d || 1, 12));
+  return dt.toLocaleDateString('ar-EG', {
+    weekday: 'short',
+    day: 'numeric',
+    timeZone: 'Africa/Cairo',
+  });
 }
 
 function Kpi({
@@ -251,6 +331,34 @@ export default function DashboardPage() {
     [stats],
   );
 
+  const intakeChart = useMemo(
+    () =>
+      (stats?.intakeTrend || []).map((d) => ({
+        ...d,
+        label: shortDay(d.date),
+      })),
+    [stats],
+  );
+
+  const opsChart = useMemo(
+    () =>
+      (stats?.opsTrend || []).map((d) => ({
+        ...d,
+        label: shortDay(d.date),
+      })),
+    [stats],
+  );
+
+  const mixPie = useMemo(() => {
+    const m = stats?.finance?.mixToday;
+    if (!m) return [];
+    return [
+      { name: 'إيصالات', value: m.receipts, key: 'receipts' },
+      { name: 'حصص', value: m.sessions, key: 'sessions' },
+      { name: 'إيراد إضافي', value: m.extra, key: 'extra' },
+    ].filter((x) => x.value > 0);
+  }, [stats]);
+
   const nowMinutes = new Date().getHours() * 60 + new Date().getMinutes();
   const upcoming = (stats?.todaySchedule || []).filter((s) => {
     const [h, m] = s.startTime.split(':').map(Number);
@@ -293,32 +401,26 @@ export default function DashboardPage() {
               SUCCESS OPS
             </p>
             <p className="mt-2 text-sm text-white/60">
-              حضور · تحصيل · جداول · متأخرات — يُحدَّث كل دقيقة
+              حسابات · تشغيل حصص · حضور — يُحدَّث كل دقيقة
             </p>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+          <div className="grid grid-cols-3 gap-3 text-center">
             <div className="rounded-xl bg-white/10 px-3 py-2 min-w-[96px]">
-              <p className="text-[11px] text-white/55">نسبة الحضور</p>
+              <p className="text-[11px] text-white/55">دخل اليوم</p>
               <p className="text-xl font-extrabold text-amber-300 tabular-nums">
-                {k?.attendanceRateToday ?? 0}%
+                {Number(k?.intakeToday ?? 0).toLocaleString('en-EG')}
+              </p>
+            </div>
+            <div className="rounded-xl bg-white/10 px-3 py-2 min-w-[96px]">
+              <p className="text-[11px] text-white/55">حصص مفتوحة</p>
+              <p className="text-xl font-extrabold tabular-nums">
+                {k?.openSessions ?? 0}
               </p>
             </div>
             <div className="rounded-xl bg-white/10 px-3 py-2 min-w-[96px]">
               <p className="text-[11px] text-white/55">تحصيل اليوم</p>
               <p className="text-xl font-extrabold tabular-nums">
                 {Number(k?.collectedToday ?? stats?.collectedToday ?? 0).toLocaleString('en-EG')}
-              </p>
-            </div>
-            <div className="rounded-xl bg-white/10 px-3 py-2 min-w-[96px]">
-              <p className="text-[11px] text-white/55">مسح QR/NFC</p>
-              <p className="text-xl font-extrabold tabular-nums">
-                {k?.checkInsToday ?? 0}
-              </p>
-            </div>
-            <div className="rounded-xl bg-white/10 px-3 py-2 min-w-[96px]">
-              <p className="text-[11px] text-white/55">متأخرات</p>
-              <p className="text-xl font-extrabold text-amber-200 tabular-nums">
-                {k?.outstandingStudents ?? stats?.outstandingStudents ?? 0}
               </p>
             </div>
           </div>
@@ -345,11 +447,6 @@ export default function DashboardPage() {
           accent="green"
         />
         <Kpi
-          label="نسبة حضور الأسبوع"
-          value={`${k?.attendanceRateWeek ?? 0}%`}
-          hint={`حصص اليوم: ${k?.classesToday ?? stats?.classesToday ?? 0}`}
-        />
-        <Kpi
           label="تحصيل اليوم"
           value={money(k?.collectedToday ?? stats?.collectedToday ?? 0)}
           hint={`${k?.paymentsTodayCount ?? 0} عملية`}
@@ -361,15 +458,62 @@ export default function DashboardPage() {
           hint={`${k?.paymentsMonthCount ?? 0} إيصال`}
         />
         <Kpi
-          label="إجمالي المتأخرات"
-          value={money(k?.outstandingAmount ?? 0)}
-          hint={`${k?.outstandingStudents ?? 0} طالب`}
-          accent="red"
-        />
-        <Kpi
           label="تسجيلات اليوم"
           value={k?.markedToday ?? '—'}
           hint="كل حالات الحضور المسجّلة"
+        />
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Kpi
+          label="دخل السنتر اليوم"
+          value={money(stats?.finance?.intakeToday ?? k?.intakeToday ?? 0)}
+          hint={`إيصالات ${money(stats?.finance?.mixToday?.receipts ?? 0)} · حصص ${money(stats?.finance?.mixToday?.sessions ?? 0)} · إضافي ${money(stats?.finance?.mixToday?.extra ?? 0)}`}
+          accent="gold"
+        />
+        <Kpi
+          label="تشغيل الحصص اليوم"
+          value={money(stats?.ops?.amountToday ?? 0)}
+          hint={`${stats?.ops?.entriesToday ?? 0} طالب · دخول ${stats?.ops?.checkedInToday ?? 0}`}
+          accent="green"
+        />
+        <Kpi
+          label="نصيب السنتر من الحصص"
+          value={money(stats?.ops?.centerCutToday ?? 0)}
+          hint={`نصيب المدرسين ${money(stats?.ops?.teacherCutToday ?? 0)}`}
+        />
+        <Kpi
+          label="محفظة أونلاين"
+          value={money(stats?.finance?.onlineWallet.confirmedAmount ?? 0)}
+          hint={`بانتظار ${stats?.finance?.onlineWallet?.pendingCount ?? 0} · استمارات معلّقة ${stats?.finance?.bookings?.pending ?? 0}`}
+          accent="red"
+        />
+      </div>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Kpi
+          label="حصص مفتوحة الآن"
+          value={stats?.ops?.openCount ?? 0}
+          hint={`اتقفلت النهاردة ${stats?.ops?.closedToday ?? 0} · مدرسين من غير تسوية ${stats?.ops?.unpaidTeachers ?? 0}`}
+        />
+        <Kpi
+          label="إيراد إضافي اليوم"
+          value={money(stats?.finance?.extraToday?.total ?? 0)}
+          hint={`أكواد ${stats?.finance?.extraToday?.codesCount ?? 0} · ملازم ${stats?.finance?.extraToday?.handoutsCount ?? 0} · قاعات ${stats?.finance?.extraToday?.rentalsCount ?? 0}`}
+          accent="gold"
+        />
+        <Kpi
+          label="مصروف اليوم"
+          value={money(stats?.finance?.expensesToday ?? 0)}
+          hint={
+            stats?.finance?.dayClosed
+              ? 'اليوم مقفول'
+              : `${stats?.finance?.expensesCount ?? 0} حركة`
+          }
+        />
+        <Kpi
+          label="كاش / إلكتروني (حصص)"
+          value={`${money(stats?.ops?.cashToday ?? 0)}`}
+          hint={`فودافون ${money(stats?.ops?.electronicToday ?? 0)}`}
         />
       </div>
 
@@ -378,7 +522,164 @@ export default function DashboardPage() {
         <section className="panel p-5 xl:col-span-3">
           <div className="mb-4 flex items-center justify-between gap-2">
             <div>
-              <h3 className="section-title">اتجاه التحصيل</h3>
+              <h3 className="section-title">دخل السنتر حسب المصدر</h3>
+              <p className="text-xs text-navy/45 mt-1">
+                آخر 14 يوم · إيصالات + حصص + إيراد إضافي
+              </p>
+            </div>
+            <span className="badge-gold">حسابات</span>
+          </div>
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={intakeChart}>
+                <CartesianGrid strokeDasharray="3 3" stroke={CHART.grid} vertical={false} />
+                <XAxis dataKey="label" tick={{ fill: '#64748b', fontSize: 11 }} />
+                <YAxis
+                  tick={{ fill: '#64748b', fontSize: 11 }}
+                  tickFormatter={(v) =>
+                    v >= 1000 ? `${Math.round(v / 1000)}k` : `${v}`
+                  }
+                />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  formatter={(value: number, name: string) => [money(value), name]}
+                />
+                <Legend />
+                <Bar dataKey="receipts" name="إيصالات" stackId="in" fill={CHART.navy} />
+                <Bar dataKey="sessions" name="حصص" stackId="in" fill={CHART.gold} />
+                <Bar
+                  dataKey="extra"
+                  name="إيراد إضافي"
+                  stackId="in"
+                  fill={CHART.present}
+                  radius={[6, 6, 0, 0]}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </section>
+
+        <section className="panel p-5 xl:col-span-2">
+          <div className="mb-4 flex items-center justify-between gap-2">
+            <div>
+              <h3 className="section-title">توزيع دخل اليوم</h3>
+              <p className="text-xs text-navy/45 mt-1">منين الفلوس جت</p>
+            </div>
+            <Link href="/finance" className="text-xs font-semibold text-gold-deep">
+              الحسابات
+            </Link>
+          </div>
+          <div className="h-72">
+            {mixPie.length ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={mixPie}
+                    dataKey="value"
+                    nameKey="name"
+                    innerRadius={58}
+                    outerRadius={90}
+                    paddingAngle={3}
+                  >
+                    {mixPie.map((entry) => (
+                      <Cell
+                        key={entry.key}
+                        fill={
+                          entry.key === 'receipts'
+                            ? CHART.navy
+                            : entry.key === 'sessions'
+                              ? CHART.gold
+                              : CHART.present
+                        }
+                      />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={tooltipStyle}
+                    formatter={(value: number) => money(value)}
+                  />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full grid place-items-center text-sm text-navy/40">
+                لا يوجد دخل مسجّل اليوم بعد
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+
+      <div className="mt-4 grid gap-4 xl:grid-cols-5">
+        <section className="panel p-5 xl:col-span-3">
+          <div className="mb-4 flex items-center justify-between gap-2">
+            <div>
+              <h3 className="section-title">طلاب الحصص اليوم بيوم</h3>
+              <p className="text-xs text-navy/45 mt-1">تشغيل الحصص · آخر 14 يوم</p>
+            </div>
+            <Link href="/ops" className="text-xs font-semibold text-gold-deep">
+              تشغيل الحصص
+            </Link>
+          </div>
+          <div className="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={opsChart}>
+                <CartesianGrid strokeDasharray="3 3" stroke={CHART.grid} vertical={false} />
+                <XAxis dataKey="label" tick={{ fill: '#64748b', fontSize: 11 }} />
+                <YAxis allowDecimals={false} tick={{ fill: '#64748b', fontSize: 11 }} />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  formatter={(value: number, name: string) =>
+                    name === 'amount' ? [money(value), 'تحصيل'] : [value, 'طلاب']
+                  }
+                />
+                <Bar dataKey="students" name="طلاب" fill={CHART.navy} radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </section>
+
+        <section className="panel p-5 xl:col-span-2">
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="section-title">حصص مفتوحة</h3>
+            <Link href="/ops" className="text-xs font-semibold text-gold-deep">
+              فتح التشغيل
+            </Link>
+          </div>
+          <div className="space-y-2 max-h-[260px] overflow-y-auto">
+            {(stats?.ops?.openSessions || []).map((s) => (
+              <div
+                key={s.id}
+                className="rounded-xl border border-mist bg-sand/60 px-3 py-2.5"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p className="font-bold text-navy text-sm truncate">
+                    {s.teacher}
+                  </p>
+                  <span className="text-[11px] font-bold tabular-nums text-navy">
+                    {s.entries} طالب
+                  </span>
+                </div>
+                <p className="text-xs text-navy/45 mt-0.5">
+                  {s.subject}
+                  {s.title ? ` · ${s.title}` : ''} · {money(s.fee)}
+                </p>
+              </div>
+            ))}
+            {!stats?.ops?.openSessions?.length ? (
+              <p className="text-sm text-navy/45 py-8 text-center">
+                مفيش حصة مفتوحة دلوقتي
+              </p>
+            ) : null}
+          </div>
+        </section>
+      </div>
+
+      <div className="mt-4 grid gap-4 xl:grid-cols-5">
+        <section className="panel p-5 xl:col-span-3">
+          <div className="mb-4 flex items-center justify-between gap-2">
+            <div>
+              <h3 className="section-title">اتجاه التحصيل (إيصالات)</h3>
               <p className="text-xs text-navy/45 mt-1">آخر 14 يوم</p>
             </div>
             <span className="badge-gold">مالي</span>
@@ -532,7 +833,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Tables / lists */}
-      <div className="mt-4 grid gap-4 xl:grid-cols-3">
+      <div className="mt-4 grid gap-4 xl:grid-cols-2">
         <section className="panel p-5">
           <div className="mb-4 flex items-center justify-between">
             <h3 className="section-title">جدول اليوم</h3>
@@ -610,40 +911,68 @@ export default function DashboardPage() {
             ) : null}
           </div>
         </section>
+      </div>
 
-        <section className="panel p-5">
+      <div className="mt-4 grid gap-4 xl:grid-cols-5">
+        <section className="panel p-5 xl:col-span-3">
           <div className="mb-4 flex items-center justify-between">
-            <h3 className="section-title">أكبر المتأخرات</h3>
-            <Link href="/finance" className="text-xs font-semibold text-gold-deep">
-              الحسابات
+            <h3 className="section-title">أعلى المدرسين اليوم (تشغيل الحصص)</h3>
+            <Link href="/ops" className="text-xs font-semibold text-gold-deep">
+              التشغيل
             </Link>
           </div>
-          <div className="space-y-2 max-h-[360px] overflow-y-auto">
-            {(stats?.topOutstanding || []).map((inv) => (
-              <div
-                key={inv.id}
-                className="rounded-xl border border-mist px-3 py-2.5"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <p className="font-semibold text-navy text-sm truncate">
-                    {inv.student.firstName} {inv.student.lastName}
-                  </p>
-                  <p className="font-extrabold text-navy tabular-nums shrink-0">
-                    {money(inv.due)}
-                  </p>
-                </div>
-                <p className="text-xs text-navy/45 mt-1">
-                  {inv.groupName}
-                  {inv.subject ? ` · ${inv.subject}` : ''} ·{' '}
-                  {INVOICE_AR[inv.status] || inv.status}
-                </p>
-              </div>
-            ))}
-            {!stats?.topOutstanding?.length ? (
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>المدرس</th>
+                  <th>الطلاب</th>
+                  <th>التحصيل</th>
+                  <th>نصيب السنتر</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(stats?.ops?.topTeachers || []).map((t) => (
+                  <tr key={t.teacherId}>
+                    <td className="font-semibold">{t.name}</td>
+                    <td className="tabular-nums">{t.students}</td>
+                    <td className="font-bold tabular-nums">{money(t.amount)}</td>
+                    <td className="tabular-nums">{money(t.centerCut)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!stats?.ops?.topTeachers?.length ? (
               <p className="text-sm text-navy/45 py-8 text-center">
-                لا توجد متأخرات حالياً
+                مفيش تحصيل حصص مؤكد النهاردة
               </p>
             ) : null}
+          </div>
+        </section>
+        <section className="panel p-5 xl:col-span-2">
+          <h3 className="section-title mb-3">كاش مقابل إلكتروني اليوم</h3>
+          <div className="space-y-3 text-sm">
+            <div className="rounded-xl bg-sand px-3 py-3">
+              <p className="text-navy/45 text-xs">إيصالات</p>
+              <p className="font-bold text-navy mt-1">
+                كاش {money(stats?.finance?.receiptsToday?.cash ?? 0)} · إلكتروني{' '}
+                {money(stats?.finance?.receiptsToday?.electronic ?? 0)}
+              </p>
+            </div>
+            <div className="rounded-xl bg-sand px-3 py-3">
+              <p className="text-navy/45 text-xs">حصص</p>
+              <p className="font-bold text-navy mt-1">
+                كاش {money(stats?.ops?.cashToday ?? 0)} · فودافون{' '}
+                {money(stats?.ops?.electronicToday ?? 0)}
+              </p>
+            </div>
+            <div className="rounded-xl bg-sand px-3 py-3">
+              <p className="text-navy/45 text-xs">استمارات مدفوعة اليوم</p>
+              <p className="font-bold text-navy mt-1">
+                {money(stats?.finance?.bookings?.paidToday ?? 0)} ·{' '}
+                {stats?.finance?.bookings?.paidTodayCount ?? 0} استمارة
+              </p>
+            </div>
           </div>
         </section>
       </div>
@@ -703,7 +1032,7 @@ export default function DashboardPage() {
               { href: '/reports', label: 'التقارير', desc: 'ربحية · مالي · حضور' },
             ].map((item) => (
               <Link
-                key={item.href}
+                key={`${item.href}-${item.label}`}
                 href={item.href}
                 className="rounded-xl border border-mist px-3 py-3 hover:border-navy/30 hover:bg-sand transition"
               >

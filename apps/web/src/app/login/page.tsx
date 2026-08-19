@@ -52,7 +52,7 @@ function LoginForm() {
   const router = useRouter();
   const search = useSearchParams();
   const initialMode =
-    search.get('mode') === 'student' ? 'student' : ('staff' as Mode);
+    search.get('mode') === 'staff' ? 'staff' : ('student' as Mode);
   const initialPhone = search.get('phone') || '';
 
   const [mode, setMode] = useState<Mode>(initialMode);
@@ -71,7 +71,31 @@ function LoginForm() {
   useEffect(() => {
     if (initialPhone) setPhone(initialPhone);
     if (initialMode === 'student') setMode('student');
+    else setMode('staff');
   }, [initialPhone, initialMode]);
+
+  useEffect(() => {
+    const p = (initialPhone || phone).trim();
+    if (mode !== 'student' || !p) return;
+    if (!initialPhone) return;
+    void (async () => {
+      setLoading(true);
+      setError('');
+      try {
+        const status = await phoneStatus(p);
+        setHint(status.message);
+        setStudentName(status.fullName || '');
+        if (status.status === 'needs_password') setStudentStep('setup');
+        else if (status.status === 'ready') setStudentStep('login');
+        else setStudentStep('waiting');
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'تعذر التحقق');
+      } finally {
+        setLoading(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, initialPhone]);
 
   function redirectByRole(role: string) {
     if (role === 'STUDENT' || role === 'PARENT') router.replace('/portal');
@@ -115,7 +139,7 @@ function LoginForm() {
   async function onSetupPassword(e: FormEvent) {
     e.preventDefault();
     if (password !== confirmPassword) {
-      setError('كلمتا المرور غير متطابقتين');
+                    setError('الرقمان السريان غير متطابقين');
       return;
     }
     setLoading(true);
@@ -124,7 +148,7 @@ function LoginForm() {
       const data = await phoneSetup(phone, password);
       redirectByRole(data.user.role);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'فشل تعيين كلمة المرور');
+      setError(err instanceof Error ? err.message : 'فشل تعيين الرقم السري');
     } finally {
       setLoading(false);
     }
@@ -151,7 +175,7 @@ function LoginForm() {
         <div className="relative z-10 max-w-md text-center animate-rise">
           <BrandMark size="xl" layout="stack" invert showTagline />
           <p className="mt-6 text-white/70 leading-relaxed text-lg">
-            الطلاب يدخلون برقم الموبايل بعد تأكيد دفع الاستمارة، والإدارة بالبريد.
+            الطلاب يدخلون برقم الموبايل بعد تأكيد دفع الاستمارة، وأول مرة يعيّنون الرقم السري.
           </p>
         </div>
       </section>
@@ -236,7 +260,7 @@ function LoginForm() {
               {studentStep === 'phone' || studentStep === 'waiting' ? (
                 <form onSubmit={onCheckPhone}>
                   <p className="text-sm text-navy/55 mb-3">
-                    ادخل رقم موبايلك اللي سجّلت بيه في الاستمارة
+                    ادخل رقم موبايلك اللي سجّلت بيه في الاستمارة. بعد تأكيد الاستقبال، أول مرة هتعيّن الرقم السري.
                   </p>
                   <label className="block text-sm font-medium text-navy/80">
                     رقم الموبايل
@@ -270,7 +294,9 @@ function LoginForm() {
 
               {studentStep === 'setup' ? (
                 <form onSubmit={onSetupPassword}>
-                  <p className="text-sm text-navy/55 mb-1">أول مرة — عيّن كلمة مرورك</p>
+                  <p className="text-sm text-navy/55 mb-1">
+                    أول مرة — اكتب الرقم السري لحسابك
+                  </p>
                   {studentName ? (
                     <p className="text-sm font-bold text-navy mb-3">
                       مرحبًا {studentName}
@@ -281,7 +307,7 @@ function LoginForm() {
                     <input className="field" value={phone} readOnly />
                   </label>
                   <label className="mt-4 block text-sm font-medium text-navy/80">
-                    كلمة المرور الجديدة
+                    الرقم السري الجديد
                     <PasswordField
                       value={password}
                       onChange={setPassword}
@@ -291,7 +317,7 @@ function LoginForm() {
                     />
                   </label>
                   <label className="mt-4 block text-sm font-medium text-navy/80">
-                    تأكيد كلمة المرور
+                    تأكيد الرقم السري
                     <PasswordField
                       value={confirmPassword}
                       onChange={setConfirmPassword}
@@ -333,7 +359,7 @@ function LoginForm() {
                     <input className="field" value={phone} readOnly />
                   </label>
                   <label className="mt-4 block text-sm font-medium text-navy/80">
-                    كلمة المرور
+                    الرقم السري
                     <PasswordField
                       value={password}
                       onChange={setPassword}

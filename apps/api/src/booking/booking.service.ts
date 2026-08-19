@@ -899,11 +899,12 @@ export class BookingService {
             `حوّل ${totalAmount.toLocaleString('en-EG')} ج.م ${methodLabel} واحتفظ بالرقم المرجعي`,
             'الاستقبال هيأكد وصول التحويل من التطبيق (والصورة لو رفعتها)',
             'بعد التأكيد هيتفتح حسابك تلقائي برقم موبايلك',
+            'أول دخول: طالب → رقم الموبايل → عيّن الرقم السري',
           ]
         : [
             'ادفع كاش في السنتر واستلم الإيصال',
             'بعد تأكيد الدفع هيتفتح حسابك تلقائي برقم موبايلك',
-            'ادخل من صفحة تسجيل الدخول → طالب، وعيّن كلمة المرور أول مرة',
+            'ادخل من صفحة تسجيل الدخول → طالب، وعيّن الرقم السري أول مرة',
           ],
       selections: submission.selections.map((s) => ({
         teacherName: s.offering.teacherName,
@@ -1074,63 +1075,96 @@ export class BookingService {
         },
       });
 
-      // Auto portal account: login by student phone, set password first time
       const phone = normalizePhone(submission.studentPhone);
+      if (!student.phone || normalizePhone(student.phone) !== phone) {
+        if (isValidMobile(phone)) {
+          await tx.student.update({
+            where: { id: student.id },
+            data: { phone },
+          });
+          student = { ...student, phone };
+        }
+      }
+
+      // Auto portal account: login by student phone, set PIN first time
       let portalAccount: {
         phone: string;
         mustSetPassword: boolean;
         created: boolean;
       } | null = null;
 
-      if (isValidMobile(phone)) {
-        const studentRole = await tx.role.findUnique({
-          where: { code: RoleCode.STUDENT },
-        });
-        if (studentRole) {
-          let account =
-            (await tx.user.findUnique({ where: { phone } })) ||
-            (student.userId
-              ? await tx.user.findUnique({ where: { id: student.userId } })
-              : null);
+      if (!isValidMobile(phone)) {
+        throw new BadRequestException(
+          'رقم موبايل الطالب غير صالح — الحساب مش هيتفتح من غيره',
+        );
+      }
 
-          if (!account) {
-            const email = phoneToLoginEmail(phone);
-            const emailTaken = await tx.user.findUnique({ where: { email } });
-            account = await tx.user.create({
-              data: {
-                email: emailTaken
-                  ? `${phone}.${Date.now()}@phone.success.local`
-                  : email,
-                phone,
-                fullName: submission.studentName.trim(),
-                passwordHash: await AuthService.tempPasswordHash(),
-                mustSetPassword: true,
-                roleId: studentRole.id,
-                isActive: true,
-                student: { connect: { id: student.id } },
-              },
-            });
-            portalAccount = { phone, mustSetPassword: true, created: true };
-          } else {
-            if (!account.phone) {
-              account = await tx.user.update({
-                where: { id: account.id },
-                data: { phone },
-              });
-            }
-            if (!student.userId) {
-              await tx.student.update({
-                where: { id: student.id },
-                data: { userId: account.id },
-              });
-            }
-            portalAccount = {
-              phone: account.phone || phone,
-              mustSetPassword: account.mustSetPassword,
-              created: false,
-            };
-          }
+      const studentRole = await tx.role.findUnique({
+        where: { code: RoleCode.STUDENT },
+      });
+      if (!studentRole) {
+        throw new BadRequestException(
+          'دور الطالب غير موجود في النظام. راجع الإعدادات.',
+        );
+      }
+
+      let account =
+        (await tx.user.findUnique({ where: { phone } })) ||
+        (await tx.user.findUnique({
+          where: { email: phoneToLoginEmail(phone) },
+        })) ||
+        (student.userId
+          ? await tx.user.findUnique({ where: { id: student.userId } })
+          : null);
+
+      if (!account) {
+        const email = phoneToLoginEmail(phone);
+        const emailTaken = await tx.user.findUnique({ where: { email } });
+        account = await tx.user.create({
+          data: {
+            email: emailTaken
+              ? `${phone}.${Date.now()}@phone.success.local`
+              : email,
+            phone,
+            fullName: submission.studentName.trim(),
+            passwordHash: await AuthService.tempPasswordHash(),
+            mustSetPassword: true,
+            roleId: studentRole.id,
+            isActive: true,
+            student: { connect: { id: student.id } },
+          },
+        });
+        portalAccount = { phone, mustSetPassword: true, created: true };
+      } else {
+        const patch: {
+          phone?: string;
+          mustSetPassword?: boolean;
+        } = {};
+        if (!account.phone) patch.phone = phone;
+        if (
+          account.mustSetPassword !== true &&
+          !account.refreshToken &&
+          account.roleId === studentRole.id
+        ) {
+          patch.mustSetPassword = true;
         }
+        if (Object.keys(patch).length) {
+          account = await tx.user.update({
+            where: { id: account.id },
+            data: patch,
+          });
+        }
+        if (!student.userId) {
+          await tx.student.update({
+            where: { id: student.id },
+            data: { userId: account.id },
+          });
+        }
+        portalAccount = {
+          phone: account.phone || phone,
+          mustSetPassword: account.mustSetPassword,
+          created: false,
+        };
       }
 
       const updated = await tx.bookingSubmission.update({

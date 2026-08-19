@@ -10,7 +10,7 @@ import {
   PageHero,
   SectionCard,
 } from '@/components/ui';
-import { api } from '@/lib/api';
+import { api, getStoredUser } from '@/lib/api';
 
 const STATUS_AR: Record<string, string> = {
   PRESENT: 'حاضر',
@@ -24,6 +24,22 @@ export default function StudentDetailPage() {
   const [student, setStudent] = useState<any>(null);
   const [qr, setQr] = useState<any>(null);
   const [error, setError] = useState('');
+  const [portal, setPortal] = useState<{
+    phone?: string | null;
+    hasAccount: boolean;
+    pin?: string | null;
+    mustSetPassword: boolean;
+  } | null>(null);
+  const [pin, setPin] = useState('');
+  const [showPin, setShowPin] = useState(true);
+  const [pinLoading, setPinLoading] = useState(false);
+  const [pinMsg, setPinMsg] = useState<{ ok: boolean; text: string } | null>(
+    null,
+  );
+
+  const role = getStoredUser()?.role;
+  const canManagePin =
+    role === 'SUPER_ADMIN' || role === 'CENTER_MANAGER';
 
   useEffect(() => {
     Promise.all([
@@ -36,6 +52,49 @@ export default function StudentDetailPage() {
       })
       .catch((e) => setError(e.message));
   }, [params.id]);
+
+  useEffect(() => {
+    if (!canManagePin || !params.id) return;
+    setPinLoading(true);
+    api<{
+      phone?: string | null;
+      hasAccount: boolean;
+      pin?: string | null;
+      mustSetPassword: boolean;
+    }>(`/students/${params.id}/portal-login`)
+      .then((p) => {
+        setPortal(p);
+        setPin(p.pin || '');
+      })
+      .catch(() => setPortal(null))
+      .finally(() => setPinLoading(false));
+  }, [canManagePin, params.id]);
+
+  async function savePin() {
+    setPinLoading(true);
+    setPinMsg(null);
+    try {
+      const p = await api<{
+        phone?: string | null;
+        hasAccount: boolean;
+        pin?: string | null;
+        mustSetPassword: boolean;
+      }>(`/students/${params.id}/portal-login`, {
+        method: 'PATCH',
+        body: JSON.stringify({ pin, mustSetPassword: false }),
+      });
+      setPortal(p);
+      setPin(p.pin || pin);
+      setPinMsg({ ok: true, text: 'اتحفظ الرقم السري. الطالب يقدر يدخل بيه دلوقتي.' });
+    } catch (e) {
+      setPinMsg({
+        ok: false,
+        text: e instanceof Error ? e.message : 'فشل الحفظ',
+      });
+    } finally {
+      setPinLoading(false);
+    }
+  }
 
   const present =
     student?.attendance?.filter(
@@ -306,6 +365,79 @@ export default function StudentDetailPage() {
             </div>
 
             <aside className="space-y-4">
+              {canManagePin ? (
+                <SectionCard
+                  title="الرقم السري"
+                  subtitle="دخول بوابة الطالب برقم الموبايل"
+                >
+                  {pinLoading && !portal ? (
+                    <p className="text-sm text-navy/45">جاري التحميل...</p>
+                  ) : (
+                    <div className="space-y-3 text-sm">
+                      <p>
+                        <span className="text-navy/45">موبايل الدخول:</span>{' '}
+                        <span className="font-mono font-bold">
+                          {portal?.phone || student.phone || '—'}
+                        </span>
+                      </p>
+                      <p>
+                        <span className="text-navy/45">الحالة:</span>{' '}
+                        {!portal?.hasAccount
+                          ? 'مفيش حساب لسه'
+                          : portal.mustSetPassword
+                            ? 'لسه ما عيّنش رقم سري'
+                            : portal.pin
+                              ? 'معيّن'
+                              : 'معيّن (قديم — مش ظاهر)'}
+                      </p>
+                      <label className="block">
+                        <span className="text-navy/45 text-xs">الرقم السري</span>
+                        <div className="relative mt-1">
+                          <input
+                            className="field !mt-0 pe-11 font-mono"
+                            value={pin}
+                            onChange={(e) => setPin(e.target.value)}
+                            type={showPin ? 'text' : 'password'}
+                            minLength={6}
+                            placeholder="اكتب رقم سري جديد أو الحالي"
+                            dir="ltr"
+                          />
+                          <button
+                            type="button"
+                            className="absolute end-2 top-1/2 -translate-y-1/2 text-xs font-bold text-navy/50"
+                            onClick={() => setShowPin((v) => !v)}
+                          >
+                            {showPin ? 'إخفاء' : 'إظهار'}
+                          </button>
+                        </div>
+                      </label>
+                      {pinMsg ? (
+                        <p
+                          className={`rounded-lg px-3 py-2 text-xs ${
+                            pinMsg.ok
+                              ? 'bg-emerald-50 text-emerald-800'
+                              : 'bg-red-50 text-red-700'
+                          }`}
+                        >
+                          {pinMsg.text}
+                        </p>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="btn-primary w-full py-2"
+                        disabled={pinLoading || pin.trim().length < 6}
+                        onClick={() => void savePin()}
+                      >
+                        {pinLoading ? 'جاري الحفظ...' : 'حفظ الرقم السري'}
+                      </button>
+                      <p className="text-[11px] text-navy/40">
+                        الرقم السري القديم اللي اتعيّن قبل التحديث ده مش يظهر.
+                        أي رقم جديد بتحفظه هيظهر هنا ويتقدر تعدّله.
+                      </p>
+                    </div>
+                  )}
+                </SectionCard>
+              ) : null}
               <SectionCard title="كارت الطالب" subtitle="QR + NFC">
                 <div className="text-center">
                   {qr?.qrDataUrl ? (

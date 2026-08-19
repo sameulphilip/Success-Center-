@@ -612,7 +612,7 @@ export default function BookingsAdminPage() {
       const methodAr = payMethodLabel[method] || method;
       if (res.portalAccount?.created) {
         notify(
-          `تم الدفع (${methodAr}) وإنشاء حساب الطالب.\nالدخول برقم: ${res.portalAccount.phone}\nأول مرة يعيّن كلمة المرور بنفسه.`,
+          `تم الدفع (${methodAr}) وإنشاء حساب الطالب.\nالدخول برقم: ${res.portalAccount.phone}\nأول مرة يطلب الرقم السري ويعيّنه بنفسه.`,
           'success',
           'تم الدفع',
         );

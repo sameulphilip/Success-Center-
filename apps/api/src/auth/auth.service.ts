@@ -8,7 +8,11 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import { isValidMobile, normalizePhone } from '../common/phone.util';
+import {
+  isValidMobile,
+  normalizePhone,
+  phoneToLoginEmail,
+} from '../common/phone.util';
 
 @Injectable()
 export class AuthService {
@@ -46,6 +50,48 @@ export class AuthService {
     return this.finishLogin(user);
   }
 
+  private async findPortalUser(phoneRaw: string) {
+    const phone = normalizePhone(phoneRaw);
+    if (!isValidMobile(phone)) return null;
+    const email = phoneToLoginEmail(phone);
+    return (
+      (await this.prisma.user.findUnique({
+        where: { phone },
+        include: {
+          role: true,
+          teacher: true,
+          parent: true,
+          student: true,
+        },
+      })) ||
+      (await this.prisma.user.findUnique({
+        where: { email },
+        include: {
+          role: true,
+          teacher: true,
+          parent: true,
+          student: true,
+        },
+      })) ||
+      (
+        await this.prisma.student.findFirst({
+          where: { OR: [{ phone }, { phone: String(phoneRaw || '').trim() }] },
+          include: {
+            user: {
+              include: {
+                role: true,
+                teacher: true,
+                parent: true,
+                student: true,
+              },
+            },
+          },
+        })
+      )?.user ||
+      null
+    );
+  }
+
   /** Public: check if phone can login / needs first password */
   async phoneStatus(phoneRaw: string) {
     const phone = normalizePhone(phoneRaw);
@@ -53,21 +99,13 @@ export class AuthService {
       throw new BadRequestException('رقم الموبايل غير صالح');
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: { phone },
-      select: {
-        fullName: true,
-        mustSetPassword: true,
-        isActive: true,
-        role: { select: { code: true } },
-      },
-    });
+    const user = await this.findPortalUser(phoneRaw);
 
     if (!user || !user.isActive) {
       return {
         status: 'not_ready' as const,
         message:
-          'الحساب مش جاهز بعد. بعد ما تدفع كاش في السنتر هيتعمل حسابك تلقائي.',
+          'الحساب مش جاهز بعد. بعد ما الاستقبال يأكد الدفع (تحويل أو كاش) بيتفتح الحساب، وأول دخول تعيّن الرقم السري.',
       };
     }
 
@@ -75,17 +113,17 @@ export class AuthService {
       return {
         status: 'needs_password' as const,
         fullName: user.fullName,
-        phone,
-        message: 'أول مرة: عيّن كلمة مرور لحسابك',
+        phone: user.phone || phone,
+        message: 'أول مرة: اكتب الرقم السري لحسابك',
       };
     }
 
     return {
       status: 'ready' as const,
       fullName: user.fullName,
-      phone,
+      phone: user.phone || phone,
       role: user.role.code,
-      message: 'أدخل كلمة المرور للدخول',
+      message: 'أدخل الرقم السري للدخول',
     };
   }
 
@@ -96,18 +134,10 @@ export class AuthService {
       throw new BadRequestException('رقم الموبايل غير صالح');
     }
     if (!password || password.length < 6) {
-      throw new BadRequestException('كلمة المرور لازم 6 حروف على الأقل');
+      throw new BadRequestException('الرقم السري لازم 6 حروف أو أرقام على الأقل');
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: { phone },
-      include: {
-        role: true,
-        teacher: true,
-        parent: true,
-        student: true,
-      },
-    });
+    const user = await this.findPortalUser(phoneRaw);
 
     if (!user || !user.isActive) {
       throw new BadRequestException(
@@ -116,14 +146,14 @@ export class AuthService {
     }
     if (!user.mustSetPassword) {
       throw new BadRequestException(
-        'الحساب مفعّل بالفعل — سجّل الدخول بكلمة المرور',
+        'الحساب مفعّل بالفعل — سجّل الدخول بالرقم السري',
       );
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
     const updated = await this.prisma.user.update({
       where: { id: user.id },
-      data: { passwordHash, mustSetPassword: false },
+      data: { passwordHash, mustSetPassword: false, portalPin: password },
       include: {
         role: true,
         teacher: true,
@@ -141,15 +171,7 @@ export class AuthService {
       throw new BadRequestException('رقم الموبايل غير صالح');
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: { phone },
-      include: {
-        role: true,
-        teacher: true,
-        parent: true,
-        student: true,
-      },
-    });
+    const user = await this.findPortalUser(phoneRaw);
 
     if (!user || !user.isActive) {
       throw new UnauthorizedException('بيانات الدخول غير صحيحة');
@@ -157,7 +179,7 @@ export class AuthService {
 
     if (user.mustSetPassword) {
       throw new BadRequestException(
-        'لازم تعيّن كلمة المرور أول مرة قبل الدخول',
+        'لازم تعيّن الرقم السري أول مرة قبل الدخول',
       );
     }
 

@@ -48,6 +48,23 @@ export class StudentsController {
     return this.students.mine(user.userId, user.role);
   }
 
+  @Get(':id/portal-login')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  portalLogin(@Param('id') id: string) {
+    return this.students.getPortalLogin(id);
+  }
+
+  @Patch(':id/portal-login')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  setPortalLogin(
+    @Param('id') id: string,
+    @Body() body: { pin?: string; mustSetPassword?: boolean },
+  ) {
+    return this.students.setPortalLogin(id, String(body?.pin || ''), {
+      mustSetPassword: body?.mustSetPassword,
+    });
+  }
+
   @Get(':id')
   @Roles(
     RoleCode.SUPER_ADMIN,

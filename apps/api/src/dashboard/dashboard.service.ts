@@ -1,26 +1,64 @@
 import { Injectable } from '@nestjs/common';
+import {
+  BookingStatus,
+  ClassSessionStatus,
+  SessionPayStatus,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
-function startOfDay(d = new Date()) {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x;
+function cairoYmd(d = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Cairo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
 }
 
-function endOfDay(d = new Date()) {
-  const x = new Date(d);
-  x.setHours(23, 59, 59, 999);
-  return x;
+function cairoBounds(ymd: string) {
+  const start = new Date(`${ymd}T00:00:00+03:00`);
+  const end = new Date(`${ymd}T23:59:59.999+03:00`);
+  return { start, end };
 }
 
-function addDays(d: Date, days: number) {
-  const x = new Date(d);
-  x.setDate(x.getDate() + days);
-  return x;
+function dateOnly(ymd: string) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d));
 }
 
-function dayKey(d: Date) {
-  return d.toISOString().slice(0, 10);
+function addDaysYmd(ymd: string, delta: number) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + delta));
+  const yy = dt.getUTCFullYear();
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getUTCDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
+function dayKeyCairo(d: Date) {
+  return cairoYmd(d);
+}
+
+function isElectronic(method?: string | null) {
+  const m = String(method || '').toUpperCase();
+  return m.includes('VODAFONE') || m.includes('INSTAPAY');
+}
+
+function sessionCenterCut(s: {
+  feeAmount: unknown;
+  centerAmount?: unknown;
+  teacherPercent?: unknown;
+}) {
+  if (s.centerAmount != null && s.centerAmount !== '') {
+    return Number(s.centerAmount);
+  }
+  const fee = Number(s.feeAmount || 0);
+  const pct = Number(s.teacherPercent || 0);
+  return Math.round(fee * (1 - pct / 100) * 100) / 100;
+}
+
+function n(v: unknown) {
+  return Number(v || 0);
 }
 
 @Injectable()
@@ -28,12 +66,14 @@ export class DashboardService {
   constructor(private readonly prisma: PrismaService) {}
 
   async stats() {
-    const today = new Date();
-    const day = today.getDay();
-    const start = startOfDay(today);
-    const end = endOfDay(today);
-    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-    const trendFrom = startOfDay(addDays(today, -13)); // 14 days incl today
+    const ymd = cairoYmd();
+    const { start, end } = cairoBounds(ymd);
+    const day = new Date(`${ymd}T12:00:00+03:00`).getDay();
+    const monthStartYmd = `${ymd.slice(0, 7)}-01`;
+    const monthStart = cairoBounds(monthStartYmd).start;
+    const trendFromYmd = addDaysYmd(ymd, -13);
+    const trendFrom = cairoBounds(trendFromYmd).start;
+    const sessionDay = dateOnly(ymd);
 
     const [
       totalStudents,
@@ -174,7 +214,7 @@ export class DashboardService {
     >();
 
     for (let i = 0; i < 14; i++) {
-      const key = dayKey(addDays(trendFrom, i));
+      const key = addDaysYmd(trendFromYmd, i);
       collectionByDay.set(key, 0);
       attendanceByDay.set(key, {
         present: 0,
@@ -186,14 +226,14 @@ export class DashboardService {
     }
 
     for (const p of paymentsTrend) {
-      const key = dayKey(p.paidAt);
+      const key = dayKeyCairo(p.paidAt);
       if (collectionByDay.has(key)) {
         collectionByDay.set(key, (collectionByDay.get(key) || 0) + Number(p.amount));
       }
     }
 
     for (const r of attendanceTrendRows) {
-      const key = dayKey(r.markedAt);
+      const key = dayKeyCairo(r.markedAt);
       const row = attendanceByDay.get(key);
       if (!row) continue;
       row.total += 1;
@@ -308,6 +348,244 @@ export class DashboardService {
       return acc;
     }, {});
 
+    const confirmed = SessionPayStatus.CONFIRMED;
+    const [
+      paymentsTodayRows,
+      sessionEntriesToday,
+      openSessions,
+      closedSessionsToday,
+      unpaidTeacherSessions,
+      pendingSessionEntries,
+      extraCodesToday,
+      extraHandoutsToday,
+      extraRentalsToday,
+      extraCodesMonth,
+      extraHandoutsMonth,
+      extraRentalsMonth,
+      bookingsPending,
+      bookingsPaidToday,
+      bookingsOnline,
+      expensesTodayAgg,
+      dayClose,
+      trendSessionEntries,
+      trendCodes,
+      trendHandouts,
+      trendRentals,
+    ] = await Promise.all([
+      this.prisma.payment.findMany({
+        where: { paidAt: { gte: start, lte: end } },
+        select: { amount: true, method: true },
+      }),
+      this.prisma.sessionEntry.findMany({
+        where: { payStatus: confirmed, confirmedAt: { gte: start, lte: end } },
+        include: {
+          session: {
+            include: { teacher: true, subject: true },
+          },
+        },
+      }),
+      this.prisma.classSession.findMany({
+        where: { status: ClassSessionStatus.OPEN, sessionDate: sessionDay },
+        include: {
+          teacher: true,
+          subject: true,
+          _count: { select: { entries: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 12,
+      }),
+      this.prisma.classSession.count({
+        where: { status: ClassSessionStatus.CLOSED, sessionDate: sessionDay },
+      }),
+      this.prisma.classSession.count({
+        where: { status: ClassSessionStatus.CLOSED, teacherPaidAt: null },
+      }),
+      this.prisma.sessionEntry.count({
+        where: { payStatus: SessionPayStatus.PENDING_CONFIRM },
+      }),
+      this.prisma.onlineCodeSale.aggregate({
+        where: { payStatus: confirmed, confirmedAt: { gte: start, lte: end } },
+        _sum: { centerShare: true, amount: true },
+        _count: true,
+      }),
+      this.prisma.handoutSale.aggregate({
+        where: { payStatus: confirmed, confirmedAt: { gte: start, lte: end } },
+        _sum: { centerShare: true, amount: true },
+        _count: true,
+      }),
+      this.prisma.roomRental.aggregate({
+        where: { payStatus: confirmed, confirmedAt: { gte: start, lte: end } },
+        _sum: { amount: true },
+        _count: true,
+      }),
+      this.prisma.onlineCodeSale.aggregate({
+        where: { payStatus: confirmed, confirmedAt: { gte: monthStart, lte: end } },
+        _sum: { centerShare: true },
+        _count: true,
+      }),
+      this.prisma.handoutSale.aggregate({
+        where: { payStatus: confirmed, confirmedAt: { gte: monthStart, lte: end } },
+        _sum: { centerShare: true },
+        _count: true,
+      }),
+      this.prisma.roomRental.aggregate({
+        where: { payStatus: confirmed, confirmedAt: { gte: monthStart, lte: end } },
+        _sum: { amount: true },
+        _count: true,
+      }),
+      this.prisma.bookingSubmission.count({
+        where: { status: BookingStatus.SUBMITTED },
+      }),
+      this.prisma.bookingSubmission.aggregate({
+        where: { status: BookingStatus.PAID, paidAt: { gte: start, lte: end } },
+        _sum: { totalAmount: true },
+        _count: true,
+      }),
+      this.prisma.bookingSubmission.groupBy({
+        by: ['status'],
+        where: { payChannel: 'online', status: { in: [BookingStatus.PAID, BookingStatus.SUBMITTED] } },
+        _sum: { totalAmount: true },
+        _count: true,
+      }),
+      this.prisma.cashExpense.aggregate({
+        where: { businessDate: sessionDay },
+        _sum: { amount: true },
+        _count: true,
+      }),
+      this.prisma.cashDayClose.findUnique({
+        where: { businessDate: sessionDay },
+        select: { countedAmount: true, expectedAmount: true, difference: true },
+      }),
+      this.prisma.sessionEntry.findMany({
+        where: { payStatus: confirmed, confirmedAt: { gte: trendFrom, lte: end } },
+        select: { amount: true, confirmedAt: true },
+      }),
+      this.prisma.onlineCodeSale.findMany({
+        where: { payStatus: confirmed, confirmedAt: { gte: trendFrom, lte: end } },
+        select: { centerShare: true, confirmedAt: true },
+      }),
+      this.prisma.handoutSale.findMany({
+        where: { payStatus: confirmed, confirmedAt: { gte: trendFrom, lte: end } },
+        select: { centerShare: true, confirmedAt: true },
+      }),
+      this.prisma.roomRental.findMany({
+        where: { payStatus: confirmed, confirmedAt: { gte: trendFrom, lte: end } },
+        select: { amount: true, confirmedAt: true },
+      }),
+    ]);
+
+    const splitPay = (rows: { amount: unknown; method?: string | null }[]) => {
+      let cash = 0;
+      let electronic = 0;
+      for (const r of rows) {
+        const amt = n(r.amount);
+        if (isElectronic(r.method)) electronic += amt;
+        else cash += amt;
+      }
+      return { cash, electronic, total: cash + electronic, count: rows.length };
+    };
+
+    const receiptsToday = splitPay(paymentsTodayRows);
+    let sessionsCash = 0;
+    let sessionsElectronic = 0;
+    let sessionsCenter = 0;
+    let sessionsCheckedIn = 0;
+    const teacherMap = new Map<
+      string,
+      { teacherId: string; name: string; students: number; amount: number; centerCut: number }
+    >();
+    for (const e of sessionEntriesToday) {
+      const amt = n(e.amount);
+      if (isElectronic(e.method)) sessionsElectronic += amt;
+      else sessionsCash += amt;
+      const cut = sessionCenterCut(e.session);
+      sessionsCenter += cut;
+      if (e.checkedInAt) sessionsCheckedIn += 1;
+      const t = e.session.teacher;
+      const name = `${t.firstName} ${t.lastName === '-' ? '' : t.lastName}`.trim();
+      const cur = teacherMap.get(e.session.teacherId) || {
+        teacherId: e.session.teacherId,
+        name,
+        students: 0,
+        amount: 0,
+        centerCut: 0,
+      };
+      cur.students += 1;
+      cur.amount += amt;
+      cur.centerCut += cut;
+      teacherMap.set(e.session.teacherId, cur);
+    }
+
+    const extraToday =
+      n(extraCodesToday._sum.centerShare) +
+      n(extraHandoutsToday._sum.centerShare) +
+      n(extraRentalsToday._sum.amount);
+    const extraMonth =
+      n(extraCodesMonth._sum.centerShare) +
+      n(extraHandoutsMonth._sum.centerShare) +
+      n(extraRentalsMonth._sum.amount);
+
+    const onlineWallet = { confirmedAmount: 0, pendingAmount: 0, confirmedCount: 0, pendingCount: 0 };
+    for (const g of bookingsOnline) {
+      if (g.status === BookingStatus.PAID) {
+        onlineWallet.confirmedAmount = n(g._sum.totalAmount);
+        onlineWallet.confirmedCount = g._count;
+      }
+      if (g.status === BookingStatus.SUBMITTED) {
+        onlineWallet.pendingAmount = n(g._sum.totalAmount);
+        onlineWallet.pendingCount = g._count;
+      }
+    }
+
+    const intakeByDay = new Map<
+      string,
+      { date: string; receipts: number; sessions: number; extra: number; total: number }
+    >();
+    const opsByDay = new Map<string, { date: string; students: number; amount: number }>();
+    for (let i = 0; i < 14; i++) {
+      const key = addDaysYmd(trendFromYmd, i);
+      intakeByDay.set(key, { date: key, receipts: 0, sessions: 0, extra: 0, total: 0 });
+      opsByDay.set(key, { date: key, students: 0, amount: 0 });
+    }
+    const bump = (
+      map: Map<string, { date: string; receipts: number; sessions: number; extra: number; total: number }>,
+      at: Date | null,
+      field: 'receipts' | 'sessions' | 'extra',
+      amount: number,
+    ) => {
+      if (!at) return;
+      const key = dayKeyCairo(at);
+      const row = map.get(key);
+      if (!row) return;
+      row[field] += amount;
+      row.total += amount;
+    };
+    for (const p of paymentsTrend) bump(intakeByDay, p.paidAt, 'receipts', n(p.amount));
+    for (const e of trendSessionEntries) {
+      bump(intakeByDay, e.confirmedAt, 'sessions', n(e.amount));
+      if (!e.confirmedAt) continue;
+      const key = dayKeyCairo(e.confirmedAt);
+      const row = opsByDay.get(key);
+      if (row) {
+        row.students += 1;
+        row.amount += n(e.amount);
+      }
+    }
+    for (const s of trendCodes) bump(intakeByDay, s.confirmedAt, 'extra', n(s.centerShare));
+    for (const s of trendHandouts) bump(intakeByDay, s.confirmedAt, 'extra', n(s.centerShare));
+    for (const s of trendRentals) bump(intakeByDay, s.confirmedAt, 'extra', n(s.amount));
+
+    const financeMixToday = {
+      receipts: receiptsToday.total,
+      sessions: sessionsCash + sessionsElectronic,
+      extra: extraToday,
+      bookings: n(bookingsPaidToday._sum.totalAmount),
+    };
+    const financeMixTotal =
+      financeMixToday.receipts +
+      financeMixToday.sessions +
+      financeMixToday.extra;
+
     return {
       generatedAt: new Date().toISOString(),
       // legacy/simple KPIs
@@ -341,8 +619,15 @@ export class DashboardService {
         outstandingAmount,
         newStudentsMonth,
         markedToday,
+        intakeToday: financeMixTotal,
+        sessionsTodayAmount: sessionsCash + sessionsElectronic,
+        extraToday,
+        openSessions: openSessions.length,
+        pendingSessionPay: pendingSessionEntries,
       },
       collectionTrend,
+      intakeTrend: Array.from(intakeByDay.values()),
+      opsTrend: Array.from(opsByDay.values()),
       attendanceTrend,
       attendanceBySource,
       topAbsentees,
@@ -359,6 +644,64 @@ export class DashboardService {
         classroom: s.group.classroom?.name || '—',
         enrolled: s.group._count.enrollments,
       })),
+      finance: {
+        receiptsToday,
+        sessionsToday: {
+          cash: sessionsCash,
+          electronic: sessionsElectronic,
+          total: sessionsCash + sessionsElectronic,
+          count: sessionEntriesToday.length,
+          centerCut: sessionsCenter,
+          checkedIn: sessionsCheckedIn,
+        },
+        extraToday: {
+          codes: n(extraCodesToday._sum.centerShare),
+          codesCount: extraCodesToday._count,
+          handouts: n(extraHandoutsToday._sum.centerShare),
+          handoutsCount: extraHandoutsToday._count,
+          rentals: n(extraRentalsToday._sum.amount),
+          rentalsCount: extraRentalsToday._count,
+          total: extraToday,
+        },
+        extraMonth,
+        mixToday: financeMixToday,
+        intakeToday: financeMixTotal,
+        expensesToday: n(expensesTodayAgg._sum.amount),
+        expensesCount: expensesTodayAgg._count,
+        dayClosed: !!dayClose,
+        closeDiff: dayClose ? n(dayClose.difference) : null,
+        bookings: {
+          pending: bookingsPending,
+          paidToday: n(bookingsPaidToday._sum.totalAmount),
+          paidTodayCount: bookingsPaidToday._count,
+        },
+        onlineWallet,
+      },
+      ops: {
+        openCount: openSessions.length,
+        closedToday: closedSessionsToday,
+        pendingPay: pendingSessionEntries,
+        unpaidTeachers: unpaidTeacherSessions,
+        entriesToday: sessionEntriesToday.length,
+        checkedInToday: sessionsCheckedIn,
+        amountToday: sessionsCash + sessionsElectronic,
+        centerCutToday: sessionsCenter,
+        teacherCutToday:
+          sessionsCash + sessionsElectronic - sessionsCenter,
+        cashToday: sessionsCash,
+        electronicToday: sessionsElectronic,
+        openSessions: openSessions.map((s) => ({
+          id: s.id,
+          title: s.title,
+          teacher: `${s.teacher.firstName} ${s.teacher.lastName === '-' ? '' : s.teacher.lastName}`.trim(),
+          subject: s.subject?.nameAr || 'حصة',
+          fee: n(s.feeAmount),
+          entries: s._count.entries,
+        })),
+        topTeachers: Array.from(teacherMap.values())
+          .sort((a, b) => b.amount - a.amount)
+          .slice(0, 8),
+      },
     };
   }
 }

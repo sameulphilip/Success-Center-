@@ -171,7 +171,11 @@ export class UsersService {
         ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
         ...(data.roleCode ? { roleId } : {}),
         ...(data.password
-          ? { passwordHash: await bcrypt.hash(data.password, 10) }
+          ? {
+              passwordHash: await bcrypt.hash(data.password, 10),
+              portalPin: data.password,
+              mustSetPassword: false,
+            }
           : {}),
         // invalidate refresh sessions when password or role changes
         ...((data.password || data.roleCode || data.isActive === false)

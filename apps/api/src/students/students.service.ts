@@ -1,6 +1,12 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { RoleCode } from '@prisma/client';
+import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
-import { normalizePhone } from '../common/phone.util';
+import {
+  isValidMobile,
+  normalizePhone,
+  phoneToLoginEmail,
+} from '../common/phone.util';
 
 @Injectable()
 export class StudentsService {
@@ -255,5 +261,124 @@ export class StudentsService {
     });
     if (!parent) return [];
     return Promise.all(parent.students.map((s) => this.get(s.studentId)));
+  }
+
+  async getPortalLogin(studentId: string) {
+    const student = await this.prisma.student.findUnique({
+      where: { id: studentId },
+      include: { user: true },
+    });
+    if (!student) throw new NotFoundException('الطالب غير موجود');
+
+    const phone = student.phone ? normalizePhone(student.phone) : '';
+    const account =
+      student.user ||
+      (phone
+        ? await this.prisma.user.findUnique({ where: { phone } })
+        : null) ||
+      (phone
+        ? await this.prisma.user.findUnique({
+            where: { email: phoneToLoginEmail(phone) },
+          })
+        : null);
+
+    return {
+      studentId: student.id,
+      name: `${student.firstName} ${student.lastName}`.trim(),
+      phone: account?.phone || phone || student.phone || null,
+      hasAccount: !!account,
+      pin: account?.portalPin || null,
+      mustSetPassword: account?.mustSetPassword ?? true,
+      isActive: account?.isActive ?? false,
+    };
+  }
+
+  async setPortalLogin(
+    studentId: string,
+    pin: string,
+    opts?: { mustSetPassword?: boolean },
+  ) {
+    const password = String(pin || '').trim();
+    if (password.length < 6) {
+      throw new BadRequestException('الرقم السري لازم 6 حروف أو أرقام على الأقل');
+    }
+
+    const student = await this.prisma.student.findUnique({
+      where: { id: studentId },
+    });
+    if (!student) throw new NotFoundException('الطالب غير موجود');
+
+    const phone = student.phone ? normalizePhone(student.phone) : '';
+    if (!isValidMobile(phone)) {
+      throw new BadRequestException(
+        'رقم موبايل الطالب غير صالح — صلّحه في بيانات الطالب أولاً',
+      );
+    }
+
+    const studentRole = await this.prisma.role.findUnique({
+      where: { code: RoleCode.STUDENT },
+    });
+    if (!studentRole) {
+      throw new BadRequestException('دور الطالب غير موجود');
+    }
+
+    let account =
+      (student.userId
+        ? await this.prisma.user.findUnique({ where: { id: student.userId } })
+        : null) ||
+      (await this.prisma.user.findUnique({ where: { phone } })) ||
+      (await this.prisma.user.findUnique({
+        where: { email: phoneToLoginEmail(phone) },
+      }));
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const mustSetPassword = opts?.mustSetPassword === true;
+
+    if (!account) {
+      const email = phoneToLoginEmail(phone);
+      const emailTaken = await this.prisma.user.findUnique({ where: { email } });
+      account = await this.prisma.user.create({
+        data: {
+          email: emailTaken
+            ? `${phone}.${Date.now()}@phone.success.local`
+            : email,
+          phone,
+          fullName: `${student.firstName} ${student.lastName}`.trim(),
+          passwordHash,
+          portalPin: password,
+          mustSetPassword,
+          roleId: studentRole.id,
+          isActive: true,
+          student: { connect: { id: student.id } },
+        },
+      });
+    } else {
+      account = await this.prisma.user.update({
+        where: { id: account.id },
+        data: {
+          phone: account.phone || phone,
+          passwordHash,
+          portalPin: password,
+          mustSetPassword,
+          isActive: true,
+          refreshToken: null,
+        },
+      });
+      if (!student.userId) {
+        await this.prisma.student.update({
+          where: { id: student.id },
+          data: { userId: account.id },
+        });
+      }
+    }
+
+    return {
+      studentId: student.id,
+      phone: account.phone || phone,
+      hasAccount: true,
+      pin: password,
+      mustSetPassword: account.mustSetPassword,
+      isActive: true,
+    };
   }
 }
