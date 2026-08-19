@@ -7,6 +7,7 @@ import {
   Patch,
   Post,
   Query,
+  StreamableFile,
   UseGuards,
 } from '@nestjs/common';
 import { BookingStatus, RoleCode } from '@prisma/client';
@@ -14,6 +15,7 @@ import { BookingService } from './booking.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
+import { CurrentUser } from '../auth/current-user.decorator';
 
 @Controller('booking')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -86,9 +88,13 @@ export class BookingController {
       notes: string | null;
       isPublished: boolean;
       slug: string;
+      onlinePayEnabled?: boolean;
+      vodafoneWallet?: string | null;
+      instapayHandle?: string | null;
     }>,
+    @CurrentUser() user: { role?: string },
   ) {
-    return this.booking.updateForm(id, body);
+    return this.booking.updateForm(id, body, user?.role);
   }
 
   @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
@@ -117,6 +123,11 @@ export class BookingController {
     return this.booking.deleteOffering(id);
   }
 
+  @Get('online-wallet')
+  onlineWallet() {
+    return this.booking.onlineWallet();
+  }
+
   @Get('submissions')
   listSubmissions(
     @Query('formId') formId?: string,
@@ -126,13 +137,22 @@ export class BookingController {
     return this.booking.listSubmissions(formId, status, phone);
   }
 
+  @Get('submissions/:id/proof')
+  async getTransferProof(@Param('id') id: string) {
+    const proof = await this.booking.getTransferProof(id);
+    return new StreamableFile(proof.buffer, {
+      type: proof.mime,
+      disposition: `inline; filename="${proof.filename}"`,
+    });
+  }
+
   @Post('submissions/:id/mark-paid')
   markPaid(
     @Param('id') id: string,
     @Body()
     body: {
       note?: string;
-      method?: 'CASH' | 'VODAFONE_CASH';
+      method?: 'CASH' | 'VODAFONE_CASH' | 'INSTAPAY';
       vodafoneTxn?: string;
     },
   ) {
@@ -156,7 +176,7 @@ export class BookingController {
     return this.booking.updateSubmission(id, body);
   }
 
-  @Roles(RoleCode.SUPER_ADMIN)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER, RoleCode.RECEPTION)
   @Post('submissions/:id/cancel')
   cancel(@Param('id') id: string) {
     return this.booking.cancelSubmission(id);

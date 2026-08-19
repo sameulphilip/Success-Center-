@@ -495,6 +495,10 @@ model BookingForm {
   isPublished  Boolean             @default(false)
   defaultFee   Decimal             @default(0) @db.Decimal(12, 2)
   notes        String?
+  /** Second public link/QR: student pays Vodafone Cash or InstaPay, reception confirms */
+  onlinePayEnabled Boolean           @default(false)
+  vodafoneWallet   String?
+  instapayHandle   String?
   offerings    BookingOffering[]
   submissions  BookingSubmission[]
   createdAt    DateTime            @default(now())
@@ -534,9 +538,13 @@ model BookingSubmission {
   totalAmount    Decimal            @default(0) @db.Decimal(12, 2)
   receiptNumber  String?            @unique
   paidAt         DateTime?
-  /** CASH | VODAFONE_CASH */
+  /** CASH | VODAFONE_CASH | INSTAPAY */
   paymentMethod  String?
   vodafoneTxn    String?
+  /** center | online — public /online form vs center QR */
+  payChannel     String             @default("center")
+  /** Optional transfer screenshot (relative path under uploads/) */
+  transferProofPath String?
   studentId      String?
   notes          String?
   selections     BookingSelection[]

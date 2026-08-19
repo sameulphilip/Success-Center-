@@ -27,6 +27,7 @@ const adminNav: NavItem[] = [
   { href: '/attendance', label: 'الحضور', icon: 'attendance', tone: 'emerald', perms: ['attendance'] },
   { href: '/finance', label: 'الحسابات', icon: 'finance', tone: 'amber', perms: ['finance', 'finance.payments', 'finance.receipts', 'finance.safe', 'finance.close'] },
   { href: '/bookings', label: 'الحجز', icon: 'bookings', tone: 'orange', perms: ['bookings'] },
+  { href: '/bookings/ewallet', label: 'محفظة إلكتروني', icon: 'finance', tone: 'amber', perms: ['bookings', 'finance', 'finance.safe'] },
   { href: '/login-qr', label: 'QR دخول الطالب', icon: 'loginQr', tone: 'orange', perms: ['bookings', 'settings', 'dashboard', 'students'] },
   { href: '/ops', label: 'تشغيل الحصص', icon: 'ops', tone: 'rose', perms: ['ops'] },
   { href: '/revenue', label: 'إيرادات', icon: 'revenue', tone: 'emerald', perms: ['revenue'] },

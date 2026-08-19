@@ -16,14 +16,19 @@ type SharePack = {
   formFee: number;
   url: string;
   qrDataUrl: string;
+  onlinePayEnabled?: boolean;
+  onlineUrl?: string | null;
+  onlineQrDataUrl?: string | null;
 };
 
 export default function BookingFormPrintPage() {
   const params = useParams<{ id: string }>();
   const [pack, setPack] = useState<SharePack | null>(null);
   const [error, setError] = useState('');
+  const [onlinePay, setOnlinePay] = useState(false);
 
   useEffect(() => {
+    setOnlinePay(new URLSearchParams(window.location.search).get('pay') === 'online');
     if (!params.id) return;
     const baseUrl = window.location.origin;
     api<SharePack>(
@@ -41,6 +46,10 @@ export default function BookingFormPrintPage() {
     return <p className="p-8 text-navy/50">جاري تجهيز ملصق الاستمارة…</p>;
   }
 
+  const useOnline = onlinePay && !!pack.onlineUrl;
+  const url = useOnline ? pack.onlineUrl! : pack.url;
+  const qr = useOnline ? pack.onlineQrDataUrl || pack.qrDataUrl : pack.qrDataUrl;
+
   return (
     <div className="min-h-screen bg-slate-100 p-6 print:bg-white print:p-0" dir="rtl">
       <div className="mx-auto max-w-2xl print:hidden mb-4 flex flex-wrap gap-2">
@@ -50,7 +59,7 @@ export default function BookingFormPrintPage() {
         <Link href="/bookings" className="btn-ghost">
           رجوع للحجز
         </Link>
-        <a href={pack.url} target="_blank" rel="noreferrer" className="btn-accent">
+        <a href={url} target="_blank" rel="noreferrer" className="btn-accent">
           فتح الاستمارة
         </a>
       </div>
@@ -62,7 +71,7 @@ export default function BookingFormPrintPage() {
 
         <div className="px-8 py-8 text-center space-y-3">
           <p className="text-xs tracking-[0.22em] text-amber-700 font-bold">
-            استمارة حجز
+            {useOnline ? 'استمارة حجز · دفع أونلاين' : 'استمارة حجز'}
           </p>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-[#0B2545] leading-snug">
             {pack.title}
@@ -84,7 +93,7 @@ export default function BookingFormPrintPage() {
         <div className="px-8 pb-4 flex justify-center">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={pack.qrDataUrl}
+            src={qr}
             alt="QR للاستمارة"
             className="h-64 w-64 rounded-2xl border border-slate-200 bg-white"
           />
@@ -92,13 +101,17 @@ export default function BookingFormPrintPage() {
 
         <div className="px-8 pb-8 text-center space-y-2">
           <p className="text-sm font-semibold text-[#0B2545]">
-            امسح الكود للتسجيل في الاستمارة
+            {useOnline
+              ? 'امسح الكود للتسجيل والدفع أونلاين'
+              : 'امسح الكود للتسجيل في الاستمارة'}
           </p>
           <p className="text-xs text-slate-500 break-all font-mono leading-relaxed">
-            {pack.url}
+            {url}
           </p>
           <p className="text-[11px] text-slate-400 pt-2">
-            الدفع كاش داخل السنتر بعد التسجيل
+            {useOnline
+              ? 'الدفع فودافون كاش أو InstaPay فقط — الاستقبال يؤكد التحويل'
+              : 'الدفع كاش داخل السنتر بعد التسجيل'}
           </p>
         </div>
       </article>

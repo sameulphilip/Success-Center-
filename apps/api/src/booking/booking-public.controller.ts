@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { BookingService } from './booking.service';
 
 /** Public booking endpoints — no JWT */
@@ -7,8 +7,8 @@ export class BookingPublicController {
   constructor(private readonly booking: BookingService) {}
 
   @Get(':slug')
-  getPublic(@Param('slug') slug: string) {
-    return this.booking.getPublicForm(slug);
+  getPublic(@Param('slug') slug: string, @Query('channel') channel?: string) {
+    return this.booking.getPublicForm(slug, channel);
   }
 
   @Post(':slug/submit')
@@ -21,6 +21,10 @@ export class BookingPublicController {
       parentPhone: string;
       offeringIds: string[];
       notes?: string;
+      channel?: string;
+      paymentMethod?: string;
+      transferRef?: string;
+      proofImage?: string;
     },
   ) {
     return this.booking.submitPublic({ slug, ...body });

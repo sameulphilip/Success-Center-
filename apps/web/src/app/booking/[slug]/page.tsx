@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, usePathname } from 'next/navigation';
 import { PoweredByCowdlly } from '@/components/PoweredByCowdlly';
 import { BrandMark } from '@/components/BrandMark';
 
@@ -25,6 +25,9 @@ type PublicForm = {
   notes?: string | null;
   defaultFee: number;
   formFee?: number;
+  payChannel?: 'center' | 'online';
+  vodafoneWallet?: string | null;
+  instapayHandle?: string | null;
   offerings: Offering[];
 };
 
@@ -44,8 +47,10 @@ type SubmitResult = {
 
 export default function PublicBookingPage() {
   const params = useParams();
+  const pathname = usePathname();
   const rawSlug = params?.slug;
   const slug = Array.isArray(rawSlug) ? rawSlug[0] : rawSlug || '';
+  const isOnlinePay = pathname?.endsWith('/online') ?? false;
 
   const [form, setForm] = useState<PublicForm | null>(null);
   const [error, setError] = useState('');
@@ -57,6 +62,48 @@ export default function PublicBookingPage() {
   const [studentPhone, setStudentPhone] = useState('');
   const [parentPhone, setParentPhone] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [payMethod, setPayMethod] = useState<'VODAFONE_CASH' | 'INSTAPAY'>(
+    'VODAFONE_CASH',
+  );
+  const [transferRef, setTransferRef] = useState('');
+  const [proofFileName, setProofFileName] = useState('');
+  const [proofImage, setProofImage] = useState('');
+  const [copiedPay, setCopiedPay] = useState(false);
+
+  function compressProof(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      if (file.size > 12 * 1024 * 1024) {
+        reject(new Error('الصورة كبيرة جدًا (الحد 12 ميجا)'));
+        return;
+      }
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        const max = 1400;
+        let { width, height } = img;
+        const scale = Math.min(1, max / Math.max(width, height));
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          URL.revokeObjectURL(url);
+          reject(new Error('تعذر قراءة الصورة'));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        URL.revokeObjectURL(url);
+        resolve(canvas.toDataURL('image/jpeg', 0.72));
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error('تعذر قراءة الصورة'));
+      };
+      img.src = url;
+    });
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -64,13 +111,21 @@ export default function PublicBookingPage() {
       setLoading(true);
       setError('');
       try {
-        const res = await fetch(`${API_URL}/booking/public/${slug}`);
+        const res = await fetch(
+          `${API_URL}/booking/public/${slug}${
+            isOnlinePay ? '?channel=online' : ''
+          }`,
+        );
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           throw new Error(err.message || 'الاستمارة غير متاحة');
         }
         const data = (await res.json()) as PublicForm;
-        if (!cancelled) setForm(data);
+        if (!cancelled) {
+          setForm(data);
+          if (data.vodafoneWallet) setPayMethod('VODAFONE_CASH');
+          else if (data.instapayHandle) setPayMethod('INSTAPAY');
+        }
       } catch (e: any) {
         if (!cancelled) setError(e.message || 'تعذر تحميل الاستمارة');
       } finally {
@@ -81,7 +136,7 @@ export default function PublicBookingPage() {
     return () => {
       cancelled = true;
     };
-  }, [slug]);
+  }, [slug, isOnlinePay]);
 
   const bySubject = useMemo(() => {
     const map = new Map<string, Offering[]>();
@@ -118,6 +173,14 @@ export default function PublicBookingPage() {
           studentPhone,
           parentPhone,
           offeringIds: Array.from(selected),
+          ...(isOnlinePay
+            ? {
+                channel: 'online',
+                paymentMethod: payMethod,
+                transferRef,
+                ...(proofImage ? { proofImage } : {}),
+              }
+            : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -177,6 +240,11 @@ export default function PublicBookingPage() {
                   ج.م
                 </span>
               </p>
+              {isOnlinePay ? (
+                <p className="mt-2 inline-flex rounded-full bg-amber-300/15 px-3 py-1 text-[11px] font-bold text-amber-200">
+                  دفع أونلاين · فودافون كاش / InstaPay
+                </p>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -232,11 +300,17 @@ export default function PublicBookingPage() {
               <ol className="space-y-2 text-sm text-navy/80 list-decimal list-inside">
                 {(result.nextSteps?.length
                   ? result.nextSteps
-                  : [
-                      'ادفع في السنتر كاش أو فودافون كاش واستلم الإيصال',
-                      'بعد تأكيد الدفع هيتفتح حسابك تلقائي برقم موبايلك',
-                      'سجّل دخول كطالب وعيّن كلمة المرور أول مرة',
-                    ]
+                  : isOnlinePay
+                    ? [
+                        'حوّل المبلغ واكتب الرقم المرجعي',
+                        'الاستقبال هيأكد التحويل من التطبيق',
+                        'بعد التأكيد هيتفتح حسابك برقم موبايلك',
+                      ]
+                    : [
+                        'ادفع في السنتر كاش واستلم الإيصال',
+                        'بعد تأكيد الدفع هيتفتح حسابك تلقائي برقم موبايلك',
+                        'سجّل دخول كطالب وعيّن كلمة المرور أول مرة',
+                      ]
                 ).map((step) => (
                   <li key={step}>{step}</li>
                 ))}
@@ -250,7 +324,7 @@ export default function PublicBookingPage() {
                 بعد الدفع — دخول برقم الموبايل
               </a>
               <p className="text-[11px] text-navy/45">
-                لو لسه ما دفعتش، الاستقبال لازم يأكد الدفع (كاش أو فودافون كاش)
+                لو لسه ما اتأكدش الدفع، الاستقبال لازم يأكد التحويل أو الكاش
                 الأول عشان الحساب يتفتح.
               </p>
             </div>
@@ -366,10 +440,128 @@ export default function PublicBookingPage() {
               </p>
             ) : (
               <p className="text-xs text-navy/50 px-1">
-                الدفع داخل السنتر كاش أو فودافون كاش. بعد التسجيل توجّه
-                للاستقبال لاستلام الإيصال.
+                {isOnlinePay
+                  ? 'الدفع فودافون كاش أو InstaPay فقط. الاستقبال هيأكد وصول التحويل.'
+                  : 'الدفع داخل السنتر كاش. بعد التسجيل توجّه للاستقبال لاستلام الإيصال.'}
               </p>
             )}
+
+            {isOnlinePay ? (
+              <section className="panel p-5 space-y-3">
+                <h2 className="section-title">الدفع أونلاين</h2>
+                <p className="text-sm text-navy/65">
+                  حوّل سعر الاستمارة{' '}
+                  <strong className="tabular-nums">
+                    {formFee.toLocaleString('en-EG')} ج.م
+                  </strong>{' '}
+                  واكتب الرقم المرجعي.
+                </p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {form.vodafoneWallet ? (
+                    <button
+                      type="button"
+                      className={`rounded-xl border px-3 py-3 text-right transition ${
+                        payMethod === 'VODAFONE_CASH'
+                          ? 'border-[#C99612] bg-amber-50/70'
+                          : 'border-mist bg-white'
+                      }`}
+                      onClick={() => setPayMethod('VODAFONE_CASH')}
+                    >
+                      <p className="text-sm font-extrabold text-navy">
+                        فودافون كاش
+                      </p>
+                      <p className="mt-1 font-mono text-sm tabular-nums">
+                        {form.vodafoneWallet}
+                      </p>
+                    </button>
+                  ) : null}
+                  {form.instapayHandle ? (
+                    <button
+                      type="button"
+                      className={`rounded-xl border px-3 py-3 text-right transition ${
+                        payMethod === 'INSTAPAY'
+                          ? 'border-[#C99612] bg-amber-50/70'
+                          : 'border-mist bg-white'
+                      }`}
+                      onClick={() => setPayMethod('INSTAPAY')}
+                    >
+                      <p className="text-sm font-extrabold text-navy">InstaPay</p>
+                      <p className="mt-1 font-mono text-sm break-all">
+                        {form.instapayHandle}
+                      </p>
+                    </button>
+                  ) : null}
+                </div>
+                {(payMethod === 'VODAFONE_CASH'
+                  ? form.vodafoneWallet
+                  : form.instapayHandle) ? (
+                  <button
+                    type="button"
+                    className="btn-ghost w-full"
+                    onClick={async () => {
+                      const val =
+                        payMethod === 'VODAFONE_CASH'
+                          ? form.vodafoneWallet
+                          : form.instapayHandle;
+                      if (!val) return;
+                      await navigator.clipboard.writeText(val);
+                      setCopiedPay(true);
+                      window.setTimeout(() => setCopiedPay(false), 1500);
+                    }}
+                  >
+                    {copiedPay ? 'تم نسخ الرقم ✓' : 'نسخ رقم التحويل'}
+                  </button>
+                ) : null}
+                <label className="block text-sm">
+                  <span className="text-navy/55">الرقم المرجعي للعملية</span>
+                  <input
+                    className="field"
+                    required
+                    value={transferRef}
+                    onChange={(e) => setTransferRef(e.target.value)}
+                    placeholder="رقم العملية من التطبيق"
+                  />
+                </label>
+                <label className="block text-sm">
+                  <span className="text-navy/55">
+                    صورة التحويل{' '}
+                    <span className="text-navy/40">(اختياري)</span>
+                  </span>
+                  <input
+                    className="field"
+                    type="file"
+                    accept="image/*"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) {
+                        setProofImage('');
+                        setProofFileName('');
+                        return;
+                      }
+                      try {
+                        const dataUrl = await compressProof(file);
+                        setProofImage(dataUrl);
+                        setProofFileName(file.name);
+                      } catch (err: any) {
+                        setProofImage('');
+                        setProofFileName('');
+                        setError(err.message || 'تعذر قراءة الصورة');
+                        e.target.value = '';
+                      }
+                    }}
+                  />
+                  {proofFileName ? (
+                    <span className="mt-1 block text-[11px] text-navy/50">
+                      {proofFileName} — هتتبعت مع الطلب
+                    </span>
+                  ) : (
+                    <span className="mt-1 block text-[11px] text-navy/40">
+                      سكرين من عملية التحويل بيساعد الاستقبال يأكد أسرع
+                    </span>
+                  )}
+                </label>
+              </section>
+            ) : null}
 
             <div className="fixed inset-x-0 bottom-0 z-20 border-t border-mist bg-white/95 backdrop-blur px-4 py-3 safe-area-pad">
               <div className="mx-auto flex max-w-3xl items-center justify-between gap-3">
@@ -382,7 +574,11 @@ export default function PublicBookingPage() {
                 <button
                   type="submit"
                   className="btn-accent shrink-0 px-4 sm:min-w-[140px]"
-                  disabled={submitting || selected.size === 0}
+                  disabled={
+                    submitting ||
+                    selected.size === 0 ||
+                    (isOnlinePay && !transferRef.trim())
+                  }
                 >
                   {submitting ? 'جاري التسجيل…' : 'تسجيل الحجز'}
                 </button>

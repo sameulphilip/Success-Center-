@@ -11,7 +11,7 @@ import {
   SectionCard,
 } from '@/components/ui';
 import { AppDialog, type DialogTone } from '@/components/AppDialog';
-import { api, getStoredUser } from '@/lib/api';
+import { api, getStoredUser, openFileInTab } from '@/lib/api';
 
 type DialogState = {
   title?: string;
@@ -45,6 +45,9 @@ type FormRow = {
   isPublished: boolean;
   defaultFee: string | number;
   notes?: string | null;
+  onlinePayEnabled?: boolean;
+  vodafoneWallet?: string | null;
+  instapayHandle?: string | null;
   _count?: { offerings: number; submissions: number };
   statusCounts?: {
     PAID: number;
@@ -67,6 +70,8 @@ type Submission = {
   paidAt?: string | null;
   paymentMethod?: 'CASH' | 'VODAFONE_CASH' | string | null;
   vodafoneTxn?: string | null;
+  payChannel?: 'center' | 'online' | string | null;
+  hasTransferProof?: boolean;
   createdAt: string;
   form: { id: string; title: string; slug: string };
   formId?: string;
@@ -82,11 +87,12 @@ type Submission = {
   }[];
 };
 
-type PayMethod = 'CASH' | 'VODAFONE_CASH';
+type PayMethod = 'CASH' | 'VODAFONE_CASH' | 'INSTAPAY';
 
 const payMethodLabel: Record<string, string> = {
   CASH: 'كاش',
   VODAFONE_CASH: 'فودافون كاش',
+  INSTAPAY: 'InstaPay',
 };
 
 type SharePack = {
@@ -94,6 +100,9 @@ type SharePack = {
   qrDataUrl: string;
   title: string;
   slug: string;
+  onlinePayEnabled?: boolean;
+  onlineUrl?: string | null;
+  onlineQrDataUrl?: string | null;
 };
 
 const statusLabel: Record<string, string> = {
@@ -101,6 +110,19 @@ const statusLabel: Record<string, string> = {
   PAID: 'تم الدفع',
   CANCELLED: 'ملغي',
 };
+
+function isOnlineSubmission(s: {
+  payChannel?: string | null;
+  paymentMethod?: string | null;
+  vodafoneTxn?: string | null;
+}) {
+  if (s.payChannel === 'online') return true;
+  if (s.payChannel === 'center') return false;
+  return (
+    (s.paymentMethod === 'VODAFONE_CASH' || s.paymentMethod === 'INSTAPAY') &&
+    !!s.vodafoneTxn
+  );
+}
 
 export default function BookingsAdminPage() {
   const [forms, setForms] = useState<FormRow[]>([]);
@@ -185,7 +207,14 @@ export default function BookingsAdminPage() {
   }
   const [share, setShare] = useState<SharePack | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copiedOnline, setCopiedOnline] = useState(false);
+  const [onlineDraft, setOnlineDraft] = useState({
+    enabled: false,
+    vodafoneWallet: '',
+    instapayHandle: '',
+  });
   const [isAdmin, setIsAdmin] = useState(false);
+  const [canManageOnlinePay, setCanManageOnlinePay] = useState(false);
 
   function notify(
     message: string,
@@ -264,6 +293,12 @@ export default function BookingsAdminPage() {
     setFormDetail(detail);
     setShare(sharePack);
     setCopied(false);
+    setCopiedOnline(false);
+    setOnlineDraft({
+      enabled: !!detail.onlinePayEnabled,
+      vodafoneWallet: detail.vodafoneWallet || '',
+      instapayHandle: detail.instapayHandle || '',
+    });
   }
 
   async function copyFullLink() {
@@ -274,6 +309,45 @@ export default function BookingsAdminPage() {
       setTimeout(() => setCopied(false), 2000);
     } catch {
       notify('تعذر نسخ الرابط');
+    }
+  }
+
+  async function copyOnlineLink() {
+    if (!share?.onlineUrl) return;
+    try {
+      await navigator.clipboard.writeText(share.onlineUrl);
+      setCopiedOnline(true);
+      setTimeout(() => setCopiedOnline(false), 2000);
+    } catch {
+      notify('تعذر نسخ الرابط');
+    }
+  }
+
+  async function saveOnlinePay() {
+    if (!formDetail || !canManageOnlinePay) return;
+    if (
+      onlineDraft.enabled &&
+      !onlineDraft.vodafoneWallet.trim() &&
+      !onlineDraft.instapayHandle.trim()
+    ) {
+      notify('اكتب رقم فودافون كاش أو حساب InstaPay قبل تفعيل الأونلاين');
+      return;
+    }
+    setBusy('online');
+    try {
+      await api(`/booking/forms/${formDetail.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          onlinePayEnabled: onlineDraft.enabled,
+          vodafoneWallet: onlineDraft.vodafoneWallet.trim() || null,
+          instapayHandle: onlineDraft.instapayHandle.trim() || null,
+        }),
+      });
+      await refresh();
+    } catch (err: any) {
+      notify(err.message);
+    } finally {
+      setBusy('');
     }
   }
 
@@ -292,7 +366,13 @@ export default function BookingsAdminPage() {
       window.location.href = '/login';
       return;
     }
-    setIsAdmin(getStoredUser()?.role === 'SUPER_ADMIN');
+    const role = getStoredUser()?.role;
+    setIsAdmin(role === 'SUPER_ADMIN');
+    setCanManageOnlinePay(
+      role === 'SUPER_ADMIN' || role === 'CENTER_MANAGER',
+    );
+    const fid = new URLSearchParams(window.location.search).get('formId');
+    if (fid) setSelectedFormId(fid);
     Promise.all([loadForms(), loadTeacherCatalog()]).catch((e) =>
       notify(e.message),
     );
@@ -600,6 +680,42 @@ export default function BookingsAdminPage() {
     );
   }
 
+  function cancelBooking(s: Submission) {
+    if (s.status === 'PAID') {
+      notify('لا يمكن إلغاء حجز مدفوع');
+      return;
+    }
+    if (s.status === 'CANCELLED') return;
+    askConfirm(
+      `إلغاء استمارة «${s.studentName}»؟\nمش هتتمسح، هتتحول لملغي.`,
+      () => {
+        void (async () => {
+          setBusy(`cancel-${s.id}`);
+          try {
+            await api(`/booking/submissions/${s.id}/cancel`, {
+              method: 'POST',
+            });
+            if (editingSubmission?.id === s.id) setEditingSubmission(null);
+            await Promise.all([
+              loadSubmissions(
+                selectedFormId || undefined,
+                statusFilter || undefined,
+                phoneQuery || undefined,
+              ),
+              loadForms(),
+            ]);
+            notify('تم إلغاء الحجز', 'success', 'تم الإلغاء');
+          } catch (err: any) {
+            notify(err.message);
+          } finally {
+            setBusy('');
+          }
+        })();
+      },
+      'إلغاء الحجز',
+    );
+  }
+
   function startEditSubmission(s: Submission) {
     setEditingSubmission(s);
     setEditForm({
@@ -669,11 +785,16 @@ export default function BookingsAdminPage() {
       <PageHeader
         title="استمارات الحجز"
         subtitle="إدارة الاستمارة · تأكيد الكاش"
+        action={
+          <Link href="/bookings/ewallet" className="btn-accent">
+            محفظة تحويل إلكتروني
+          </Link>
+        }
       />
       <PageHero
         eyebrow="BOOKINGS"
         title="الحجز والدفع في السنتر"
-        subtitle="الطالب يسجّل أونلاين، والاستقبال يؤكّد الدفع كاش ويصدر الإيصال"
+        subtitle="الطالب يسجّل من لينك السنتر أو لينك الأونلاين، والاستقبال يؤكد الدفع"
         metrics={[
           {
             label: selectedFormMeta ? 'إجمالي الحجوزات' : 'استمارات',
@@ -898,6 +1019,134 @@ export default function BookingsAdminPage() {
                   </div>
                 </div>
               ) : null}
+
+              <div className="mb-5 rounded-2xl border border-mist bg-white p-4 space-y-3">
+                {canManageOnlinePay ? (
+                  <label className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      className="mt-1 size-4 accent-[#0B2545]"
+                      checked={onlineDraft.enabled}
+                      onChange={(e) =>
+                        setOnlineDraft({
+                          ...onlineDraft,
+                          enabled: e.target.checked,
+                        })
+                      }
+                    />
+                    <span>
+                      <span className="block font-bold text-navy">
+                        استمارة أونلاين (فودافون كاش / InstaPay)
+                      </span>
+                      <span className="text-[12px] text-navy/55">
+                        لينك وQR تاني لنفس المدرسين والسعر، والدفع تحويل فقط.
+                        الاستقبال يؤكد الرقم المرجعي.
+                      </span>
+                    </span>
+                  </label>
+                ) : (
+                  <div>
+                    <p className="font-bold text-navy">
+                      استمارة أونلاين (فودافون كاش / InstaPay)
+                    </p>
+                    <p className="text-[12px] text-navy/55">
+                      {onlineDraft.enabled
+                        ? 'مفعّلة — الاستقبال يشوف الأرقام ويأكد التحويل. التعديل للأدمن فقط.'
+                        : 'غير مفعّلة. الأدمن هو اللي يفعّلها ويكتب أرقام التحويل.'}
+                    </p>
+                  </div>
+                )}
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <FieldLabel label="رقم فودافون كاش">
+                    <input
+                      className="field"
+                      value={onlineDraft.vodafoneWallet}
+                      readOnly={!canManageOnlinePay}
+                      disabled={!canManageOnlinePay}
+                      onChange={(e) =>
+                        setOnlineDraft({
+                          ...onlineDraft,
+                          vodafoneWallet: e.target.value,
+                        })
+                      }
+                      placeholder={
+                        canManageOnlinePay ? '01xxxxxxxxx' : 'غير مسجّل'
+                      }
+                    />
+                  </FieldLabel>
+                  <FieldLabel label="InstaPay (رقم / IPA)">
+                    <input
+                      className="field"
+                      value={onlineDraft.instapayHandle}
+                      readOnly={!canManageOnlinePay}
+                      disabled={!canManageOnlinePay}
+                      onChange={(e) =>
+                        setOnlineDraft({
+                          ...onlineDraft,
+                          instapayHandle: e.target.value,
+                        })
+                      }
+                      placeholder={
+                        canManageOnlinePay ? 'example@instapay' : 'غير مسجّل'
+                      }
+                    />
+                  </FieldLabel>
+                </div>
+                {canManageOnlinePay ? (
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    disabled={busy === 'online'}
+                    onClick={() => void saveOnlinePay()}
+                  >
+                    حفظ إعداد الأونلاين
+                  </button>
+                ) : null}
+                {share?.onlinePayEnabled && share.onlineUrl ? (
+                  <div className="flex flex-wrap items-start gap-4 rounded-xl border border-amber-200 bg-amber-50/50 p-3">
+                    {share.onlineQrDataUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={share.onlineQrDataUrl}
+                        alt="QR الأونلاين"
+                        className="h-32 w-32 rounded-xl border border-mist bg-white shrink-0"
+                      />
+                    ) : null}
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <p className="text-xs font-bold text-amber-900">
+                        رابط الدفع أونلاين
+                      </p>
+                      <p className="text-sm font-mono break-all text-navy bg-white rounded-xl border border-mist px-3 py-2">
+                        {share.onlineUrl}
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="btn-primary"
+                          onClick={() => void copyOnlineLink()}
+                        >
+                          {copiedOnline ? 'تم النسخ ✓' : 'نسخ لينك الأونلاين'}
+                        </button>
+                        <a
+                          href={share.onlineUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="btn-ghost"
+                        >
+                          فتح
+                        </a>
+                        <Link
+                          href={`/bookings/${formDetail.id}/print?pay=online`}
+                          target="_blank"
+                          className="btn-accent"
+                        >
+                          طباعة QR أونلاين
+                        </Link>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
 
               <div className="mb-3">
                 <FieldLabel label="بحث باسم المدرس">
@@ -1262,7 +1511,11 @@ export default function BookingsAdminPage() {
               {submissions.map((s) => (
                 <article
                   key={s.id}
-                  className={`rounded-xl border border-mist bg-white p-3 space-y-2 ${
+                  className={`rounded-xl border bg-white p-3 space-y-2 ${
+                    isOnlineSubmission(s)
+                      ? 'border-amber-300'
+                      : 'border-mist'
+                  } ${
                     editingSubmission?.id === s.id ? 'ring-2 ring-sky/30' : ''
                   }`}
                 >
@@ -1280,17 +1533,24 @@ export default function BookingsAdminPage() {
                         {new Date(s.createdAt).toLocaleString('ar-EG')}
                       </p>
                     </div>
-                    <span
-                      className={
-                        s.status === 'PAID'
-                          ? 'badge-ok'
-                          : s.status === 'CANCELLED'
-                            ? 'badge-warn'
-                            : 'badge-navy'
-                      }
-                    >
-                      {statusLabel[s.status] || s.status}
-                    </span>
+                    <div className="flex flex-wrap items-center gap-1 justify-end">
+                      {isOnlineSubmission(s) ? (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-900">
+                          استمارة أونلاين
+                        </span>
+                      ) : null}
+                      <span
+                        className={
+                          s.status === 'PAID'
+                            ? 'badge-ok'
+                            : s.status === 'CANCELLED'
+                              ? 'badge-warn'
+                              : 'badge-navy'
+                        }
+                      >
+                        {statusLabel[s.status] || s.status}
+                      </span>
+                    </div>
                   </div>
                   <div className="text-xs text-navy/70 space-y-0.5">
                     <p>طالب: {s.studentPhone}</p>
@@ -1298,10 +1558,54 @@ export default function BookingsAdminPage() {
                     <p className="font-bold tabular-nums text-navy text-sm">
                       {Number(s.totalAmount).toLocaleString('en-EG')} ج.م
                     </p>
+                    {s.status === 'SUBMITTED' &&
+                    s.paymentMethod &&
+                    s.paymentMethod !== 'CASH' &&
+                    s.vodafoneTxn ? (
+                      <p className="text-amber-800 font-semibold">
+                        تحويل{' '}
+                        {payMethodLabel[s.paymentMethod] || s.paymentMethod} ·{' '}
+                        {s.vodafoneTxn}
+                        {s.hasTransferProof ? (
+                          <>
+                            {' '}
+                            ·{' '}
+                            <button
+                              type="button"
+                              className="underline"
+                              onClick={() =>
+                                void openFileInTab(
+                                  `/booking/submissions/${s.id}/proof`,
+                                ).catch((err) => notify(err.message))
+                              }
+                            >
+                              صورة التحويل
+                            </button>
+                          </>
+                        ) : null}
+                      </p>
+                    ) : null}
                     {s.status === 'PAID' && s.paymentMethod ? (
                       <p>
                         {payMethodLabel[s.paymentMethod] || s.paymentMethod}
                         {s.vodafoneTxn ? ` · ${s.vodafoneTxn}` : ''}
+                        {s.hasTransferProof ? (
+                          <>
+                            {' '}
+                            ·{' '}
+                            <button
+                              type="button"
+                              className="underline"
+                              onClick={() =>
+                                void openFileInTab(
+                                  `/booking/submissions/${s.id}/proof`,
+                                ).catch((err) => notify(err.message))
+                              }
+                            >
+                              صورة التحويل
+                            </button>
+                          </>
+                        ) : null}
                       </p>
                     ) : null}
                     {s.receiptNumber ? (
@@ -1321,6 +1625,67 @@ export default function BookingsAdminPage() {
                     </div>
                   ) : null}
                   <div className="grid grid-cols-2 gap-2 pt-1">
+                    {isOnlineSubmission(s) ? (
+                      <>
+                        {s.status === 'SUBMITTED' ? (
+                          <button
+                            type="button"
+                            className="btn-accent text-xs px-2 py-2 col-span-2"
+                            disabled={busy === `paid-${s.id}` || !s.vodafoneTxn}
+                            onClick={() =>
+                              askConfirm(
+                                `تأكيد وصول تحويل ${
+                                  payMethodLabel[s.paymentMethod || ''] ||
+                                  s.paymentMethod
+                                } برقم ${s.vodafoneTxn} من «${s.studentName}»؟`,
+                                () => {
+                                  void markPaid(
+                                    s.id,
+                                    s.paymentMethod as PayMethod,
+                                    s.vodafoneTxn || undefined,
+                                  );
+                                },
+                                'تأكيد التحويل',
+                              )
+                            }
+                          >
+                            تأكيد التحويل
+                          </button>
+                        ) : null}
+                        {s.status !== 'CANCELLED' ? (
+                          <button
+                            type="button"
+                            className="btn-ghost text-xs px-2 py-2"
+                            onClick={() => startEditSubmission(s)}
+                          >
+                            تعديل
+                          </button>
+                        ) : null}
+                        {s.status === 'SUBMITTED' ? (
+                          <button
+                            type="button"
+                            className="btn-ghost text-xs px-2 py-2 text-red-700"
+                            disabled={busy === `cancel-${s.id}`}
+                            onClick={() => cancelBooking(s)}
+                          >
+                            إلغاء
+                          </button>
+                        ) : null}
+                        {isAdmin ? (
+                          <button
+                            type="button"
+                            className="btn-ghost text-xs px-2 py-2 text-red-700 col-span-2"
+                            disabled={busy === `del-sub-${s.id}`}
+                            onClick={() =>
+                              deleteSubmission(s.id, s.studentName)
+                            }
+                          >
+                            مسح
+                          </button>
+                        ) : null}
+                      </>
+                    ) : (
+                      <>
                     {s.status !== 'CANCELLED' ? (
                       <button
                         type="button"
@@ -1366,8 +1731,20 @@ export default function BookingsAdminPage() {
                         >
                           فودافون كاش
                         </button>
+                        <button
+                          type="button"
+                          className="btn-ghost text-xs px-2 py-2 col-span-2"
+                          disabled={busy === `paid-${s.id}`}
+                          onClick={() =>
+                            openPayDialog(s.id, s.studentName, 'INSTAPAY')
+                          }
+                        >
+                          InstaPay
+                        </button>
                       </>
                     ) : null}
+                      </>
+                    )}
                   </div>
                 </article>
               ))}
@@ -1403,6 +1780,13 @@ export default function BookingsAdminPage() {
                       </td>
                       <td>
                         <p className="font-semibold">{s.studentName}</p>
+                        {isOnlineSubmission(s) ? (
+                          <p className="mt-0.5">
+                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-900">
+                              استمارة أونلاين
+                            </span>
+                          </p>
+                        ) : null}
                         <p className="text-[11px] text-navy/40 font-mono">
                           {new Date(s.createdAt).toLocaleString('ar-EG')}
                         </p>
@@ -1448,14 +1832,125 @@ export default function BookingsAdminPage() {
                             {s.receiptNumber}
                           </p>
                         ) : null}
+                        {s.status === 'SUBMITTED' &&
+                        s.paymentMethod &&
+                        s.paymentMethod !== 'CASH' &&
+                        s.vodafoneTxn ? (
+                          <p className="text-[11px] mt-1 font-semibold text-amber-800">
+                            تحويل{' '}
+                            {payMethodLabel[s.paymentMethod] || s.paymentMethod}{' '}
+                            · {s.vodafoneTxn}
+                            {s.hasTransferProof ? (
+                              <>
+                                {' '}
+                                ·{' '}
+                                <button
+                                  type="button"
+                                  className="underline"
+                                  onClick={() =>
+                                    void openFileInTab(
+                                      `/booking/submissions/${s.id}/proof`,
+                                    ).catch((err) => notify(err.message))
+                                  }
+                                >
+                                  صورة
+                                </button>
+                              </>
+                            ) : null}
+                          </p>
+                        ) : null}
                         {s.status === 'PAID' && s.paymentMethod ? (
                           <p className="text-[11px] mt-1 text-navy/60">
                             {payMethodLabel[s.paymentMethod] || s.paymentMethod}
                             {s.vodafoneTxn ? ` · ${s.vodafoneTxn}` : ''}
+                            {s.hasTransferProof ? (
+                              <>
+                                {' '}
+                                ·{' '}
+                                <button
+                                  type="button"
+                                  className="underline"
+                                  onClick={() =>
+                                    void openFileInTab(
+                                      `/booking/submissions/${s.id}/proof`,
+                                    ).catch((err) => notify(err.message))
+                                  }
+                                >
+                                  صورة
+                                </button>
+                              </>
+                            ) : null}
                           </p>
                         ) : null}
                       </td>
                       <td className="space-y-1 min-w-[120px]">
+                        {isOnlineSubmission(s) ? (
+                          <>
+                            {s.status === 'SUBMITTED' ? (
+                              <button
+                                type="button"
+                                className="btn-accent text-xs px-2 py-1 w-full !min-h-0"
+                                disabled={
+                                  busy === `paid-${s.id}` || !s.vodafoneTxn
+                                }
+                                onClick={() =>
+                                  askConfirm(
+                                    `تأكيد وصول تحويل ${
+                                      payMethodLabel[s.paymentMethod || ''] ||
+                                      s.paymentMethod
+                                    } برقم ${s.vodafoneTxn} من «${s.studentName}»؟`,
+                                    () => {
+                                      void markPaid(
+                                        s.id,
+                                        s.paymentMethod as PayMethod,
+                                        s.vodafoneTxn || undefined,
+                                      );
+                                    },
+                                    'تأكيد التحويل',
+                                  )
+                                }
+                              >
+                                تأكيد التحويل
+                              </button>
+                            ) : null}
+                            {s.status !== 'CANCELLED' ? (
+                              <button
+                                type="button"
+                                className="btn-ghost text-xs px-2 py-1 w-full !min-h-0"
+                                onClick={() => startEditSubmission(s)}
+                              >
+                                تعديل
+                              </button>
+                            ) : (
+                              <span className="text-[11px] text-navy/40">
+                                ملغي
+                              </span>
+                            )}
+                            {s.status === 'SUBMITTED' ? (
+                              <button
+                                type="button"
+                                className="btn-ghost text-xs px-2 py-1 w-full text-red-700 !min-h-0"
+                                disabled={busy === `cancel-${s.id}`}
+                                onClick={() => cancelBooking(s)}
+                              >
+                                إلغاء
+                              </button>
+                            ) : null}
+                            {isAdmin ? (
+                              <button
+                                type="button"
+                                className="btn-ghost text-xs px-2 py-1 w-full text-red-700 !min-h-0"
+                                disabled={busy === `del-sub-${s.id}`}
+                                onClick={() =>
+                                  deleteSubmission(s.id, s.studentName)
+                                }
+                              >
+                                مسح
+                              </button>
+                            ) : null}
+                          </>
+                        ) : (
+                          <>
                         {s.status !== 'CANCELLED' ? (
                           <button
                             type="button"
@@ -1491,6 +1986,16 @@ export default function BookingsAdminPage() {
                             >
                               فودافون كاش
                             </button>
+                            <button
+                              type="button"
+                              className="btn-ghost text-xs px-2 py-1 w-full !min-h-0"
+                              disabled={busy === `paid-${s.id}`}
+                              onClick={() =>
+                                openPayDialog(s.id, s.studentName, 'INSTAPAY')
+                              }
+                            >
+                              InstaPay
+                            </button>
                           </>
                         ) : null}
                         {isAdmin ? (
@@ -1505,6 +2010,8 @@ export default function BookingsAdminPage() {
                             مسح
                           </button>
                         ) : null}
+                          </>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -1531,10 +2038,14 @@ export default function BookingsAdminPage() {
 
       <AppDialog
         open={!!payDialog}
-        title="فودافون كاش"
+        title={
+          payDialog?.method === 'INSTAPAY' ? 'InstaPay' : 'فودافون كاش'
+        }
         message={
           payDialog
-            ? `تأكيد دفع استمارة «${payDialog.studentName}» بفودافون كاش`
+            ? `تأكيد دفع استمارة «${payDialog.studentName}» بـ ${
+                payMethodLabel[payDialog.method]
+              }`
             : ''
         }
         tone="info"
@@ -1547,11 +2058,11 @@ export default function BookingsAdminPage() {
           if (!txn) {
             queueMicrotask(() => {
               setPayDialog(snapshot);
-              notify('اكتب رقم عملية فودافون كاش');
+              notify('اكتب الرقم المرجعي للتحويل');
             });
             return;
           }
-          void markPaid(snapshot.id, 'VODAFONE_CASH', txn);
+          void markPaid(snapshot.id, snapshot.method, txn);
         }}
         onClose={() => setPayDialog(null)}
       >

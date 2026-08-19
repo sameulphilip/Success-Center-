@@ -126,7 +126,7 @@ function isVodafone(method?: string | null) {
   const m = String(method || 'CASH')
     .toUpperCase()
     .replace(/[\s-]+/g, '_');
-  return m.includes('VODAFONE');
+  return m.includes('VODAFONE') || m.includes('INSTAPAY');
 }
 
 type MoneyRow = { amount: unknown; method?: string | null };
@@ -738,7 +738,28 @@ export class CashService {
         centerToSafe: money(settlement.centerToSafe),
         grossAmount: money(settlement.grossAmount),
       };
-    });
+    }    );
+  }
+
+  private async onlineFormWallet() {
+    const [confirmed, pending] = await Promise.all([
+      this.prisma.bookingSubmission.aggregate({
+        where: { payChannel: 'online', status: BookingStatus.PAID },
+        _sum: { totalAmount: true },
+        _count: true,
+      }),
+      this.prisma.bookingSubmission.aggregate({
+        where: { payChannel: 'online', status: BookingStatus.SUBMITTED },
+        _sum: { totalAmount: true },
+        _count: true,
+      }),
+    ]);
+    return {
+      confirmedAmount: money(confirmed._sum.totalAmount),
+      pendingAmount: money(pending._sum.totalAmount),
+      confirmedCount: confirmed._count,
+      pendingCount: pending._count,
+    };
   }
 
   async snapshot(ymd = cairoYmd(), viewer?: { userId: string; role?: string }) {
@@ -754,7 +775,7 @@ export class CashService {
       paidFrom: CashExpenseFrom.DRAWER,
       businessDate,
     };
-    const [collected, drawerExpAgg, drawerToday, close, balances, expenses, handovers, closes, unclosedPrevious, extraRevenueSales, teacherHolds, extraSettlements] =
+    const [collected, drawerExpAgg, drawerToday, close, balances, expenses, handovers, closes, unclosedPrevious, extraRevenueSales, teacherHolds, extraSettlements, onlineFormWallet] =
       await Promise.all([
         this.dayCollections(ymd),
         this.prisma.cashExpense.aggregate({
@@ -784,6 +805,7 @@ export class CashService {
         this.extraRevenueSales(isReception),
         this.teacherHolds(),
         this.extraSettlements(),
+        this.onlineFormWallet(),
       ]);
 
     const drawerExpenses = money(drawerExpAgg._sum.amount);
@@ -841,6 +863,7 @@ export class CashService {
       teacherHolds,
       teacherHoldTotal: teacherHolds.reduce((n, h) => n + h.gross, 0),
       extraSettlements,
+      onlineFormWallet,
       viewerScope: isReception ? 'reception' : 'owner',
       canOwnerExpense: !isReception,
       categories: EXPENSE_CATEGORIES,

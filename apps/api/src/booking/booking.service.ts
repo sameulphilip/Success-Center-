@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -16,6 +17,11 @@ import {
   normalizePhone,
   phoneToLoginEmail,
 } from '../common/phone.util';
+import {
+  decodeProofDataUrl,
+  readBookingProof,
+  saveBookingProof,
+} from '../common/image-proof.util';
 
 @Injectable()
 export class BookingService {
@@ -238,12 +244,19 @@ export class BookingService {
       'http://localhost:3000'
     ).replace(/\/$/, '');
     const url = `${origin}/booking/${form.slug}`;
-    const qrDataUrl = await QRCode.toDataURL(url, {
+    const onlineUrl = `${origin}/booking/${form.slug}/online`;
+    const qrOpts = {
       width: 520,
       margin: 2,
-      errorCorrectionLevel: 'M',
+      errorCorrectionLevel: 'M' as const,
       color: { dark: '#0B2545', light: '#FFFFFF' },
-    });
+    };
+    const [qrDataUrl, onlineQrDataUrl] = await Promise.all([
+      QRCode.toDataURL(url, qrOpts),
+      form.onlinePayEnabled
+        ? QRCode.toDataURL(onlineUrl, qrOpts)
+        : Promise.resolve(null),
+    ]);
 
     return {
       formId: form.id,
@@ -254,8 +267,13 @@ export class BookingService {
       gradeLabel: form.gradeLabel,
       isPublished: form.isPublished,
       formFee: Number(form.defaultFee),
+      onlinePayEnabled: form.onlinePayEnabled,
+      vodafoneWallet: form.vodafoneWallet,
+      instapayHandle: form.instapayHandle,
       url,
       qrDataUrl,
+      onlineUrl: form.onlinePayEnabled ? onlineUrl : null,
+      onlineQrDataUrl,
     };
   }
 
@@ -325,8 +343,9 @@ export class BookingService {
     };
   }
 
-  /** Public published form by slug */
-  async getPublicForm(slug: string) {
+  /** Public published form by slug. channel=online requires onlinePayEnabled. */
+  async getPublicForm(slug: string, channel?: string) {
+    const online = channel === 'online';
     const form = await this.prisma.bookingForm.findFirst({
       where: { slug, isPublished: true },
       include: {
@@ -337,6 +356,9 @@ export class BookingService {
       },
     });
     if (!form) throw new NotFoundException('استمارة الحجز غير متاحة');
+    if (online && !form.onlinePayEnabled) {
+      throw new NotFoundException('استمارة الدفع أونلاين غير مفعّلة');
+    }
     return {
       id: form.id,
       slug: form.slug,
@@ -347,6 +369,10 @@ export class BookingService {
       notes: form.notes,
       defaultFee: Number(form.defaultFee),
       formFee: Number(form.defaultFee),
+      payChannel: online ? ('online' as const) : ('center' as const),
+      onlinePayEnabled: form.onlinePayEnabled,
+      vodafoneWallet: form.vodafoneWallet,
+      instapayHandle: form.instapayHandle,
       offerings: form.offerings.map((o) => ({
         id: o.id,
         teacherName: o.teacherName,
@@ -488,9 +514,42 @@ export class BookingService {
       notes: string | null;
       isPublished: boolean;
       slug: string;
+      onlinePayEnabled: boolean;
+      vodafoneWallet: string | null;
+      instapayHandle: string | null;
     }>,
+    actorRole?: string,
   ) {
     await this.getFormAdmin(id);
+    const payKeys = [
+      'onlinePayEnabled',
+      'vodafoneWallet',
+      'instapayHandle',
+    ] as const;
+    const touchesPay = payKeys.some((k) => data[k] !== undefined);
+    const canEditPay =
+      actorRole === RoleCode.SUPER_ADMIN ||
+      actorRole === RoleCode.CENTER_MANAGER;
+    if (touchesPay && !canEditPay) {
+      throw new ForbiddenException(
+        'تعديل فودافون كاش و InstaPay للأدمن فقط',
+      );
+    }
+    if (data.onlinePayEnabled) {
+      const wallet = (data.vodafoneWallet ?? '').trim();
+      const ipa = (data.instapayHandle ?? '').trim();
+      const current = await this.prisma.bookingForm.findUnique({
+        where: { id },
+        select: { vodafoneWallet: true, instapayHandle: true },
+      });
+      const hasWallet = wallet || current?.vodafoneWallet;
+      const hasIpa = ipa || current?.instapayHandle;
+      if (!hasWallet && !hasIpa) {
+        throw new BadRequestException(
+          'فعّل فودافون كاش أو InstaPay برقم المحفظة / الحساب قبل نشر لينك الأونلاين',
+        );
+      }
+    }
     return this.prisma.bookingForm.update({
       where: { id },
       data,
@@ -626,9 +685,9 @@ export class BookingService {
     return { ok: true };
   }
 
-  listSubmissions(formId?: string, status?: BookingStatus, phone?: string) {
+  async listSubmissions(formId?: string, status?: BookingStatus, phone?: string) {
     const phoneQ = (phone || '').replace(/\D/g, '');
-    return this.prisma.bookingSubmission.findMany({
+    const rows = await this.prisma.bookingSubmission.findMany({
       where: {
         ...(formId ? { formId } : {}),
         ...(status ? { status } : {}),
@@ -649,6 +708,62 @@ export class BookingService {
       // When scoped to one form, return the full list; otherwise keep a safe cap.
       take: phoneQ ? 150 : formId ? 2000 : 500,
     });
+    return rows.map(({ transferProofPath, ...row }) => ({
+      ...row,
+      hasTransferProof: !!transferProofPath,
+    }));
+  }
+
+  async onlineWallet() {
+    const rows = await this.prisma.bookingSubmission.findMany({
+      where: { payChannel: 'online' },
+      include: {
+        form: { select: { id: true, title: true, gradeLabel: true, slug: true } },
+      },
+      orderBy: [{ createdAt: 'desc' }],
+      take: 2000,
+    });
+    let confirmedAmount = 0;
+    let pendingAmount = 0;
+    let confirmedCount = 0;
+    let pendingCount = 0;
+    const transfers = rows.map(({ transferProofPath, ...row }) => {
+      const amount = Number(row.totalAmount || 0);
+      if (row.status === BookingStatus.PAID) {
+        confirmedAmount += amount;
+        confirmedCount += 1;
+      } else if (row.status === BookingStatus.SUBMITTED) {
+        pendingAmount += amount;
+        pendingCount += 1;
+      }
+      return {
+        ...row,
+        amount,
+        hasTransferProof: !!transferProofPath,
+      };
+    });
+    return {
+      totals: {
+        confirmedAmount,
+        pendingAmount,
+        totalAmount: confirmedAmount + pendingAmount,
+        confirmedCount,
+        pendingCount,
+        count: transfers.length,
+      },
+      transfers,
+    };
+  }
+
+  async getTransferProof(submissionId: string) {
+    const row = await this.prisma.bookingSubmission.findUnique({
+      where: { id: submissionId },
+      select: { transferProofPath: true },
+    });
+    if (!row?.transferProofPath) {
+      throw new NotFoundException('لا توجد صورة تحويل');
+    }
+    return readBookingProof(row.transferProofPath);
   }
 
   async submitPublic(input: {
@@ -658,12 +773,20 @@ export class BookingService {
     parentPhone: string;
     offeringIds: string[];
     notes?: string;
+    channel?: string;
+    paymentMethod?: string;
+    transferRef?: string;
+    proofImage?: string;
   }) {
+    const online = input.channel === 'online';
     const form = await this.prisma.bookingForm.findFirst({
       where: { slug: input.slug, isPublished: true },
       include: { offerings: { where: { isActive: true } } },
     });
     if (!form) throw new NotFoundException('استمارة الحجز غير متاحة');
+    if (online && !form.onlinePayEnabled) {
+      throw new BadRequestException('استمارة الدفع أونلاين غير مفعّلة');
+    }
 
     const name = input.studentName.trim();
     const studentPhone = normalizePhone(input.studentPhone);
@@ -694,6 +817,30 @@ export class BookingService {
 
     const formSerial = await this.nextFormSerial(form.id);
 
+    let paymentMethod: string | null = null;
+    let transferRef: string | null = null;
+    let proofBuf: Buffer | null = null;
+    if (online) {
+      const method = String(input.paymentMethod || '')
+        .toUpperCase()
+        .replace(/[\s-]+/g, '_');
+      if (method !== 'VODAFONE_CASH' && method !== 'INSTAPAY') {
+        throw new BadRequestException('اختَر فودافون كاش أو InstaPay');
+      }
+      if (method === 'VODAFONE_CASH' && !form.vodafoneWallet?.trim()) {
+        throw new BadRequestException('محفظة فودافون كاش غير مفعّلة على الاستمارة');
+      }
+      if (method === 'INSTAPAY' && !form.instapayHandle?.trim()) {
+        throw new BadRequestException('حساب InstaPay غير مفعّل على الاستمارة');
+      }
+      transferRef = (input.transferRef || '').trim();
+      if (!transferRef) {
+        throw new BadRequestException('الرقم المرجعي للتحويل مطلوب');
+      }
+      paymentMethod = method;
+      proofBuf = decodeProofDataUrl(input.proofImage);
+    }
+
     const submission = await this.prisma.bookingSubmission.create({
       data: {
         formId: form.id,
@@ -704,6 +851,9 @@ export class BookingService {
         notes: input.notes,
         totalAmount,
         status: BookingStatus.SUBMITTED,
+        paymentMethod,
+        vodafoneTxn: transferRef,
+        payChannel: online ? 'online' : 'center',
         selections: {
           create: lines,
         },
@@ -714,18 +864,47 @@ export class BookingService {
       },
     });
 
+    if (proofBuf) {
+      try {
+        const saved = await saveBookingProof(submission.id, proofBuf);
+        await this.prisma.bookingSubmission.update({
+          where: { id: submission.id },
+          data: { transferProofPath: saved.relativePath },
+        });
+      } catch {
+        // keep the booking even if the screenshot could not be stored
+      }
+    }
+
+    const methodLabel =
+      paymentMethod === 'INSTAPAY'
+        ? 'InstaPay'
+        : paymentMethod === 'VODAFONE_CASH'
+          ? 'فودافون كاش'
+          : 'كاش';
+
     return {
       id: submission.id,
       formSerial: submission.formSerial,
       status: submission.status,
       totalAmount,
       studentPhone: studentPhone,
-      message: 'تم تسجيل الحجز. برجاء التوجه للسنتر للدفع كاش واستلام الإيصال.',
-      nextSteps: [
-        'ادفع كاش في السنتر واستلم الإيصال',
-        'بعد تأكيد الدفع هيتفتح حسابك تلقائي برقم موبايلك',
-        'ادخل من صفحة تسجيل الدخول → طالب، وعيّن كلمة المرور أول مرة',
-      ],
+      payChannel: online ? 'online' : 'center',
+      paymentMethod,
+      message: online
+        ? `تم تسجيل الحجز. الاستقبال هيأكد تحويل ${methodLabel} وبعدين يتفتح حسابك.`
+        : 'تم تسجيل الحجز. برجاء التوجه للسنتر للدفع كاش واستلام الإيصال.',
+      nextSteps: online
+        ? [
+            `حوّل ${totalAmount.toLocaleString('en-EG')} ج.م ${methodLabel} واحتفظ بالرقم المرجعي`,
+            'الاستقبال هيأكد وصول التحويل من التطبيق (والصورة لو رفعتها)',
+            'بعد التأكيد هيتفتح حسابك تلقائي برقم موبايلك',
+          ]
+        : [
+            'ادفع كاش في السنتر واستلم الإيصال',
+            'بعد تأكيد الدفع هيتفتح حسابك تلقائي برقم موبايلك',
+            'ادخل من صفحة تسجيل الدخول → طالب، وعيّن كلمة المرور أول مرة',
+          ],
       selections: submission.selections.map((s) => ({
         teacherName: s.offering.teacherName,
         subjectName: s.offering.subjectName,
@@ -740,7 +919,7 @@ export class BookingService {
       | string
       | {
           note?: string;
-          method?: 'CASH' | 'VODAFONE_CASH';
+          method?: 'CASH' | 'VODAFONE_CASH' | 'INSTAPAY';
           vodafoneTxn?: string;
         },
   ) {
@@ -748,14 +927,24 @@ export class BookingService {
       typeof opts === 'string'
         ? { note: opts, method: 'CASH' as const }
         : opts || {};
+    const rawMethod = String(options.method || 'CASH')
+      .toUpperCase()
+      .replace(/[\s-]+/g, '_');
     const method =
-      options.method === 'VODAFONE_CASH' ? 'VODAFONE_CASH' : 'CASH';
+      rawMethod === 'VODAFONE_CASH' || rawMethod === 'INSTAPAY'
+        ? rawMethod
+        : 'CASH';
     const vodafoneTxn = (options.vodafoneTxn || '').trim();
-    if (method === 'VODAFONE_CASH' && !vodafoneTxn) {
-      throw new BadRequestException('رقم عملية فودافون كاش مطلوب');
+    if ((method === 'VODAFONE_CASH' || method === 'INSTAPAY') && !vodafoneTxn) {
+      throw new BadRequestException('الرقم المرجعي للتحويل مطلوب');
     }
     const note = options.note;
-    const methodLabel = method === 'VODAFONE_CASH' ? 'فودافون كاش' : 'كاش';
+    const methodLabel =
+      method === 'INSTAPAY'
+        ? 'InstaPay'
+        : method === 'VODAFONE_CASH'
+          ? 'فودافون كاش'
+          : 'كاش';
 
     const submission = await this.prisma.bookingSubmission.findUnique({
       where: { id: submissionId },
@@ -879,9 +1068,9 @@ export class BookingService {
           receiptNumber,
           note:
             note?.trim() ||
-            (method === 'VODAFONE_CASH'
-              ? `${bookingLabel} · فودافون كاش · ${vodafoneTxn}`
-              : bookingLabel),
+            (method === 'CASH'
+              ? bookingLabel
+              : `${bookingLabel} · ${methodLabel} · ${vodafoneTxn}`),
         },
       });
 
@@ -952,7 +1141,7 @@ export class BookingService {
           receiptNumber,
           studentId: student.id,
           paymentMethod: method,
-          vodafoneTxn: method === 'VODAFONE_CASH' ? vodafoneTxn : null,
+          vodafoneTxn: method === 'CASH' ? null : vodafoneTxn,
           notes: note || submission.notes,
         },
         include: {

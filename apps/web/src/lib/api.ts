@@ -140,3 +140,21 @@ export async function downloadFile(path: string, filename: string) {
   a.remove();
   URL.revokeObjectURL(url);
 }
+
+/** Open authenticated file (image/PDF) in a new tab */
+export async function openFileInTab(path: string) {
+  const token = getToken();
+  const res = await fetch(`${API_URL}${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: res.statusText }));
+    const raw = err.message;
+    throw new Error(
+      Array.isArray(raw) ? raw.join(', ') : raw || 'تعذر فتح الملف',
+    );
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  window.open(url, '_blank', 'noopener,noreferrer');
+}

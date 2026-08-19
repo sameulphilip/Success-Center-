@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { AppShell } from '@/components/AppShell';
 import { PageHeader } from '@/components/PageHeader';
 import { AppDialog } from '@/components/AppDialog';
@@ -132,6 +133,12 @@ type CashSnapshot = {
     createdAt: string;
     settledByName?: string | null;
   }>;
+  onlineFormWallet?: {
+    confirmedAmount: number;
+    pendingAmount: number;
+    confirmedCount: number;
+    pendingCount: number;
+  };
   teacherHolds?: Array<{
     teacherId: string;
     teacherName: string;
@@ -591,6 +598,37 @@ export default function FinancePage() {
           },
         ]}
       />
+
+      <Link
+        href="/bookings/ewallet"
+        className="mb-4 block rounded-2xl border border-amber-200 bg-amber-50/70 p-4 hover:bg-amber-50"
+      >
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <p className="text-[11px] font-bold tracking-[0.18em] text-amber-800">
+              E-WALLET
+            </p>
+            <p className="text-lg font-extrabold text-navy">
+              محفظة تحويل إلكتروني
+            </p>
+            <p className="text-[12px] text-navy/55">
+              تحويلات استمارات الأونلاين (فودافون كاش / InstaPay) — مش في الدرج
+            </p>
+          </div>
+          <div className="text-left">
+            <p className="text-[11px] text-navy/45">مؤكد</p>
+            <p className="text-xl font-black tabular-nums text-navy">
+              {money(cash?.onlineFormWallet?.confirmedAmount ?? 0)}
+            </p>
+            {(cash?.onlineFormWallet?.pendingCount || 0) > 0 ? (
+              <p className="text-[12px] font-semibold text-amber-800">
+                بانتظار التأكيد{' '}
+                {money(cash?.onlineFormWallet?.pendingAmount ?? 0)}
+              </p>
+            ) : null}
+          </div>
+        </div>
+      </Link>
 
       {teacherHolds.length ? (
       <SectionCard
