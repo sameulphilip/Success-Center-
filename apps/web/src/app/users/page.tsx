@@ -10,6 +10,7 @@ import {
   PageHero,
   SectionCard,
 } from '@/components/ui';
+import { TablePager, usePaged } from '@/components/TablePager';
 import { api, getStoredUser } from '@/lib/api';
 
 type Role = {
@@ -138,6 +139,8 @@ export default function UsersAdminPage() {
         (u.role.nameAr || '').includes(filter),
     );
   }, [users, filter]);
+
+  const pagedUsers = usePaged(filtered, filter);
 
   const selectedRole = useMemo(
     () => roles.find((r) => r.id === roleEditId) || null,
@@ -273,8 +276,8 @@ export default function UsersAdminPage() {
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
           />
-          <ul className="space-y-2 max-h-[420px] overflow-auto mb-4">
-            {filtered.map((u) => (
+          <ul className="space-y-2 mb-4">
+            {pagedUsers.slice.map((u) => (
               <li key={u.id}>
                 <button
                   type="button"
@@ -312,6 +315,15 @@ export default function UsersAdminPage() {
             ))}
             {!filtered.length ? <EmptyState>لا توجد نتائج</EmptyState> : null}
           </ul>
+          <TablePager
+            page={pagedUsers.page}
+            pages={pagedUsers.pages}
+            total={pagedUsers.total}
+            size={pagedUsers.size}
+            from={pagedUsers.from}
+            to={pagedUsers.to}
+            onPage={pagedUsers.setPage}
+          />
 
           <form
             onSubmit={createUser}

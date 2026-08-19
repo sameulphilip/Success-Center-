@@ -11,6 +11,7 @@ import {
   PageHero,
   SectionCard,
 } from '@/components/ui';
+import { TablePager, usePaged } from '@/components/TablePager';
 import { api, getStoredUser } from '@/lib/api';
 
 function hasPerm(permissions: string[] | undefined, code: string) {
@@ -50,6 +51,7 @@ function formatArDay(ymd: string) {
 
 type FinanceSummary = {
   collectedToday: number;
+  drawerCollectedToday?: number;
   collectedMonth: number;
   collectedAll: number;
   paymentsTodayCount: number;
@@ -63,11 +65,17 @@ type FinanceSummary = {
 type ReceiptRow = {
   id: string;
   source: 'PAYMENT' | 'SESSION';
-  student?: { firstName?: string; lastName?: string };
+  student?: {
+    firstName?: string;
+    lastName?: string;
+    phone?: string | null;
+    studentUid?: string | null;
+  };
   receiptNumber: string;
   amount: string | number;
   method?: string;
   paidAt?: string;
+  note?: string | null;
   reason: string;
   reasonDetail?: string;
 };
@@ -250,6 +258,10 @@ export default function FinancePage() {
   const [tab, setTab] = useState<'receipts' | 'safe' | 'close'>(
     canReceipts ? 'receipts' : canSafe ? 'safe' : 'close',
   );
+  const [reasonFilter, setReasonFilter] = useState<
+    'all' | 'booking' | 'session' | 'other'
+  >('all');
+  const [receiptSearch, setReceiptSearch] = useState('');
   const [confirm, setConfirm] = useState<null | {
     kind:
       | 'close'
@@ -268,6 +280,55 @@ export default function FinancePage() {
     centerToSafe?: number;
     label?: string;
   }>(null);
+
+  const receiptCounts = useMemo(() => {
+    const booking = payments.filter((p) => p.reason === 'استمارة حجز').length;
+    const session = payments.filter((p) => p.reason === 'حضور حصة').length;
+    return {
+      total: payments.length,
+      booking,
+      session,
+      other: Math.max(0, payments.length - booking - session),
+    };
+  }, [payments]);
+
+  const visiblePayments = useMemo(() => {
+    let rows = payments;
+    if (reasonFilter === 'booking') {
+      rows = rows.filter((p) => p.reason === 'استمارة حجز');
+    } else if (reasonFilter === 'session') {
+      rows = rows.filter((p) => p.reason === 'حضور حصة');
+    } else if (reasonFilter === 'other') {
+      rows = rows.filter(
+        (p) => p.reason !== 'استمارة حجز' && p.reason !== 'حضور حصة',
+      );
+    }
+    const q = receiptSearch.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter((p) => {
+      const name = `${p.student?.firstName || ''} ${p.student?.lastName || ''}`;
+      const blob = [
+        name,
+        p.student?.phone || '',
+        p.student?.studentUid || '',
+        p.receiptNumber,
+        p.reason,
+        p.reasonDetail || '',
+        p.method || '',
+        p.note || '',
+        String(p.amount),
+        p.paidAt ? new Date(p.paidAt).toLocaleString('ar-EG') : '',
+      ]
+        .join(' ')
+        .toLowerCase();
+      return blob.includes(q);
+    });
+  }, [payments, reasonFilter, receiptSearch]);
+
+  const pagedReceipts = usePaged(
+    visiblePayments,
+    `${reasonFilter}:${receiptSearch}`,
+  );
 
   async function load() {
     const jobs: Promise<unknown>[] = [];
@@ -334,13 +395,15 @@ export default function FinancePage() {
   }, [countedN, todayExpected]);
 
   const extraSales = cash?.extraRevenueSales ?? [];
+  const teacherHolds = cash?.teacherHolds ?? [];
+  const pExtra = usePaged(extraSales, extraSales.length);
+  const pExp = usePaged(cash?.expenses || [], cash?.expenses?.length || 0);
   const extraDrawerTotal = extraSales
     .filter((s) => s.cashTo === 'DRAWER')
     .reduce((n, s) => n + Number(s.amount || 0), 0);
   const extraOwnerTotal = extraSales
     .filter((s) => s.cashTo === 'OWNER')
     .reduce((n, s) => n + Number(s.amount || 0), 0);
-  const teacherHolds = cash?.teacherHolds ?? [];
 
   async function submitExpense(e: FormEvent) {
     e.preventDefault();
@@ -519,7 +582,7 @@ export default function FinancePage() {
               ? ({
                   id: 'receipts' as const,
                   label: 'الإيصالات',
-                  count: payments.length,
+                  count: receiptCounts.total,
                 } as const)
               : null,
             canSafe
@@ -721,7 +784,7 @@ export default function FinancePage() {
         }
       >
         {showExtraSales && extraSales.length ? (
-          <div className="max-h-64 overflow-auto">
+          <div>
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-white">
                 <tr className="text-[11px] text-navy/40">
@@ -737,7 +800,7 @@ export default function FinancePage() {
                 </tr>
               </thead>
               <tbody>
-                {extraSales.map((s) => (
+                {pExtra.slice.map((s) => (
                   <tr key={`${s.kind}-${s.id}`} className="border-t border-navy/5">
                     <td className="px-3 py-2 whitespace-nowrap text-[12px] text-navy/55">
                       {new Date(s.at).toLocaleString('ar-EG')}
@@ -802,6 +865,15 @@ export default function FinancePage() {
                 ))}
               </tbody>
             </table>
+            <TablePager
+              page={pExtra.page}
+              pages={pExtra.pages}
+              total={pExtra.total}
+              size={pExtra.size}
+              from={pExtra.from}
+              to={pExtra.to}
+              onPage={pExtra.setPage}
+            />
           </div>
         ) : extraSales.length ? (
           <p className="text-sm text-navy/50">
@@ -1320,8 +1392,9 @@ export default function FinancePage() {
           }
         >
           {cash?.expenses?.length ? (
-            <ul className="max-h-52 space-y-1.5 overflow-auto overscroll-contain text-sm">
-              {cash.expenses.map((e) => (
+            <>
+            <ul className="space-y-1.5 text-sm">
+              {pExp.slice.map((e) => (
                 <li
                   key={e.id}
                   className="flex items-start justify-between gap-2 rounded-lg border border-mist px-3 py-1.5"
@@ -1362,6 +1435,16 @@ export default function FinancePage() {
                 </li>
               ))}
             </ul>
+            <TablePager
+              page={pExp.page}
+              pages={pExp.pages}
+              total={pExp.total}
+              size={pExp.size}
+              from={pExp.from}
+              to={pExp.to}
+              onPage={pExp.setPage}
+            />
+            </>
           ) : (
             <EmptyState>لا توجد مصروفات بعد</EmptyState>
           )}
@@ -1442,11 +1525,15 @@ export default function FinancePage() {
       <PageHero
         eyebrow="FINANCE"
         title="سجل التحصيل"
-        subtitle="كل الإيصالات محفوظة — استمارة / حضور / تحصيل"
+        subtitle="كل الإيصالات محفوظة — استمارة / حضور / تحصيل. تحويلات الأونلاين في المحفظة مش جوه تحصيل اليوم."
         metrics={[
           {
             label: 'تحصيل اليوم',
-            value: money(summary?.collectedToday ?? 0),
+            value: money(
+              cash?.collectedTotal ??
+                summary?.collectedToday ??
+                0,
+            ),
             highlight: true,
           },
           {
@@ -1459,21 +1546,64 @@ export default function FinancePage() {
           },
           {
             label: 'عدد الإيصالات',
-            value: summary?.paymentCount ?? payments.length,
+            value: receiptCounts.total,
+          },
+          {
+            label: 'استمارات حجز',
+            value: receiptCounts.booking,
           },
         ]}
       />
       <SectionCard
         title="الإيصالات"
-        subtitle="سبب كل إيصال: استمارة حجز، حضور حصة، أو تحصيل آخر"
+        subtitle={`استمارات ${receiptCounts.booking} · حصص ${receiptCounts.session} · أخرى ${receiptCounts.other}`}
         badge={
           <span className="badge-ok">
-            {summary?.paymentCount ?? payments.length}
+            {receiptSearch.trim()
+              ? `${visiblePayments.length} / ${receiptCounts.total}`
+              : receiptCounts.total}
           </span>
         }
       >
+        <div className="mb-3">
+          <FieldLabel label="بحث في الإيصالات">
+            <input
+              className="field"
+              value={receiptSearch}
+              onChange={(e) => setReceiptSearch(e.target.value)}
+              placeholder="اسم الطالب، رقم الإيصال، السبب، الموبايل، أو المبلغ…"
+            />
+          </FieldLabel>
+        </div>
+        <div className="mb-3 flex flex-wrap gap-2">
+          {(
+            [
+              { id: 'all' as const, label: 'الكل', n: receiptCounts.total },
+              {
+                id: 'booking' as const,
+                label: 'استمارات',
+                n: receiptCounts.booking,
+              },
+              { id: 'session' as const, label: 'حصص', n: receiptCounts.session },
+              { id: 'other' as const, label: 'أخرى', n: receiptCounts.other },
+            ] as const
+          ).map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => setReasonFilter(f.id)}
+              className={`rounded-lg px-3 py-1.5 text-xs font-bold ${
+                reasonFilter === f.id
+                  ? 'bg-[#0B2545] text-white'
+                  : 'bg-sand text-navy/70'
+              }`}
+            >
+              {f.label} {f.n}
+            </button>
+          ))}
+        </div>
         <div className="space-y-3 md:hidden">
-          {payments.map((p) => (
+          {pagedReceipts.slice.map((p) => (
             <article
               key={`${p.source}-${p.id}`}
               className="rounded-xl border border-mist bg-sand/40 p-3 space-y-1.5"
@@ -1520,7 +1650,13 @@ export default function FinancePage() {
               </div>
             </article>
           ))}
-          {!payments.length ? <EmptyState>لا توجد إيصالات</EmptyState> : null}
+          {!visiblePayments.length ? (
+            <EmptyState>
+              {receiptSearch.trim()
+                ? 'لا توجد نتائج مطابقة للبحث'
+                : 'لا توجد إيصالات'}
+            </EmptyState>
+          ) : null}
         </div>
 
         <div className="table-scroll hidden md:block">
@@ -1538,7 +1674,7 @@ export default function FinancePage() {
               </tr>
             </thead>
             <tbody>
-              {payments.map((p) => (
+              {pagedReceipts.slice.map((p) => (
                 <tr key={`${p.source}-${p.id}`}>
                   <td className="font-semibold">
                     {p.student?.firstName} {p.student?.lastName}
@@ -1584,8 +1720,23 @@ export default function FinancePage() {
               ))}
             </tbody>
           </table>
-          {!payments.length ? <EmptyState>لا توجد إيصالات</EmptyState> : null}
+          {!visiblePayments.length ? (
+            <EmptyState>
+              {receiptSearch.trim()
+                ? 'لا توجد نتائج مطابقة للبحث'
+                : 'لا توجد إيصالات'}
+            </EmptyState>
+          ) : null}
         </div>
+        <TablePager
+          page={pagedReceipts.page}
+          pages={pagedReceipts.pages}
+          total={pagedReceipts.total}
+          size={pagedReceipts.size}
+          from={pagedReceipts.from}
+          to={pagedReceipts.to}
+          onPage={pagedReceipts.setPage}
+        />
       </SectionCard>
       </>
       ) : null}

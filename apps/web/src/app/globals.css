@@ -314,13 +314,21 @@ textarea.field {
 .table-scroll {
   width: 100%;
   max-width: 100%;
-  overflow-x: auto;
+  max-height: min(28rem, 58vh);
+  overflow: auto;
   -webkit-overflow-scrolling: touch;
-  overscroll-behavior-x: contain;
+  overscroll-behavior: contain;
 }
 
 .table-scroll > .data-table {
   min-width: 560px;
+}
+
+.table-scroll .data-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #e8f0f8;
 }
 
 .mobile-stack {

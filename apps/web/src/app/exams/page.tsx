@@ -11,6 +11,7 @@ import {
   SectionCard,
 } from '@/components/ui';
 import { api } from '@/lib/api';
+import { TablePager, usePaged } from '@/components/TablePager';
 
 export default function ExamsPage() {
   const [exams, setExams] = useState<any[]>([]);
@@ -24,6 +25,12 @@ export default function ExamsPage() {
     examDate: new Date().toISOString().slice(0, 10),
   });
   const [scores, setScores] = useState<Record<string, number>>({});
+  const pExams = usePaged(exams, exams.length);
+  const pEnroll = usePaged(
+    selected?.group?.enrollments || [],
+    selected?.id || '',
+  );
+  const pRanked = usePaged(selected?.ranked || [], selected?.id || 'rank');
 
   async function load() {
     const [e, g] = await Promise.all([
@@ -175,8 +182,8 @@ export default function ExamsPage() {
             title="الامتحانات"
             badge={<span className="badge-navy">{exams.length}</span>}
           >
-            <div className="space-y-2 max-h-80 overflow-auto">
-              {exams.map((exam) => (
+            <div className="space-y-2">
+              {pExams.slice.map((exam) => (
                 <ListRow
                   key={exam.id}
                   active={selected?.id === exam.id}
@@ -188,6 +195,15 @@ export default function ExamsPage() {
               ))}
               {!exams.length ? <EmptyState>لا توجد امتحانات</EmptyState> : null}
             </div>
+            <TablePager
+              page={pExams.page}
+              pages={pExams.pages}
+              total={pExams.total}
+              size={pExams.size}
+              from={pExams.from}
+              to={pExams.to}
+              onPage={pExams.setPage}
+            />
           </SectionCard>
         </div>
 
@@ -204,7 +220,7 @@ export default function ExamsPage() {
           ) : (
             <>
               <form onSubmit={saveGrades} className="space-y-3">
-                {(selected.group.enrollments || []).map((en: any) => (
+                {pEnroll.slice.map((en: any) => (
                   <div
                     key={en.id}
                     className="flex items-center justify-between gap-3 rounded-xl bg-sand px-3 py-2 text-sm"
@@ -225,19 +241,28 @@ export default function ExamsPage() {
                     />
                   </div>
                 ))}
+                <TablePager
+                  page={pEnroll.page}
+                  pages={pEnroll.pages}
+                  total={pEnroll.total}
+                  size={pEnroll.size}
+                  from={pEnroll.from}
+                  to={pEnroll.to}
+                  onPage={pEnroll.setPage}
+                />
                 <button className="btn-primary w-full">حفظ الدرجات</button>
               </form>
 
               <h4 className="section-title mt-6 mb-2">الترتيب</h4>
               <ol className="space-y-2">
-                {(selected.ranked || []).map((r: any, idx: number) => (
+                {pRanked.slice.map((r: any, idx: number) => (
                   <li
                     key={r.studentId}
                     className="flex items-center justify-between rounded-xl border border-mist px-3 py-2 text-sm"
                   >
                     <span className="flex items-center gap-2">
                       <span className="grid h-6 w-6 place-items-center rounded-full bg-navy text-[11px] font-bold text-white">
-                        {idx + 1}
+                        {pRanked.from + idx}
                       </span>
                       {r.student.firstName} {r.student.lastName}
                     </span>
@@ -247,6 +272,15 @@ export default function ExamsPage() {
                   </li>
                 ))}
               </ol>
+              <TablePager
+                page={pRanked.page}
+                pages={pRanked.pages}
+                total={pRanked.total}
+                size={pRanked.size}
+                from={pRanked.from}
+                to={pRanked.to}
+                onPage={pRanked.setPage}
+              />
             </>
           )}
         </SectionCard>

@@ -10,6 +10,7 @@ import {
   PageHero,
   SectionCard,
 } from '@/components/ui';
+import { TablePager, usePaged } from '@/components/TablePager';
 import { api, getStoredUser } from '@/lib/api';
 
 const STATUS_AR: Record<string, string> = {
@@ -40,6 +41,8 @@ export default function StudentDetailPage() {
   const role = getStoredUser()?.role;
   const canManagePin =
     role === 'SUPER_ADMIN' || role === 'CENTER_MANAGER';
+  const pAtt = usePaged(student?.attendance || [], student?.id || '');
+  const pPay = usePaged(student?.payments || [], student?.id || 'pay');
 
   useEffect(() => {
     Promise.all([
@@ -295,7 +298,7 @@ export default function StudentDetailPage() {
 
               <SectionCard title="الإيصالات">
                 <ul className="space-y-2 text-sm">
-                  {(student.payments || []).map((p: any) => (
+                  {pPay.slice.map((p: any) => (
                     <li
                       key={p.id}
                       className="flex justify-between gap-3 rounded-xl border border-mist px-3 py-2.5"
@@ -323,6 +326,15 @@ export default function StudentDetailPage() {
                     <EmptyState>لا توجد إيصالات</EmptyState>
                   ) : null}
                 </ul>
+                <TablePager
+                  page={pPay.page}
+                  pages={pPay.pages}
+                  total={pPay.total}
+                  size={pPay.size}
+                  from={pPay.from}
+                  to={pPay.to}
+                  onPage={pPay.setPage}
+                />
               </SectionCard>
 
               <SectionCard title="آخر الحضور">
@@ -336,7 +348,7 @@ export default function StudentDetailPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {student.attendance?.slice(0, 15).map((a: any) => (
+                      {pAtt.slice.map((a: any) => (
                         <tr key={a.id}>
                           <td>
                             {String(a.session?.sessionDate || '').slice(0, 10)}
@@ -361,6 +373,15 @@ export default function StudentDetailPage() {
                     <EmptyState>لا يوجد حضور</EmptyState>
                   ) : null}
                 </div>
+                <TablePager
+                  page={pAtt.page}
+                  pages={pAtt.pages}
+                  total={pAtt.total}
+                  size={pAtt.size}
+                  from={pAtt.from}
+                  to={pAtt.to}
+                  onPage={pAtt.setPage}
+                />
               </SectionCard>
             </div>
 

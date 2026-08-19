@@ -6,6 +6,7 @@ import { AppShell } from '@/components/AppShell';
 import { PageHeader } from '@/components/PageHeader';
 import { AppDialog, type DialogTone } from '@/components/AppDialog';
 import { EmptyState, PageHero, SectionCard } from '@/components/ui';
+import { TablePager, usePaged } from '@/components/TablePager';
 import { api, getStoredUser, openFileInTab } from '@/lib/api';
 
 type Transfer = {
@@ -86,6 +87,8 @@ export default function OnlineWalletPage() {
     if (filter === 'confirmed') return list.filter((t) => t.status === 'PAID');
     return list.filter((t) => t.status !== 'CANCELLED');
   }, [pack, filter]);
+
+  const paged = usePaged(rows, filter);
 
   async function confirmTransfer(t: Transfer) {
     setBusy(t.id);
@@ -219,7 +222,7 @@ export default function OnlineWalletPage() {
 
       <SectionCard title="التحويلات">
         <div className="space-y-3 md:hidden">
-          {rows.map((t) => (
+          {paged.slice.map((t) => (
             <article
               key={t.id}
               className="rounded-xl border border-amber-200 bg-white p-3 space-y-2"
@@ -394,7 +397,7 @@ export default function OnlineWalletPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((t) => (
+              {paged.slice.map((t) => (
                 <tr key={t.id}>
                   <td className="tabular-nums font-bold text-navy/70">
                     {t.formSerial ?? '—'}
@@ -544,6 +547,15 @@ export default function OnlineWalletPage() {
             </tbody>
           </table>
         </div>
+        <TablePager
+          page={paged.page}
+          pages={paged.pages}
+          total={paged.total}
+          size={paged.size}
+          from={paged.from}
+          to={paged.to}
+          onPage={paged.setPage}
+        />
         {!rows.length ? (
           <EmptyState>لا توجد تحويلات أونلاين بعد</EmptyState>
         ) : null}

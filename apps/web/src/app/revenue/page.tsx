@@ -11,6 +11,7 @@ import {
   SectionCard,
 } from '@/components/ui';
 import { api, getStoredUser } from '@/lib/api';
+import { TablePager, usePaged } from '@/components/TablePager';
 
 type Teacher = {
   id: string;
@@ -204,6 +205,13 @@ export default function RevenuePage() {
     method: 'CASH',
     vodafoneTxn: '',
   });
+
+  const pOnline = usePaged(onlineSales, onlineSales.length);
+  const pHandoutSales = usePaged(handoutSales, handoutSales.length);
+  const pRentals = usePaged(rentals, rentals.length);
+  const pCodes = usePaged(codes, selectedOffer);
+  const pOffers = usePaged(offers, offers.length);
+  const pHandouts = usePaged(handouts, handouts.length);
 
   async function load() {
     const [t, s, c, o, os, h, hs, r] = await Promise.all([
@@ -729,8 +737,8 @@ export default function RevenuePage() {
               </div>
             </form>
 
-            <ul className="mt-4 space-y-2 max-h-56 overflow-auto">
-              {offers.map((o) => (
+            <ul className="mt-4 space-y-2">
+              {pOffers.slice.map((o) => (
                 <li
                   key={o.id}
                   className={`rounded-xl bg-sand px-3 py-2 ${
@@ -779,6 +787,15 @@ export default function RevenuePage() {
                 </li>
               ))}
             </ul>
+            <TablePager
+              page={pOffers.page}
+              pages={pOffers.pages}
+              total={pOffers.total}
+              size={pOffers.size}
+              from={pOffers.from}
+              to={pOffers.to}
+              onPage={pOffers.setPage}
+            />
           </SectionCard>
 
           <div className="space-y-4">
@@ -886,8 +903,8 @@ export default function RevenuePage() {
             </SectionCard>
 
             <SectionCard title="مبيعات الأونلاين">
-              <ul className="space-y-2 max-h-72 overflow-auto text-sm">
-                {onlineSales.map((s) => (
+              <ul className="space-y-2 text-sm">
+                {pOnline.slice.map((s) => (
                   <li
                     key={s.id}
                     className="rounded-xl border border-mist px-3 py-2"
@@ -937,12 +954,21 @@ export default function RevenuePage() {
                 ))}
                 {!onlineSales.length ? <EmptyState>لا مبيعات بعد</EmptyState> : null}
               </ul>
+              <TablePager
+                page={pOnline.page}
+                pages={pOnline.pages}
+                total={pOnline.total}
+                size={pOnline.size}
+                from={pOnline.from}
+                to={pOnline.to}
+                onPage={pOnline.setPage}
+              />
             </SectionCard>
 
             {selectedOffer ? (
               <SectionCard title="أكواد العرض" subtitle={selectedOffer}>
-                <ul className="max-h-48 overflow-auto text-xs font-mono space-y-1">
-                  {codes.map((c) => (
+                <ul className="text-xs font-mono space-y-1">
+                  {pCodes.slice.map((c) => (
                     <li key={c.id} className="flex justify-between gap-2">
                       <span>{c.code}</span>
                       <span className="flex items-center gap-2">
@@ -966,6 +992,15 @@ export default function RevenuePage() {
                     </li>
                   ))}
                 </ul>
+                <TablePager
+                  page={pCodes.page}
+                  pages={pCodes.pages}
+                  total={pCodes.total}
+                  size={pCodes.size}
+                  from={pCodes.from}
+                  to={pCodes.to}
+                  onPage={pCodes.setPage}
+                />
                 <button
                   type="button"
                   className="btn-ghost mt-2 text-xs"
@@ -1083,7 +1118,7 @@ export default function RevenuePage() {
               </button>
             </form>
             <ul className="mt-4 space-y-2 text-sm">
-              {handouts.map((h) => (
+              {pHandouts.slice.map((h) => (
                 <li
                   key={h.id}
                   className="rounded-xl bg-sand px-3 py-2 flex justify-between"
@@ -1099,6 +1134,15 @@ export default function RevenuePage() {
                 </li>
               ))}
             </ul>
+            <TablePager
+              page={pHandouts.page}
+              pages={pHandouts.pages}
+              total={pHandouts.total}
+              size={pHandouts.size}
+              from={pHandouts.from}
+              to={pHandouts.to}
+              onPage={pHandouts.setPage}
+            />
           </SectionCard>
 
           <SectionCard title="بيع ملزمة">
@@ -1190,8 +1234,8 @@ export default function RevenuePage() {
                 بيع
               </button>
             </form>
-            <ul className="mt-4 space-y-2 text-sm max-h-64 overflow-auto">
-              {handoutSales.map((s) => (
+            <ul className="mt-4 space-y-2 text-sm">
+              {pHandoutSales.slice.map((s) => (
                 <li
                   key={s.id}
                   className="rounded-xl border border-mist px-3 py-2"
@@ -1215,6 +1259,15 @@ export default function RevenuePage() {
                 </li>
               ))}
             </ul>
+            <TablePager
+              page={pHandoutSales.page}
+              pages={pHandoutSales.pages}
+              total={pHandoutSales.total}
+              size={pHandoutSales.size}
+              from={pHandoutSales.from}
+              to={pHandoutSales.to}
+              onPage={pHandoutSales.setPage}
+            />
           </SectionCard>
         </div>
       ) : null}
@@ -1365,8 +1418,8 @@ export default function RevenuePage() {
           </SectionCard>
 
           <SectionCard title="حجوزات القاعات">
-            <ul className="space-y-2 max-h-[480px] overflow-auto text-sm">
-              {rentals.map((r) => (
+            <ul className="space-y-2 text-sm">
+              {pRentals.slice.map((r) => (
                 <li
                   key={r.id}
                   className="rounded-xl border border-mist px-3 py-2"
@@ -1406,6 +1459,15 @@ export default function RevenuePage() {
               ))}
               {!rentals.length ? <EmptyState>لا حجوزات بعد</EmptyState> : null}
             </ul>
+            <TablePager
+              page={pRentals.page}
+              pages={pRentals.pages}
+              total={pRentals.total}
+              size={pRentals.size}
+              from={pRentals.from}
+              to={pRentals.to}
+              onPage={pRentals.setPage}
+            />
           </SectionCard>
         </div>
       ) : null}

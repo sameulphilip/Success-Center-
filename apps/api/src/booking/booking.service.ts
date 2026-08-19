@@ -15,6 +15,7 @@ import { AuthService } from '../auth/auth.service';
 import {
   isValidMobile,
   normalizePhone,
+  phoneLookupVariants,
   phoneToLoginEmail,
 } from '../common/phone.util';
 import {
@@ -44,6 +45,19 @@ export class BookingService {
       _max: { formSerial: true },
     });
     return (agg._max.formSerial || 0) + 1;
+  }
+
+  private async findActiveSubmission(formId: string, studentPhone: string) {
+    const phones = phoneLookupVariants(studentPhone);
+    if (!phones.length) return null;
+    return this.prisma.bookingSubmission.findFirst({
+      where: {
+        formId,
+        studentPhone: { in: phones },
+        status: { in: [BookingStatus.SUBMITTED, BookingStatus.PAID] },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
   }
 
   /**
@@ -799,6 +813,18 @@ export class BookingService {
     }
     if (!input.offeringIds?.length) {
       throw new BadRequestException('اختَر مدرسًا واحدًا على الأقل');
+    }
+
+    const duplicate = await this.findActiveSubmission(form.id, studentPhone);
+    if (duplicate) {
+      if (duplicate.status === BookingStatus.PAID) {
+        throw new BadRequestException(
+          'الرقم ده مسجّل ومدفوع على الاستمارة دي بالفعل. لو في تعديل، كلّم السنتر.',
+        );
+      }
+      throw new BadRequestException(
+        'الرقم ده مسجّل على الاستمارة دي بالفعل. متسجلش تاني — روح السنتر تدفع أو استنى تأكيد التحويل.',
+      );
     }
 
     const selected = form.offerings.filter((o) =>
@@ -1738,53 +1764,61 @@ export class BookingService {
           continue;
         }
 
-        const existingPaid = await this.prisma.bookingSubmission.findFirst({
-          where: {
-            formId: form.id,
-            studentPhone,
-            status: BookingStatus.PAID,
-          },
-        });
-        if (existingPaid) {
-          // Backfill teacher selections if import previously skipped them
-          if (offeringIds.length) {
-            await this.prisma.bookingSelection.deleteMany({
-              where: { submissionId: existingPaid.id },
-            });
-            await this.prisma.bookingSelection.createMany({
-              data: offeringIds.map((offeringId) => ({
-                submissionId: existingPaid.id,
-                offeringId,
-                feeAmount: 0,
-              })),
-              skipDuplicates: true,
-            });
-          }
-          if (
-            existingPaid.formSerial == null &&
-            row.formSerial != null &&
-            Number(row.formSerial) > 0
-          ) {
-            const serial = await this.nextFormSerial(
-              form.id,
-              Number(row.formSerial),
-            );
-            if (serial === Math.floor(Number(row.formSerial))) {
-              await this.prisma.bookingSubmission.update({
-                where: { id: existingPaid.id },
-                data: { formSerial: serial },
+        const existing = await this.findActiveSubmission(form.id, studentPhone);
+        if (existing) {
+          if (existing.status === BookingStatus.PAID) {
+            if (offeringIds.length) {
+              await this.prisma.bookingSelection.deleteMany({
+                where: { submissionId: existing.id },
+              });
+              await this.prisma.bookingSelection.createMany({
+                data: offeringIds.map((offeringId) => ({
+                  submissionId: existing.id,
+                  offeringId,
+                  feeAmount: 0,
+                })),
+                skipDuplicates: true,
               });
             }
+            if (
+              existing.formSerial == null &&
+              row.formSerial != null &&
+              Number(row.formSerial) > 0
+            ) {
+              const serial = await this.nextFormSerial(
+                form.id,
+                Number(row.formSerial),
+              );
+              if (serial === Math.floor(Number(row.formSerial))) {
+                await this.prisma.bookingSubmission.update({
+                  where: { id: existing.id },
+                  data: { formSerial: serial },
+                });
+              }
+            }
+            results.push({
+              row: rowNum,
+              ok: true,
+              studentName,
+              message: offeringIds.length
+                ? 'موجود مسبقًا — تم تحديث المدرسين من الشيت'
+                : 'موجود مسبقًا (مدفوع) — تم التخطي',
+              studentId: existing.studentId || undefined,
+              submissionId: existing.id,
+            });
+            continue;
           }
+          const paidExisting = await this.markPaid(
+            existing.id,
+            `استيراد ورقي Excel صف ${rowNum} — استمارة قائمة`,
+          );
           results.push({
             row: rowNum,
             ok: true,
             studentName,
-            message: offeringIds.length
-              ? 'موجود مسبقًا — تم تحديث المدرسين من الشيت'
-              : 'موجود مسبقًا (مدفوع) — تم التخطي',
-            studentId: existingPaid.studentId || undefined,
-            submissionId: existingPaid.id,
+            message: 'موجود مسبقًا (انتظار دفع) — تم تأكيد الدفع من الشيت',
+            studentId: paidExisting.studentId || undefined,
+            submissionId: paidExisting.id,
           });
           continue;
         }

@@ -10,6 +10,7 @@ import {
   PageHero,
   SectionCard,
 } from '@/components/ui';
+import { TablePager, usePaged } from '@/components/TablePager';
 import { api, getStoredUser } from '@/lib/api';
 import { CENTER_NAME } from '@/lib/brand';
 
@@ -164,6 +165,9 @@ export default function StudentPortalPage() {
     () => students.find((s) => s.id === selectedId) || students[0] || null,
     [students, selectedId],
   );
+  const pAtt = usePaged(student?.attendance || [], student?.id || 'att');
+  const pGrades = usePaged(student?.grades || [], student?.id || 'gr');
+  const pInv = usePaged(student?.invoices || [], student?.id || 'inv');
 
   const family = useMemo(() => {
     if (role !== 'PARENT') return null;
@@ -608,7 +612,7 @@ export default function StudentPortalPage() {
 
           <SectionCard title="المدفوعات والفواتير">
             <ul className="space-y-2 text-sm">
-              {(student.invoices || []).map((inv: any) => {
+              {pInv.slice.map((inv: any) => {
                 const due =
                   Number(inv.feeAmount) -
                   Number(inv.discount) +
@@ -643,6 +647,15 @@ export default function StudentPortalPage() {
                 <li className="text-navy/45">لا توجد فواتير</li>
               ) : null}
             </ul>
+            <TablePager
+              page={pInv.page}
+              pages={pInv.pages}
+              total={pInv.total}
+              size={pInv.size}
+              from={pInv.from}
+              to={pInv.to}
+              onPage={pInv.setPage}
+            />
           </SectionCard>
 
           <SectionCard
@@ -655,7 +668,7 @@ export default function StudentPortalPage() {
             }
           >
             <div className="space-y-2 md:hidden">
-              {(student.attendance || []).slice(0, 30).map((a: any) => (
+              {pAtt.slice.map((a: any) => (
                 <article
                   key={a.id}
                   className="rounded-xl border border-mist bg-white px-3 py-2.5 text-sm flex items-center justify-between gap-2"
@@ -698,7 +711,7 @@ export default function StudentPortalPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(student.attendance || []).map((a: any) => (
+                  {pAtt.slice.map((a: any) => (
                     <tr key={a.id}>
                       <td>{formatDate(a.session?.sessionDate)}</td>
                       <td>
@@ -732,11 +745,20 @@ export default function StudentPortalPage() {
                 <p className="text-sm text-navy/45 py-4">لا يوجد سجل حضور بعد</p>
               ) : null}
             </div>
+            <TablePager
+              page={pAtt.page}
+              pages={pAtt.pages}
+              total={pAtt.total}
+              size={pAtt.size}
+              from={pAtt.from}
+              to={pAtt.to}
+              onPage={pAtt.setPage}
+            />
           </SectionCard>
 
           <SectionCard className="lg:col-span-2" title="الدرجات">
             <div className="space-y-2 md:hidden">
-              {(student.grades || []).map((g: any) => (
+              {pGrades.slice.map((g: any) => (
                 <article
                   key={g.id}
                   className="rounded-xl border border-mist px-3 py-2.5 text-sm flex items-center justify-between gap-2"
@@ -770,7 +792,7 @@ export default function StudentPortalPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(student.grades || []).map((g: any) => (
+                  {pGrades.slice.map((g: any) => (
                     <tr key={g.id}>
                       <td>{g.exam?.title}</td>
                       <td>{g.exam?.subject?.nameEn || '—'}</td>
@@ -784,6 +806,15 @@ export default function StudentPortalPage() {
                 <p className="text-sm text-navy/45 py-4">لا توجد درجات بعد</p>
               ) : null}
             </div>
+            <TablePager
+              page={pGrades.page}
+              pages={pGrades.pages}
+              total={pGrades.total}
+              size={pGrades.size}
+              from={pGrades.from}
+              to={pGrades.to}
+              onPage={pGrades.setPage}
+            />
           </SectionCard>
         </div>
       ) : null}

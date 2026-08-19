@@ -11,6 +11,7 @@ import {
   PageHero,
   SectionCard,
 } from '@/components/ui';
+import { TablePager, usePaged } from '@/components/TablePager';
 import { api } from '@/lib/api';
 
 type Student = {
@@ -67,7 +68,7 @@ export default function StudentsPage() {
     }
   }
 
-  const withGroups = students.filter((s) => s.enrollments?.length).length;
+  const paged = usePaged(students, q);
 
   return (
     <AppShell>
@@ -81,8 +82,6 @@ export default function StudentsPage() {
         subtitle="كل طالب له ملف وكارت QR/NFC ومجموعات ومدفوعات"
         metrics={[
           { label: 'الإجمالي', value: students.length, highlight: true },
-          { label: 'مسجّلون', value: withGroups },
-          { label: 'بدون مجموعة', value: students.length - withGroups },
           { label: 'الصفوف', value: grades.length },
         ]}
       />
@@ -123,7 +122,7 @@ export default function StudentsPage() {
                 </tr>
               </thead>
               <tbody>
-                {students.map((s) => (
+                {paged.slice.map((s) => (
                   <tr key={s.id}>
                     <td>
                       <Link
@@ -153,6 +152,15 @@ export default function StudentsPage() {
             </table>
             {!students.length ? <EmptyState>لا يوجد طلاب</EmptyState> : null}
           </div>
+          <TablePager
+            page={paged.page}
+            pages={paged.pages}
+            total={paged.total}
+            size={paged.size}
+            from={paged.from}
+            to={paged.to}
+            onPage={paged.setPage}
+          />
         </SectionCard>
 
         <SectionCard title="إضافة طالب" subtitle="ينشئ UID وكارت حضور تلقائياً">

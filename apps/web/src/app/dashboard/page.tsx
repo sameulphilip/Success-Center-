@@ -21,6 +21,7 @@ import {
 } from 'recharts';
 import { AppShell } from '@/components/AppShell';
 import { PageHeader } from '@/components/PageHeader';
+import { TablePager, usePaged } from '@/components/TablePager';
 import { api } from '@/lib/api';
 
 type DashboardStats = {
@@ -364,6 +365,10 @@ export default function DashboardPage() {
     const [h, m] = s.startTime.split(':').map(Number);
     return h * 60 + m >= nowMinutes - 30;
   });
+  const pOpen = usePaged(stats?.ops?.openSessions || [], stats?.ops?.openSessions?.length);
+  const pAbs = usePaged(stats?.topAbsentees || [], stats?.topAbsentees?.length);
+  const pTeach = usePaged(stats?.ops?.topTeachers || [], stats?.ops?.topTeachers?.length);
+  const pPays = usePaged(stats?.recentPayments || [], stats?.recentPayments?.length);
 
   return (
     <AppShell>
@@ -646,8 +651,8 @@ export default function DashboardPage() {
               فتح التشغيل
             </Link>
           </div>
-          <div className="space-y-2 max-h-[260px] overflow-y-auto">
-            {(stats?.ops?.openSessions || []).map((s) => (
+          <div className="space-y-2">
+            {pOpen.slice.map((s) => (
               <div
                 key={s.id}
                 className="rounded-xl border border-mist bg-sand/60 px-3 py-2.5"
@@ -672,6 +677,15 @@ export default function DashboardPage() {
               </p>
             ) : null}
           </div>
+          <TablePager
+            page={pOpen.page}
+            pages={pOpen.pages}
+            total={pOpen.total}
+            size={pOpen.size}
+            from={pOpen.from}
+            to={pOpen.to}
+            onPage={pOpen.setPage}
+          />
         </section>
       </div>
 
@@ -878,8 +892,8 @@ export default function DashboardPage() {
               تقرير الحضور
             </Link>
           </div>
-          <div className="space-y-2 max-h-[360px] overflow-y-auto">
-            {(stats?.topAbsentees || []).map((a, idx) => (
+          <div className="space-y-2">
+            {pAbs.slice.map((a, idx) => (
               <Link
                 key={a.studentId}
                 href={`/students/${a.studentId}`}
@@ -887,7 +901,7 @@ export default function DashboardPage() {
               >
                 <div className="min-w-0 flex items-center gap-3">
                   <span className="grid h-7 w-7 place-items-center rounded-full bg-navy text-[11px] font-bold text-white">
-                    {idx + 1}
+                    {pAbs.from + idx}
                   </span>
                   <div className="min-w-0">
                     <p className="font-semibold text-navy truncate">{a.name}</p>
@@ -910,6 +924,15 @@ export default function DashboardPage() {
               </p>
             ) : null}
           </div>
+          <TablePager
+            page={pAbs.page}
+            pages={pAbs.pages}
+            total={pAbs.total}
+            size={pAbs.size}
+            from={pAbs.from}
+            to={pAbs.to}
+            onPage={pAbs.setPage}
+          />
         </section>
       </div>
 
@@ -932,7 +955,7 @@ export default function DashboardPage() {
                 </tr>
               </thead>
               <tbody>
-                {(stats?.ops?.topTeachers || []).map((t) => (
+                {pTeach.slice.map((t) => (
                   <tr key={t.teacherId}>
                     <td className="font-semibold">{t.name}</td>
                     <td className="tabular-nums">{t.students}</td>
@@ -948,6 +971,15 @@ export default function DashboardPage() {
               </p>
             ) : null}
           </div>
+          <TablePager
+            page={pTeach.page}
+            pages={pTeach.pages}
+            total={pTeach.total}
+            size={pTeach.size}
+            from={pTeach.from}
+            to={pTeach.to}
+            onPage={pTeach.setPage}
+          />
         </section>
         <section className="panel p-5 xl:col-span-2">
           <h3 className="section-title mb-3">كاش مقابل إلكتروني اليوم</h3>
@@ -994,7 +1026,7 @@ export default function DashboardPage() {
                 </tr>
               </thead>
               <tbody>
-                {(stats?.recentPayments || []).map((p) => (
+                {pPays.slice.map((p) => (
                   <tr key={p.id}>
                     <td className="font-semibold">
                       {p.student.firstName} {p.student.lastName}
@@ -1014,6 +1046,15 @@ export default function DashboardPage() {
               </p>
             ) : null}
           </div>
+          <TablePager
+            page={pPays.page}
+            pages={pPays.pages}
+            total={pPays.total}
+            size={pPays.size}
+            from={pPays.from}
+            to={pPays.to}
+            onPage={pPays.setPage}
+          />
         </section>
 
         <section className="panel p-5 lg:col-span-2">

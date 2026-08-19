@@ -150,7 +150,7 @@ function bucket(key: string, label: string, rows: MoneyRow[]) {
 export class CashService {
   constructor(private readonly prisma: PrismaService) {}
 
-  private async dayCollections(ymd: string) {
+  async collectionsForDay(ymd: string) {
     const { start, end } = cairoBounds(ymd);
     const range = { gte: start, lte: end };
     const confirmed = SessionPayStatus.CONFIRMED;
@@ -189,15 +189,24 @@ export class CashService {
       }),
     ]);
 
+    const isBookingPay = (p: {
+      receiptNumber?: string | null;
+      note?: string | null;
+      invoice?: { note?: string | null } | null;
+    }) => {
+      const blob = `${p.receiptNumber || ''} ${p.note || ''} ${p.invoice?.note || ''}`.toLowerCase();
+      return (p.receiptNumber || '').startsWith('BK-') || blob.includes('حجز');
+    };
+
+    const drawerPayments = payments.filter(
+      (p) => !(isBookingPay(p) && isVodafone(p.method)),
+    );
+
     const bookings: MoneyRow[] = [];
     const subscriptions: MoneyRow[] = [];
     const otherReceipts: MoneyRow[] = [];
-    for (const p of payments) {
-      const blob = `${p.receiptNumber || ''} ${p.note || ''} ${p.invoice?.note || ''}`.toLowerCase();
-      if (
-        (p.receiptNumber || '').startsWith('BK-') ||
-        blob.includes('حجز')
-      ) {
+    for (const p of drawerPayments) {
+      if (isBookingPay(p)) {
         bookings.push(p);
       } else if (p.invoice?.groupId) {
         subscriptions.push(p);
@@ -215,7 +224,7 @@ export class CashService {
       method: s.method,
     }));
     const totals = splitMoney([
-      ...payments,
+      ...drawerPayments,
       ...sessions,
       ...onlineRows,
       ...handoutRows,
@@ -232,6 +241,10 @@ export class CashService {
     ].filter((b) => b.total > 0);
 
     return { ...totals, breakdown };
+  }
+
+  private async dayCollections(ymd: string) {
+    return this.collectionsForDay(ymd);
   }
 
   private async dayFigures(ymd: string): Promise<OpenDayFigures> {

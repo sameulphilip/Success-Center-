@@ -12,6 +12,7 @@ import {
 } from '@/components/ui';
 import { api } from '@/lib/api';
 import { AppDialog } from '@/components/AppDialog';
+import { TablePager, usePaged } from '@/components/TablePager';
 
 type NamedItem = {
   id: string;
@@ -45,6 +46,11 @@ export default function SettingsPage() {
     id: string;
     name: string;
   }>(null);
+
+  const pUsers = usePaged(users, users.length);
+  const pGrades = usePaged(grades, grades.length);
+  const pSubjects = usePaged(subjects, subjects.length);
+  const pRooms = usePaged(classrooms, classrooms.length);
 
   async function load() {
     const [s, g, c, u, qr] = await Promise.all([
@@ -216,8 +222,8 @@ export default function SettingsPage() {
           subtitle="مثل: الثاني الثانوي · الثالث الثانوي"
           badge={<span className="badge-navy">{grades.length}</span>}
         >
-          <ul className="text-sm space-y-2 mb-4 max-h-64 overflow-auto">
-            {grades.map((g) => (
+          <ul className="text-sm space-y-2 mb-4">
+            {pGrades.slice.map((g) => (
               <li
                 key={g.id}
                 className={`rounded-xl px-3 py-2 flex items-center justify-between gap-2 ${
@@ -259,6 +265,15 @@ export default function SettingsPage() {
             ))}
             {!grades.length ? <EmptyState>لا توجد صفوف</EmptyState> : null}
           </ul>
+          <TablePager
+            page={pGrades.page}
+            pages={pGrades.pages}
+            total={pGrades.total}
+            size={pGrades.size}
+            from={pGrades.from}
+            to={pGrades.to}
+            onPage={pGrades.setPage}
+          />
           <form onSubmit={saveGrade} className="space-y-2 border-t border-mist pt-3">
             <p className="text-xs font-bold text-navy/55">
               {editingGradeId ? 'تعديل صف' : 'إضافة صف'}
@@ -324,8 +339,8 @@ export default function SettingsPage() {
           subtitle="مثل: عربي · رياضيات · Physics"
           badge={<span className="badge-navy">{subjects.length}</span>}
         >
-          <ul className="text-sm space-y-2 mb-4 max-h-64 overflow-auto">
-            {subjects.map((s) => (
+          <ul className="text-sm space-y-2 mb-4">
+            {pSubjects.slice.map((s) => (
               <li
                 key={s.id}
                 className={`rounded-xl px-3 py-2 flex items-center justify-between gap-2 ${
@@ -363,6 +378,15 @@ export default function SettingsPage() {
             ))}
             {!subjects.length ? <EmptyState>لا توجد مواد</EmptyState> : null}
           </ul>
+          <TablePager
+            page={pSubjects.page}
+            pages={pSubjects.pages}
+            total={pSubjects.total}
+            size={pSubjects.size}
+            from={pSubjects.from}
+            to={pSubjects.to}
+            onPage={pSubjects.setPage}
+          />
           <form
             onSubmit={saveSubject}
             className="space-y-2 border-t border-mist pt-3"
@@ -418,8 +442,8 @@ export default function SettingsPage() {
           title="القاعات"
           badge={<span className="badge-navy">{classrooms.length}</span>}
         >
-          <ul className="text-sm space-y-2 mb-4 max-h-40 overflow-auto">
-            {classrooms.map((c) => (
+          <ul className="text-sm space-y-2 mb-4">
+            {pRooms.slice.map((c) => (
               <li
                 key={c.id}
                 className="rounded-xl bg-sand px-3 py-2 flex justify-between"
@@ -429,6 +453,15 @@ export default function SettingsPage() {
               </li>
             ))}
           </ul>
+          <TablePager
+            page={pRooms.page}
+            pages={pRooms.pages}
+            total={pRooms.total}
+            size={pRooms.size}
+            from={pRooms.from}
+            to={pRooms.to}
+            onPage={pRooms.setPage}
+          />
           <form onSubmit={addRoom} className="space-y-2">
             <FieldLabel label="اسم القاعة">
               <input
@@ -494,8 +527,8 @@ export default function SettingsPage() {
             </Link>
           }
         >
-          <ul className="text-sm space-y-2 max-h-72 overflow-auto">
-            {users.map((u) => (
+          <ul className="text-sm space-y-2">
+            {pUsers.slice.map((u) => (
               <li key={u.id} className="rounded-xl border border-mist px-3 py-2">
                 <p className="font-semibold text-navy">{u.fullName}</p>
                 <p className="text-xs text-navy/45 mt-0.5">{u.email}</p>
@@ -505,6 +538,15 @@ export default function SettingsPage() {
               </li>
             ))}
           </ul>
+          <TablePager
+            page={pUsers.page}
+            pages={pUsers.pages}
+            total={pUsers.total}
+            size={pUsers.size}
+            from={pUsers.from}
+            to={pUsers.to}
+            onPage={pUsers.setPage}
+          />
         </SectionCard>
       </div>
       <AppDialog

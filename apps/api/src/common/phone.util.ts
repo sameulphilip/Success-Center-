@@ -21,3 +21,22 @@ export function isValidMobile(phone: string): boolean {
   const p = normalizePhone(phone);
   return /^01[0125]\d{8}$/.test(p);
 }
+
+/** Variants that may already exist in the DB for the same Egyptian mobile. */
+export function phoneLookupVariants(input: string): string[] {
+  const p = normalizePhone(input);
+  const raw = String(input || '').trim();
+  const set = new Set<string>();
+  if (raw) set.add(raw);
+  if (p) {
+    set.add(p);
+    if (p.length === 11 && p.startsWith('0')) {
+      const national = p.slice(1);
+      set.add(national);
+      set.add(`20${national}`);
+      set.add(`+20${national}`);
+      set.add(`0020${national}`);
+    }
+  }
+  return [...set];
+}

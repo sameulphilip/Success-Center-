@@ -11,6 +11,7 @@ import {
   SectionCard,
 } from '@/components/ui';
 import { api } from '@/lib/api';
+import { TablePager, usePaged } from '@/components/TablePager';
 
 export default function MessagingPage() {
   const [templates, setTemplates] = useState<any[]>([]);
@@ -26,6 +27,7 @@ export default function MessagingPage() {
     templateCode: '',
   });
   const [result, setResult] = useState('');
+  const pJobs = usePaged(jobs, jobs.length);
 
   async function load() {
     const [t, j, g, s] = await Promise.all([
@@ -196,8 +198,8 @@ export default function MessagingPage() {
             title="سجل الإرسال"
             badge={<span className="badge-gold">{jobs.length}</span>}
           >
-            <ul className="space-y-2 text-sm max-h-80 overflow-auto">
-              {jobs.map((j) => (
+            <ul className="space-y-2 text-sm">
+              {pJobs.slice.map((j) => (
                 <li
                   key={j.id}
                   className="rounded-xl border border-mist px-3 py-2"
@@ -216,6 +218,15 @@ export default function MessagingPage() {
               ))}
               {!jobs.length ? <EmptyState>لا يوجد سجل بعد</EmptyState> : null}
             </ul>
+            <TablePager
+              page={pJobs.page}
+              pages={pJobs.pages}
+              total={pJobs.total}
+              size={pJobs.size}
+              from={pJobs.from}
+              to={pJobs.to}
+              onPage={pJobs.setPage}
+            />
           </SectionCard>
         </div>
       </div>

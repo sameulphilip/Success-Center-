@@ -13,6 +13,7 @@ import {
 } from '@/components/ui';
 import { api, getStoredUser } from '@/lib/api';
 import { SessionGateScanner } from '@/components/SessionGateScanner';
+import { TablePager, usePaged } from '@/components/TablePager';
 
 const STATUS_AR: Record<string, string> = {
   PRESENT: 'حاضر',
@@ -32,6 +33,11 @@ export default function AttendancePage() {
   const [qrPayload, setQrPayload] = useState('');
   const [message, setMessage] = useState('');
   const [tone, setTone] = useState<'info' | 'success' | 'error'>('info');
+  const pAbs = usePaged(absentees, absentees.length);
+  const pEnroll = usePaged(
+    session?.group?.enrollments || [],
+    session?.id || '',
+  );
 
   async function load() {
     const [g, s, a] = await Promise.all([
@@ -224,8 +230,8 @@ export default function AttendancePage() {
             title="غائبون اليوم"
             badge={<span className="badge-warn">{absentees.length}</span>}
           >
-            <ul className="space-y-2 text-sm max-h-64 overflow-auto">
-              {absentees.map((a) => (
+            <ul className="space-y-2 text-sm">
+              {pAbs.slice.map((a) => (
                 <li key={a.id} className="rounded-xl bg-sand px-3 py-2">
                   <p className="font-semibold text-navy">
                     {a.student.firstName} {a.student.lastName}
@@ -242,6 +248,15 @@ export default function AttendancePage() {
                 <EmptyState>لا يوجد غائبون مسجلون</EmptyState>
               ) : null}
             </ul>
+            <TablePager
+              page={pAbs.page}
+              pages={pAbs.pages}
+              total={pAbs.total}
+              size={pAbs.size}
+              from={pAbs.from}
+              to={pAbs.to}
+              onPage={pAbs.setPage}
+            />
           </SectionCard>
         </div>
 
@@ -267,8 +282,9 @@ export default function AttendancePage() {
           {!session ? (
             <EmptyState>افتح جلسة لعرض الطلاب</EmptyState>
           ) : (
+            <>
             <div className="space-y-2">
-              {session.group.enrollments.map((e: any) => {
+              {pEnroll.slice.map((e: any) => {
                 const record = session.records.find(
                   (r: any) => r.studentId === e.studentId,
                 );
@@ -325,6 +341,16 @@ export default function AttendancePage() {
                 );
               })}
             </div>
+            <TablePager
+              page={pEnroll.page}
+              pages={pEnroll.pages}
+              total={pEnroll.total}
+              size={pEnroll.size}
+              from={pEnroll.from}
+              to={pEnroll.to}
+              onPage={pEnroll.setPage}
+            />
+            </>
           )}
 
           <h4 className="section-title mt-6 mb-2">آخر الجلسات</h4>

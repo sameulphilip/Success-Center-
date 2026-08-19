@@ -11,6 +11,7 @@ import {
 } from '@/components/ui';
 import { api } from '@/lib/api';
 import { AppDialog } from '@/components/AppDialog';
+import { TablePager, usePaged } from '@/components/TablePager';
 
 type TeacherForm = {
   firstName: string;
@@ -163,6 +164,8 @@ export default function TeachersPage() {
     });
   }, [teachers, search]);
 
+  const paged = usePaged(filteredTeachers, search);
+
   return (
     <AppShell>
       <PageHeader
@@ -220,7 +223,7 @@ export default function TeachersPage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredTeachers.map((t) => (
+                {paged.slice.map((t) => (
                   <tr
                     key={t.id}
                     className={editingId === t.id ? 'bg-gold/10' : undefined}
@@ -297,6 +300,15 @@ export default function TeachersPage() {
               <EmptyState>لا يوجد مدرس مطابق للبحث</EmptyState>
             ) : null}
           </div>
+          <TablePager
+            page={paged.page}
+            pages={paged.pages}
+            total={paged.total}
+            size={paged.size}
+            from={paged.from}
+            to={paged.to}
+            onPage={paged.setPage}
+          />
         </SectionCard>
 
         <SectionCard

@@ -14,7 +14,7 @@ import {
   SessionPayStatus,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { normalizePhone, isValidMobile } from '../common/phone.util';
+import { normalizePhone, isValidMobile, phoneLookupVariants } from '../common/phone.util';
 import { CashService } from '../finance/cash.service';
 import {
   splitSessionNet,
@@ -206,35 +206,6 @@ export class OpsService {
     throw new BadRequestException('اختَر مدرس أو اكتب اسم مدرس مش في القائمة');
   }
 
-  private async ensureWalkInStudent(phoneRaw: string, nameRaw: string) {
-    const phoneTrim = (phoneRaw || '').trim();
-    const phone = phoneTrim ? normalizePhone(phoneTrim) : '';
-    if (phoneTrim && !isValidMobile(phone)) {
-      throw new BadRequestException('موبايل الطالب غير صالح');
-    }
-    if (phone) {
-      const existing = await this.findStudent({ phone });
-      if (existing) return existing;
-    }
-    const full = (nameRaw || '').trim();
-    if (full.length < 2) {
-      throw new BadRequestException(
-        phone
-          ? 'الطالب مش متسجل — اكتب الاسم'
-          : 'اكتب اسم الطالب',
-      );
-    }
-    const { firstName, lastName } = this.splitPersonName(full);
-    return this.prisma.student.create({
-      data: {
-        firstName,
-        lastName,
-        phone: phone || null,
-        notes: 'تسجيل من جلسة استقبال',
-      },
-    });
-  }
-
   async openSession(
     data: {
       teacherId?: string;
@@ -379,6 +350,7 @@ export class OpsService {
     phone?: string;
     studentUid?: string;
     id?: string;
+    name?: string;
   }) {
     if (query.id) {
       const byId = await this.prisma.student.findUnique({
@@ -398,15 +370,132 @@ export class OpsService {
       });
       if (byUid) return byUid;
     }
-    if (query.phone) {
-      const phone = normalizePhone(query.phone);
-      return this.prisma.student.findFirst({
-        where: {
-          OR: [{ phone }, { phone: query.phone.trim() }],
+    if (query.phone?.trim()) {
+      const phones = phoneLookupVariants(query.phone);
+      if (phones.length) {
+        const byPhone = await this.prisma.student.findFirst({
+          where: { isActive: true, phone: { in: phones } },
+        });
+        if (byPhone) return byPhone;
+        const fromBooking = await this.prisma.bookingSubmission.findFirst({
+          where: {
+            studentPhone: { in: phones },
+            studentId: { not: null },
+          },
+          orderBy: { createdAt: 'desc' },
+          select: { studentId: true },
+        });
+        if (fromBooking?.studentId) {
+          const linked = await this.prisma.student.findUnique({
+            where: { id: fromBooking.studentId },
+          });
+          if (linked) return linked;
+        }
+      }
+      if (
+        phoneLookupVariants(query.phone).some(
+          (p) => normalizePhone(p).length >= 10,
+        )
+      ) {
+        return null;
+      }
+    }
+    if (query.name?.trim()) {
+      const matches = await this.findStudentsByName(query.name);
+      if (matches.length === 1) return matches[0];
+      if (matches.length > 1) {
+        throw new BadRequestException(
+          'في أكتر من طالب بنفس الاسم — اكتب الموبايل أو امسح كارت الـ QR',
+        );
+      }
+    }
+    return null;
+  }
+
+  private async findStudentsByName(nameRaw: string) {
+    const full = nameRaw.trim();
+    if (full.length < 2) return [];
+    const { firstName, lastName } = this.splitPersonName(full);
+    const last = lastName === '-' ? '' : lastName;
+    const rows = await this.prisma.student.findMany({
+      where: {
+        isActive: true,
+        firstName: { equals: firstName, mode: 'insensitive' },
+        ...(last
+          ? { lastName: { equals: last, mode: 'insensitive' } }
+          : {}),
+      },
+      take: 12,
+    });
+    const target = this.foldPersonName(full);
+    const folded = rows.filter((s) => {
+      const n = this.foldPersonName(
+        `${s.firstName} ${s.lastName === '-' ? '' : s.lastName}`.trim(),
+      );
+      return n === target || n.includes(target) || target.includes(n);
+    });
+    return folded.length ? folded : rows;
+  }
+
+  private async ensureWalkInStudent(data: {
+    nameRaw: string;
+    phoneRaw: string;
+    parentPhoneRaw: string;
+    gradeLevelId: string;
+  }) {
+    const name = (data.nameRaw || '').trim();
+    const phone = normalizePhone(data.phoneRaw || '');
+    const parentPhone = normalizePhone(data.parentPhoneRaw || '');
+    const gradeLevelId = (data.gradeLevelId || '').trim();
+
+    if (name.length < 2) {
+      throw new BadRequestException('اكتب اسم الطالب');
+    }
+    if (!isValidMobile(phone)) {
+      throw new BadRequestException('موبايل الطالب مطلوب وصالح');
+    }
+    if (!isValidMobile(parentPhone)) {
+      throw new BadRequestException('موبايل ولي الأمر مطلوب وصالح');
+    }
+    if (!gradeLevelId) {
+      throw new BadRequestException(
+        'الطالب مش في السجل — اختَر الصف واكتب موبايل ولي الأمر',
+      );
+    }
+    const grade = await this.prisma.gradeLevel.findUnique({
+      where: { id: gradeLevelId },
+    });
+    if (!grade) throw new BadRequestException('الصف غير موجود');
+
+    const already = await this.findStudent({ phone });
+    if (already) return already;
+
+    const { firstName, lastName } = this.splitPersonName(name);
+    let parent = await this.prisma.parent.findFirst({
+      where: { phone: { in: phoneLookupVariants(parentPhone) } },
+    });
+    if (!parent) {
+      parent = await this.prisma.parent.create({
+        data: {
+          firstName: 'ولي أمر',
+          lastName: firstName,
+          phone: parentPhone,
         },
       });
     }
-    return null;
+
+    return this.prisma.student.create({
+      data: {
+        firstName,
+        lastName,
+        phone,
+        gradeLevelId,
+        notes: 'تسجيل من جلسة استقبال',
+        parents: {
+          create: { parentId: parent.id, relation: 'guardian' },
+        },
+      },
+    });
   }
 
   async collectPayment(
@@ -416,6 +505,8 @@ export class OpsService {
       phone?: string;
       studentUid?: string;
       studentName?: string;
+      parentPhone?: string;
+      gradeLevelId?: string;
       method: SessionPayMethod;
       vodafoneTxn?: string;
       amount?: number;
@@ -433,14 +524,23 @@ export class OpsService {
         id: data.studentId,
         phone: data.phone,
         studentUid: data.studentUid,
+        name: data.studentName,
       })) || null;
     if (!student) {
-      student = await this.ensureWalkInStudent(
-        data.phone || '',
-        data.studentName || '',
-      );
+      student = await this.ensureWalkInStudent({
+        nameRaw: data.studentName || '',
+        phoneRaw: data.phone || '',
+        parentPhoneRaw: data.parentPhone || '',
+        gradeLevelId: data.gradeLevelId || '',
+      });
     }
-    if (!student) throw new NotFoundException('اكتب اسم الطالب');
+    const payPhone = data.phone ? normalizePhone(data.phone) : '';
+    if (payPhone && isValidMobile(payPhone) && !student.phone) {
+      student = await this.prisma.student.update({
+        where: { id: student.id },
+        data: { phone: payPhone },
+      });
+    }
     if (!student.isActive) throw new BadRequestException('حساب الطالب غير نشط');
 
     await this.assertNotBlocked(student.id, session.teacherId);

@@ -9,6 +9,7 @@ import {
   PageHero,
   SectionCard,
 } from '@/components/ui';
+import { TablePager, usePaged } from '@/components/TablePager';
 import { api } from '@/lib/api';
 
 const DAY_AR = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
@@ -92,6 +93,7 @@ export default function GroupsPage() {
     (s, g) => s + (g._count?.enrollments ?? 0),
     0,
   );
+  const paged = usePaged(groups, groups.length);
 
   return (
     <AppShell>
@@ -116,8 +118,8 @@ export default function GroupsPage() {
           title="المجموعات الحالية"
           badge={<span className="badge-navy">{groups.length}</span>}
         >
-          <div className="space-y-3 max-h-[720px] overflow-y-auto">
-            {groups.map((g) => {
+          <div className="space-y-3">
+            {paged.slice.map((g) => {
               const filled = g._count?.enrollments ?? 0;
               const pct = Math.min(100, Math.round((filled / (g.capacity || 1)) * 100));
               return (
@@ -169,6 +171,15 @@ export default function GroupsPage() {
             })}
             {!groups.length ? <EmptyState>لا توجد مجموعات بعد</EmptyState> : null}
           </div>
+          <TablePager
+            page={paged.page}
+            pages={paged.pages}
+            total={paged.total}
+            size={paged.size}
+            from={paged.from}
+            to={paged.to}
+            onPage={paged.setPage}
+          />
         </SectionCard>
 
         <div className="space-y-4">

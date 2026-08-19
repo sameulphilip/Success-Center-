@@ -11,6 +11,7 @@ import {
   SectionCard,
 } from '@/components/ui';
 import { AppDialog, type DialogTone } from '@/components/AppDialog';
+import { TablePager, usePaged } from '@/components/TablePager';
 import { api, getStoredUser, openFileInTab } from '@/lib/api';
 
 type DialogState = {
@@ -458,6 +459,13 @@ export default function BookingsAdminPage() {
     );
   }, [rankedOfferings, teacherSearch]);
 
+  const pagedOfferings = usePaged(filteredOfferings, teacherSearch);
+  const pagedSubs = usePaged(
+    submissions,
+    `${selectedFormId}:${statusFilter}:${phoneQuery}`,
+  );
+  const pagedForms = usePaged(forms, forms.length);
+
   async function createBookingForm(e: FormEvent) {
     e.preventDefault();
     setBusy('create');
@@ -832,8 +840,8 @@ export default function BookingsAdminPage() {
 
       <div className="grid gap-4 xl:grid-cols-[280px_1fr]">
         <SectionCard title="الاستمارات" subtitle="اختر استمارة لإدارتها">
-          <ul className="space-y-2 mb-4 max-h-72 overflow-auto">
-            {forms.map((f) => (
+          <ul className="space-y-2 mb-4">
+            {pagedForms.slice.map((f) => (
               <li key={f.id}>
                 <button
                   type="button"
@@ -858,6 +866,15 @@ export default function BookingsAdminPage() {
             ))}
             {!forms.length ? <EmptyState>لا توجد استمارات بعد</EmptyState> : null}
           </ul>
+          <TablePager
+            page={pagedForms.page}
+            pages={pagedForms.pages}
+            total={pagedForms.total}
+            size={pagedForms.size}
+            from={pagedForms.from}
+            to={pagedForms.to}
+            onPage={pagedForms.setPage}
+          />
 
           <form onSubmit={createBookingForm} className="space-y-2 border-t border-mist pt-4">
             <p className="text-xs font-bold text-navy/55 mb-1">إنشاء استمارة</p>
@@ -1158,7 +1175,7 @@ export default function BookingsAdminPage() {
                   />
                 </FieldLabel>
               </div>
-              <div className="table-scroll max-h-72 mb-4">
+              <div className="table-scroll mb-4">
                 <table className="data-table">
                   <thead>
                     <tr>
@@ -1171,7 +1188,7 @@ export default function BookingsAdminPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredOfferings.map((o) => (
+                    {pagedOfferings.slice.map((o) => (
                       <tr key={o.id}>
                         <td className="font-semibold">{o.teacherName}</td>
                         <td>{o.subjectName}</td>
@@ -1225,6 +1242,15 @@ export default function BookingsAdminPage() {
                       : ''}
                   </p>
                 )}
+                <TablePager
+                  page={pagedOfferings.page}
+                  pages={pagedOfferings.pages}
+                  total={pagedOfferings.total}
+                  size={pagedOfferings.size}
+                  from={pagedOfferings.from}
+                  to={pagedOfferings.to}
+                  onPage={pagedOfferings.setPage}
+                />
               </div>
 
               <form
@@ -1508,7 +1534,7 @@ export default function BookingsAdminPage() {
 
             {/* Mobile cards */}
             <div className="space-y-3 md:hidden">
-              {submissions.map((s) => (
+              {pagedSubs.slice.map((s) => (
                 <article
                   key={s.id}
                   className={`rounded-xl border bg-white p-3 space-y-2 ${
@@ -1768,7 +1794,7 @@ export default function BookingsAdminPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {submissions.map((s) => (
+                  {pagedSubs.slice.map((s) => (
                     <tr
                       key={s.id}
                       className={
@@ -2021,6 +2047,15 @@ export default function BookingsAdminPage() {
                 <EmptyState>لا توجد طلبات لهذه الاستمارة</EmptyState>
               ) : null}
             </div>
+            <TablePager
+              page={pagedSubs.page}
+              pages={pagedSubs.pages}
+              total={pagedSubs.total}
+              size={pagedSubs.size}
+              from={pagedSubs.from}
+              to={pagedSubs.to}
+              onPage={pagedSubs.setPage}
+            />
           </SectionCard>
         </div>
       </div>

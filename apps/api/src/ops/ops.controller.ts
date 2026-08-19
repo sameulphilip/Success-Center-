@@ -42,6 +42,7 @@ export class OpsController {
     @Query('uid') uid?: string,
     @Query('id') id?: string,
     @Query('qr') qr?: string,
+    @Query('name') name?: string,
   ) {
     let studentUid = uid;
     let studentId = id;
@@ -54,6 +55,7 @@ export class OpsController {
       phone,
       studentUid,
       id: studentId,
+      name,
     });
     if (!student) throw new NotFoundException('الطالب غير موجود');
     return student;
@@ -137,6 +139,8 @@ export class OpsController {
       phone?: string;
       studentUid?: string;
       studentName?: string;
+      parentPhone?: string;
+      gradeLevelId?: string;
       method: SessionPayMethod;
       vodafoneTxn?: string;
       amount?: number;

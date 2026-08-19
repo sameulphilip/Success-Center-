@@ -2,37 +2,47 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { BookingStatus, ExtraRevenueCashTo, PaymentStatus, PayoutStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { splitSessionNet } from '../ops/session-split';
+import { CashService } from './cash.service';
 
-function startOfDay(d = new Date()) {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x;
+function cairoYmd(d = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Cairo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
 }
 
-function endOfDay(d = new Date()) {
-  const x = new Date(d);
-  x.setHours(23, 59, 59, 999);
-  return x;
+function cairoBounds(ymd: string) {
+  const start = new Date(`${ymd}T00:00:00+03:00`);
+  const end = new Date(`${ymd}T23:59:59.999+03:00`);
+  return { start, end };
 }
 
 @Injectable()
 export class FinanceService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cash: CashService,
+  ) {}
 
-  /** KPIs aligned with dashboard collection / outstanding math. */
+  /** KPIs: receipts ledger (Cairo) + drawer total for the same day. */
   async summary() {
-    const today = new Date();
-    const start = startOfDay(today);
-    const end = endOfDay(today);
-    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+    const ymd = cairoYmd();
+    const { start, end } = cairoBounds(ymd);
+    const monthStart = cairoBounds(`${ymd.slice(0, 7)}-01`).start;
 
     const [
       paymentsTodayAgg,
       paymentsMonthAgg,
       paymentsAllAgg,
+      sessionsTodayAgg,
+      sessionsMonthAgg,
+      sessionsAllAgg,
       outstandingInvoices,
       invoiceCount,
       paymentCount,
+      drawer,
     ] = await Promise.all([
       this.prisma.payment.aggregate({
         where: { paidAt: { gte: start, lte: end } },
@@ -45,6 +55,27 @@ export class FinanceService {
         _count: true,
       }),
       this.prisma.payment.aggregate({
+        _sum: { amount: true },
+        _count: true,
+      }),
+      this.prisma.sessionEntry.aggregate({
+        where: {
+          payStatus: 'CONFIRMED',
+          confirmedAt: { gte: start, lte: end },
+        },
+        _sum: { amount: true },
+        _count: true,
+      }),
+      this.prisma.sessionEntry.aggregate({
+        where: {
+          payStatus: 'CONFIRMED',
+          confirmedAt: { gte: monthStart, lte: end },
+        },
+        _sum: { amount: true },
+        _count: true,
+      }),
+      this.prisma.sessionEntry.aggregate({
+        where: { payStatus: 'CONFIRMED' },
         _sum: { amount: true },
         _count: true,
       }),
@@ -68,6 +99,7 @@ export class FinanceService {
       }),
       this.prisma.invoice.count(),
       this.prisma.payment.count(),
+      this.cash.collectionsForDay(ymd),
     ]);
 
     const outstandingAmount = outstandingInvoices.reduce((sum, inv) => {
@@ -80,12 +112,17 @@ export class FinanceService {
     }, 0);
 
     return {
-      collectedToday: Number(paymentsTodayAgg._sum.amount || 0),
-      collectedMonth: Number(paymentsMonthAgg._sum.amount || 0),
-      collectedAll: Number(paymentsAllAgg._sum.amount || 0),
-      paymentsTodayCount: paymentsTodayAgg._count,
-      paymentsMonthCount: paymentsMonthAgg._count,
-      paymentCount,
+      collectedToday: drawer.total,
+      drawerCollectedToday: drawer.total,
+      collectedMonth:
+        Number(paymentsMonthAgg._sum.amount || 0) +
+        Number(sessionsMonthAgg._sum.amount || 0),
+      collectedAll:
+        Number(paymentsAllAgg._sum.amount || 0) +
+        Number(sessionsAllAgg._sum.amount || 0),
+      paymentsTodayCount: paymentsTodayAgg._count + sessionsTodayAgg._count,
+      paymentsMonthCount: paymentsMonthAgg._count + sessionsMonthAgg._count,
+      paymentCount: paymentCount + sessionsAllAgg._count,
       invoiceCount,
       outstandingAmount,
       outstandingStudents: new Set(outstandingInvoices.map((i) => i.studentId))

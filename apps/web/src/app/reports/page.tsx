@@ -10,6 +10,7 @@ import {
   PageHero,
   SectionCard,
 } from '@/components/ui';
+import { TablePager, usePaged } from '@/components/TablePager';
 import { api, downloadFile } from '@/lib/api';
 import { AppDialog } from '@/components/AppDialog';
 
@@ -108,6 +109,13 @@ export default function ReportsPage() {
   useEffect(() => {
     load().catch(console.error);
   }, []);
+
+  const pTeachers = usePaged(profit?.byTeacher || [], `t:${from}:${to}`);
+  const pSubjects = usePaged(profit?.bySubject || [], `s:${from}:${to}`);
+  const pRooms = usePaged(profit?.byRoom || [], `r:${from}:${to}`);
+  const pPays = usePaged(finance?.payments || [], `p:${from}:${to}`);
+  const pOutstanding = usePaged(finance?.outstanding || [], `o:${from}:${to}`);
+  const pAbsents = usePaged(attendance?.byStudent || [], `a:${from}:${to}`);
 
   return (
     <AppShell>
@@ -252,7 +260,7 @@ export default function ReportsPage() {
 
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
             <SectionCard title="حسب المدرس">
-              <div className="table-scroll max-h-96">
+              <div className="table-scroll">
                 <table className="data-table">
                   <thead>
                     <tr>
@@ -265,7 +273,7 @@ export default function ReportsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {profit.byTeacher.map((row: any) => (
+                    {pTeachers.slice.map((row: any) => (
                       <tr key={row.key}>
                         <td className="font-medium">{row.label}</td>
                         <td className="tabular-nums">{money(row.gross)}</td>
@@ -298,10 +306,19 @@ export default function ReportsPage() {
                   <EmptyState>لا توجد بيانات في الفترة</EmptyState>
                 ) : null}
               </div>
+              <TablePager
+                page={pTeachers.page}
+                pages={pTeachers.pages}
+                total={pTeachers.total}
+                size={pTeachers.size}
+                from={pTeachers.from}
+                to={pTeachers.to}
+                onPage={pTeachers.setPage}
+              />
             </SectionCard>
 
             <SectionCard title="حسب المادة">
-              <div className="table-scroll max-h-96">
+              <div className="table-scroll">
                 <table className="data-table">
                   <thead>
                     <tr>
@@ -312,7 +329,7 @@ export default function ReportsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {profit.bySubject.map((row: any) => (
+                    {pSubjects.slice.map((row: any) => (
                       <tr key={row.key}>
                         <td className="font-medium">{row.label}</td>
                         <td className="tabular-nums">{money(row.gross)}</td>
@@ -326,10 +343,19 @@ export default function ReportsPage() {
                   <EmptyState>لا توجد بيانات مواد</EmptyState>
                 ) : null}
               </div>
+              <TablePager
+                page={pSubjects.page}
+                pages={pSubjects.pages}
+                total={pSubjects.total}
+                size={pSubjects.size}
+                from={pSubjects.from}
+                to={pSubjects.to}
+                onPage={pSubjects.setPage}
+              />
             </SectionCard>
 
             <SectionCard title="حسب القاعة (تأجير)">
-              <div className="table-scroll max-h-96">
+              <div className="table-scroll">
                 <table className="data-table">
                   <thead>
                     <tr>
@@ -339,7 +365,7 @@ export default function ReportsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {profit.byRoom.map((row: any) => (
+                    {pRooms.slice.map((row: any) => (
                       <tr key={row.key}>
                         <td className="font-medium">{row.label}</td>
                         <td className="tabular-nums font-bold">
@@ -354,11 +380,20 @@ export default function ReportsPage() {
                   <EmptyState>لا يوجد تأجير قاعات في الفترة</EmptyState>
                 ) : null}
               </div>
+              <TablePager
+                page={pRooms.page}
+                pages={pRooms.pages}
+                total={pRooms.total}
+                size={pRooms.size}
+                from={pRooms.from}
+                to={pRooms.to}
+                onPage={pRooms.setPage}
+              />
             </SectionCard>
 
             <SectionCard title="آخر الحصص المقفلة">
               <ul className="space-y-2 text-sm max-h-96 overflow-auto">
-                {profit.recentSessions.map((s: any) => (
+                {profit.recentSessions.slice(0, 8).map((s: any) => (
                   <li
                     key={s.id}
                     className="flex justify-between gap-3 rounded-xl bg-sand px-3 py-2"
@@ -417,7 +452,7 @@ export default function ReportsPage() {
 
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
             <SectionCard title="آخر المدفوعات">
-              <div className="table-scroll max-h-96">
+              <div className="table-scroll">
                 <table className="data-table">
                   <thead>
                     <tr>
@@ -427,7 +462,7 @@ export default function ReportsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {finance.payments.slice(0, 30).map((p: any) => (
+                    {pPays.slice.map((p: any) => (
                       <tr key={p.id}>
                         <td>
                           {p.student.firstName} {p.student.lastName}
@@ -446,10 +481,19 @@ export default function ReportsPage() {
                   <EmptyState>لا توجد مدفوعات</EmptyState>
                 ) : null}
               </div>
+              <TablePager
+                page={pPays.page}
+                pages={pPays.pages}
+                total={pPays.total}
+                size={pPays.size}
+                from={pPays.from}
+                to={pPays.to}
+                onPage={pPays.setPage}
+              />
             </SectionCard>
 
             <SectionCard title="المتأخرون في الدفع">
-              <div className="table-scroll max-h-96">
+              <div className="table-scroll">
                 <table className="data-table">
                   <thead>
                     <tr>
@@ -459,7 +503,7 @@ export default function ReportsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {finance.outstanding.slice(0, 40).map((inv: any) => {
+                    {pOutstanding.slice.map((inv: any) => {
                       const due =
                         Number(inv.feeAmount) -
                         Number(inv.discount) +
@@ -482,6 +526,15 @@ export default function ReportsPage() {
                   </tbody>
                 </table>
               </div>
+              <TablePager
+                page={pOutstanding.page}
+                pages={pOutstanding.pages}
+                total={pOutstanding.total}
+                size={pOutstanding.size}
+                from={pOutstanding.from}
+                to={pOutstanding.to}
+                onPage={pOutstanding.setPage}
+              />
             </SectionCard>
           </div>
         </>
@@ -510,7 +563,7 @@ export default function ReportsPage() {
 
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
             <SectionCard title="أكثر الطلاب غيابًا">
-              <div className="table-scroll max-h-96">
+              <div className="table-scroll">
                 <table className="data-table">
                   <thead>
                     <tr>
@@ -521,7 +574,7 @@ export default function ReportsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {attendance.byStudent.slice(0, 40).map((row: any) => (
+                    {pAbsents.slice.map((row: any) => (
                       <tr key={row.student.id}>
                         <td>
                           {row.student.firstName} {row.student.lastName}
@@ -534,11 +587,20 @@ export default function ReportsPage() {
                   </tbody>
                 </table>
               </div>
+              <TablePager
+                page={pAbsents.page}
+                pages={pAbsents.pages}
+                total={pAbsents.total}
+                size={pAbsents.size}
+                from={pAbsents.from}
+                to={pAbsents.to}
+                onPage={pAbsents.setPage}
+              />
             </SectionCard>
 
             <SectionCard title="سجل الغياب">
               <ul className="space-y-2 text-sm max-h-96 overflow-auto">
-                {attendance.absentees.slice(0, 50).map((a: any) => (
+                {attendance.absentees.slice(0, 8).map((a: any) => (
                   <li
                     key={a.id}
                     className="flex justify-between gap-3 rounded-xl bg-sand px-3 py-2"

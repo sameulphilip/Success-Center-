@@ -10,6 +10,7 @@ import {
   PageHero,
   SectionCard,
 } from '@/components/ui';
+import { TablePager, usePaged } from '@/components/TablePager';
 import { api, getStoredUser } from '@/lib/api';
 import { AppDialog } from '@/components/AppDialog';
 
@@ -24,6 +25,7 @@ type Teacher = {
   }[];
 };
 type Subject = { id: string; nameAr: string };
+type GradeLevel = { id: string; nameAr: string; nameEn?: string };
 type Student = {
   id: string;
   firstName: string;
@@ -156,6 +158,7 @@ export default function OpsPage() {
   const [selectedId, setSelectedId] = useState('');
   const [detail, setDetail] = useState<Session | null>(null);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
+  const [grades, setGrades] = useState<GradeLevel[]>([]);
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
@@ -189,9 +192,16 @@ export default function OpsPage() {
   const [payForm, setPayForm] = useState({
     phone: '',
     studentName: '',
+    parentPhone: '',
+    gradeLevelId: '',
     method: 'CASH' as 'CASH' | 'VODAFONE_CASH',
     vodafoneTxn: '',
   });
+  const [payMatch, setPayMatch] = useState<{
+    status: 'idle' | 'loading' | 'found' | 'missing' | 'error';
+    student: Student | null;
+    message: string;
+  }>({ status: 'idle', student: null, message: '' });
   const [scanned, setScanned] = useState<Student | null>(null);
   const [scanOpen, setScanOpen] = useState(false);
   const scannerRef = useRef<any>(null);
@@ -213,14 +223,16 @@ export default function OpsPage() {
 
   async function loadLists() {
     const qs = sessionDate ? `?date=${sessionDate}` : '';
-    const [s, t, b] = await Promise.all([
+    const [s, t, b, g] = await Promise.all([
       api<Session[]>(`/ops/sessions${qs}`),
       api<Teacher[]>('/teachers'),
       api<Block[]>('/ops/blocks'),
+      api<GradeLevel[]>('/catalog/grade-levels'),
     ]);
     setSessions(s);
     setTeachers(t);
     setBlocks(b);
+    setGrades(g);
     if (s.length && (!selectedId || !s.some((x) => x.id === selectedId))) {
       setSelectedId(s[0].id);
     }
@@ -274,6 +286,56 @@ export default function OpsPage() {
       teacherName: '',
     });
   }, [detail, teachers]);
+
+  useEffect(() => {
+    if (scanned) {
+      setPayMatch({
+        status: 'found',
+        student: scanned,
+        message: '',
+      });
+      return;
+    }
+    const phone = payForm.phone.trim();
+    const name = payForm.studentName.trim();
+    const digits = phone.replace(/\D/g, '');
+    if (digits.length < 8 && name.length < 3) {
+      setPayMatch({ status: 'idle', student: null, message: '' });
+      return;
+    }
+    const t = window.setTimeout(() => {
+      setPayMatch((prev) => ({ ...prev, status: 'loading' }));
+      const qs = new URLSearchParams();
+      if (digits.length >= 8) qs.set('phone', phone);
+      if (name.length >= 3) qs.set('name', name);
+      void api<Student>(`/ops/students/lookup?${qs.toString()}`)
+        .then((student) => {
+          setPayMatch({
+            status: 'found',
+            student,
+            message: '',
+          });
+        })
+        .catch((err: Error) => {
+          const msg = err.message || '';
+          if (msg.includes('أكتر من طالب')) {
+            setPayMatch({
+              status: 'error',
+              student: null,
+              message: msg,
+            });
+            return;
+          }
+          setPayMatch({
+            status: 'missing',
+            student: null,
+            message:
+              'مش موجود في سجل الطلاب — سجّله من صفحة الطلاب أو امسح الـ QR',
+          });
+        });
+    }, 400);
+    return () => window.clearTimeout(t);
+  }, [payForm.phone, payForm.studentName, scanned]);
 
   const applyQr = useCallback(
     async (raw: string) => {
@@ -501,10 +563,20 @@ export default function OpsPage() {
       await api(`/ops/sessions/${selectedId}/pay`, {
         method: 'POST',
         body: JSON.stringify({
-          studentId: scanned?.id,
+          studentId:
+            scanned?.id ||
+            (payMatch.status === 'found' ? payMatch.student?.id : undefined),
           phone: scanned ? undefined : payForm.phone.trim() || undefined,
           studentUid: scanned?.studentUid,
           studentName: scanned ? undefined : payForm.studentName.trim() || undefined,
+          parentPhone:
+            !scanned && payMatch.status === 'missing'
+              ? payForm.parentPhone.trim() || undefined
+              : undefined,
+          gradeLevelId:
+            !scanned && payMatch.status === 'missing'
+              ? payForm.gradeLevelId || undefined
+              : undefined,
           method: payForm.method,
           vodafoneTxn:
             payForm.method === 'VODAFONE_CASH'
@@ -512,7 +584,14 @@ export default function OpsPage() {
               : undefined,
         }),
       });
-      setPayForm({ phone: '', studentName: '', method: 'CASH', vodafoneTxn: '' });
+      setPayForm({
+        phone: '',
+        studentName: '',
+        parentPhone: '',
+        gradeLevelId: '',
+        method: 'CASH',
+        vodafoneTxn: '',
+      });
       setScanned(null);
       await loadDetail(selectedId);
       await loadLists();
@@ -672,6 +751,10 @@ export default function OpsPage() {
       setBusy('');
     }
   }
+
+  const pagedSessions = usePaged(sessions, sessionDate);
+  const pagedEntries = usePaged(detail?.entries || [], detail?.id || '');
+  const pagedBlocks = usePaged(blocks, blocks.length);
 
   return (
     <AppShell>
@@ -870,8 +953,8 @@ export default function OpsPage() {
                 </button>
               )}
             </div>
-            <ul className="space-y-2 overflow-auto overscroll-contain max-h-[min(22rem,50dvh)] lg:max-h-[min(38rem,calc(100dvh-16rem))]">
-              {sessions.map((s) => (
+            <ul className="space-y-2">
+              {pagedSessions.slice.map((s) => (
                 <li key={s.id}>
                   <button
                     type="button"
@@ -952,6 +1035,15 @@ export default function OpsPage() {
                 </EmptyState>
               ) : null}
             </ul>
+            <TablePager
+              page={pagedSessions.page}
+              pages={pagedSessions.pages}
+              total={pagedSessions.total}
+              size={pagedSessions.size}
+              from={pagedSessions.from}
+              to={pagedSessions.to}
+              onPage={pagedSessions.setPage}
+            />
           </SectionCard>
         </div>
 
@@ -1199,7 +1291,7 @@ export default function OpsPage() {
                       </div>
                     ) : (
                       <p className="text-[11px] text-navy/45">
-                        امسح الـ QR · أو اكتب الاسم (الموبايل اختياري)
+                        امسح الـ QR · أو اكتب الاسم والموبايل. لو مش في السجل هنطلب الصف وولي الأمر.
                       </p>
                     )}
                     <FieldLabel label="اسم الطالب">
@@ -1213,10 +1305,10 @@ export default function OpsPage() {
                             studentName: e.target.value,
                           })
                         }
-                        placeholder="لو مش متسجل في النظام"
+                        placeholder="اسم الطالب"
                       />
                     </FieldLabel>
-                    <FieldLabel label="رقم الموبايل (اختياري)">
+                    <FieldLabel label="رقم الموبايل">
                       <input
                         className="field"
                         inputMode="tel"
@@ -1228,9 +1320,73 @@ export default function OpsPage() {
                             phone: e.target.value,
                           })
                         }
-                        placeholder="لو موجود"
+                        placeholder="موبايل الطالب"
                       />
                     </FieldLabel>
+                    {!scanned && payMatch.status === 'loading' ? (
+                      <p className="text-[11px] text-navy/45">جاري البحث في سجل الطلاب…</p>
+                    ) : null}
+                    {!scanned && payMatch.status === 'found' && payMatch.student ? (
+                      <div className="rounded-xl bg-emerald-50 border border-emerald-100 px-3 py-2">
+                        <p className="text-xs text-emerald-800">موجود في الطلاب</p>
+                        <p className="font-extrabold text-navy">
+                          {payMatch.student.firstName}{' '}
+                          {payMatch.student.lastName === '-'
+                            ? ''
+                            : payMatch.student.lastName}
+                        </p>
+                        <p className="text-[11px] font-mono text-navy/45">
+                          {payMatch.student.phone || payMatch.student.studentUid}
+                        </p>
+                      </div>
+                    ) : null}
+                    {!scanned && payMatch.status === 'missing' ? (
+                      <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
+                        <p className="text-xs font-semibold text-amber-900">
+                          مش موجود في الطلاب — كمّل البيانات دي عشان نفتح له ملف
+                        </p>
+                        <FieldLabel label="الصف">
+                          <select
+                            className="field"
+                            required
+                            value={payForm.gradeLevelId}
+                            onChange={(e) =>
+                              setPayForm({
+                                ...payForm,
+                                gradeLevelId: e.target.value,
+                              })
+                            }
+                          >
+                            <option value="">اختَر الصف</option>
+                            {grades.map((g) => (
+                              <option key={g.id} value={g.id}>
+                                {g.nameAr}
+                              </option>
+                            ))}
+                          </select>
+                        </FieldLabel>
+                        <FieldLabel label="موبايل ولي الأمر">
+                          <input
+                            className="field"
+                            inputMode="tel"
+                            required
+                            value={payForm.parentPhone}
+                            onChange={(e) =>
+                              setPayForm({
+                                ...payForm,
+                                parentPhone: e.target.value,
+                              })
+                            }
+                            placeholder="01xxxxxxxxx"
+                          />
+                        </FieldLabel>
+                      </div>
+                    ) : null}
+                    {!scanned && payMatch.status === 'error' ? (
+                      <p className="text-xs font-semibold text-rose-700">
+                        {payMatch.message}
+                      </p>
+                    ) : null}
                     <FieldLabel label="طريقة الدفع">
                       <select
                         className="field"
@@ -1267,8 +1423,14 @@ export default function OpsPage() {
                       disabled={
                         busy === 'pay' ||
                         (!scanned &&
-                          !payForm.studentName.trim() &&
-                          !payForm.phone.trim())
+                          payMatch.status !== 'found' &&
+                          !(
+                            payMatch.status === 'missing' &&
+                            payForm.studentName.trim() &&
+                            payForm.phone.trim() &&
+                            payForm.parentPhone.trim() &&
+                            payForm.gradeLevelId
+                          ))
                       }
                     >
                       تأكيد الدفع ودخول الجلسة
@@ -1287,7 +1449,7 @@ export default function OpsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {(detail.entries || []).map((e) => (
+                      {(pagedEntries.slice).map((e) => (
                         <tr key={e.id}>
                           <td>
                             <p className="font-semibold">
@@ -1355,6 +1517,15 @@ export default function OpsPage() {
                     <EmptyState>لا يوجد طلاب في الجلسة بعد</EmptyState>
                   ) : null}
                 </div>
+                <TablePager
+                  page={pagedEntries.page}
+                  pages={pagedEntries.pages}
+                  total={pagedEntries.total}
+                  size={pagedEntries.size}
+                  from={pagedEntries.from}
+                  to={pagedEntries.to}
+                  onPage={pagedEntries.setPage}
+                />
 
                 {refundForm.entryId && detail.status === 'OPEN' ? (
                   <form
@@ -1506,7 +1677,7 @@ export default function OpsPage() {
               </div>
             </form>
             <ul className="space-y-2">
-              {blocks.map((b) => (
+              {pagedBlocks.slice.map((b) => (
                 <li
                   key={b.id}
                   className="flex items-center justify-between gap-2 rounded-xl border border-mist px-3 py-2 text-sm"
@@ -1537,6 +1708,15 @@ export default function OpsPage() {
               ))}
               {!blocks.length ? <EmptyState>لا يوجد حظر نشط</EmptyState> : null}
             </ul>
+            <TablePager
+              page={pagedBlocks.page}
+              pages={pagedBlocks.pages}
+              total={pagedBlocks.total}
+              size={pagedBlocks.size}
+              from={pagedBlocks.from}
+              to={pagedBlocks.to}
+              onPage={pagedBlocks.setPage}
+            />
           </SectionCard>
         </div>
       </div>
