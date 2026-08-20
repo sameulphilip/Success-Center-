@@ -191,6 +191,11 @@ export default function BookingsAdminPage() {
       slug: 'g2-2026-2027',
       title: 'استمارة حجز الصف الثاني الثانوي - بكالوريا',
     },
+    {
+      gradeLabel: 'الأول الثانوي - بكالوريا',
+      slug: 'g1-2026-2027',
+      title: 'استمارة حجز الصف الأول الثانوي - بكالوريا',
+    },
   ] as const;
 
   function applyGradePreset(gradeLabel: string) {

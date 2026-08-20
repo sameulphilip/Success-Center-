@@ -51,6 +51,15 @@ export const G3_BOOKING_OFFERINGS: {
   { teacherName: 'أحمد طه', subjectName: 'Biology', pageNumber: 3, sortOrder: 40 },
 ];
 
+/** G1 Baccalaureate — empty until the center adds teachers on the form */
+export const G1_BOOKING_OFFERINGS: {
+  teacherName: string;
+  subjectName: string;
+  isOnline?: boolean;
+  pageNumber: number;
+  sortOrder: number;
+}[] = [];
+
 /** Teachers on Success G2 Baccalaureate booking sheet 2026–2027 */
 export const G2_BOOKING_OFFERINGS: {
   teacherName: string;

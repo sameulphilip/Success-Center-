@@ -8,6 +8,7 @@ import { BookingStatus, PaymentStatus, RoleCode } from '@prisma/client';
 import * as QRCode from 'qrcode';
 import { PrismaService } from '../prisma/prisma.service';
 import {
+  G1_BOOKING_OFFERINGS,
   G2_BOOKING_OFFERINGS,
   G3_BOOKING_OFFERINGS,
 } from './booking.defaults';
@@ -400,6 +401,7 @@ export class BookingService {
   /** Sheet teachers for a form grade (G2 / G3). */
   private offeringsForGrade(gradeLabel: string) {
     const slug = this.resolveFormSlug(gradeLabel);
+    if (slug.startsWith('g1')) return G1_BOOKING_OFFERINGS;
     if (slug.startsWith('g2')) return G2_BOOKING_OFFERINGS;
     if (slug.startsWith('g3')) return G3_BOOKING_OFFERINGS;
     return [] as typeof G3_BOOKING_OFFERINGS;
@@ -1484,7 +1486,13 @@ export class BookingService {
       label.includes('grade 10') ||
       /\b10\b/.test(label)
     ) {
-      candidates = ['الأول الثانوي', 'الصف الأول الثانوي', 'الصف العاشر'];
+      candidates = [
+        'الأول الثانوي',
+        'الصف الأول الثانوي',
+        'الأول الثانوي - بكالوريا',
+        'الصف الأول الثانوي - بكالوريا',
+        'الصف العاشر',
+      ];
     }
     for (const nameAr of candidates) {
       const g = await tx.gradeLevel.findFirst({ where: { nameAr } });
@@ -1497,9 +1505,14 @@ export class BookingService {
     const raw = (gradeOrSlug || '').trim();
     if (!raw) return 'g3-2026-2027';
     const lower = raw.toLowerCase();
+    if (lower.includes('g1') || raw.includes('أول') || raw.includes('اول')) {
+      return 'g1-2026-2027';
+    }
     if (lower.includes('g2') || raw.includes('ثاني')) return 'g2-2026-2027';
     if (lower.includes('g3') || raw.includes('ثالث')) return 'g3-2026-2027';
-    if (raw.startsWith('g2-') || raw.startsWith('g3-')) return raw;
+    if (raw.startsWith('g1-') || raw.startsWith('g2-') || raw.startsWith('g3-')) {
+      return raw;
+    }
     return raw;
   }
 
@@ -1550,7 +1563,7 @@ export class BookingService {
       .map((o) => o.id);
   }
 
-  /** Ensure G2/G3 paper forms exist and sheet teachers stay in sync. */
+  /** Ensure G1/G2/G3 paper forms exist and sheet teachers stay in sync. */
   async ensurePaperForms() {
     const year = '2026-2027';
     const specs = [
@@ -1565,6 +1578,12 @@ export class BookingService {
         title: 'استمارة حجز الصف الثاني الثانوي - بكالوريا',
         gradeLabel: 'الثاني الثانوي - بكالوريا',
         offerings: G2_BOOKING_OFFERINGS,
+      },
+      {
+        slug: 'g1-2026-2027',
+        title: 'استمارة حجز الصف الأول الثانوي - بكالوريا',
+        gradeLabel: 'الأول الثانوي - بكالوريا',
+        offerings: G1_BOOKING_OFFERINGS,
       },
     ];
 
