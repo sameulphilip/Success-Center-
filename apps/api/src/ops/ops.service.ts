@@ -269,15 +269,39 @@ export class OpsService {
       throw new ForbiddenException('تعديل الجلسة للمدير فقط');
     }
     const session = await this.getSession(sessionId);
-    if (session.status !== ClassSessionStatus.OPEN) {
-      throw new BadRequestException('الجلسة اتقفلت — التعديل وهو مفتوحة فقط');
-    }
+    const isClosed = session.status === ClassSessionStatus.CLOSED;
 
     const teacherId = data.teacherName?.trim()
       ? await this.ensureTeacherByName(data.teacherName)
       : data.teacherId && data.teacherId !== '__other__'
         ? data.teacherId
         : session.teacherId;
+
+    if (isClosed && session.teacherPaidAt) {
+      const feeAmount =
+        data.feeAmount != null && !Number.isNaN(Number(data.feeAmount))
+          ? Number(data.feeAmount)
+          : Number(session.feeAmount);
+      const centerInput =
+        data.centerAmount != null && !Number.isNaN(Number(data.centerAmount))
+          ? Number(data.centerAmount)
+          : session.centerAmount != null
+            ? Number(session.centerAmount)
+            : undefined;
+      const changingMoney =
+        Math.abs(feeAmount - Number(session.feeAmount)) > 0.009 ||
+        (centerInput != null &&
+          session.centerAmount != null &&
+          Math.abs(centerInput - Number(session.centerAmount)) > 0.009) ||
+        (centerInput != null && session.centerAmount == null) ||
+        teacherId !== session.teacherId;
+      if (changingMoney) {
+        throw new BadRequestException(
+          'المدرس اتدفع — مفيش تعديل سعر أو مدرس بعد التسوية',
+        );
+      }
+    }
+
     const teacher = await this.prisma.teacher.findUnique({
       where: { id: teacherId },
     });
@@ -306,7 +330,10 @@ export class OpsService {
         ? session.subjectId
         : data.subjectId || null;
 
-    return this.prisma.classSession.update({
+    const feeChanged =
+      Math.abs(feeAmount - Number(session.feeAmount)) > 0.009;
+
+    const updated = await this.prisma.classSession.update({
       where: { id: sessionId },
       data: {
         teacherId,
@@ -326,6 +353,53 @@ export class OpsService {
         entries: { include: { student: true, refunds: true } },
       },
     });
+
+    if (!session.teacherPaidAt && feeChanged) {
+      await this.prisma.sessionEntry.updateMany({
+        where: {
+          sessionId,
+          payStatus: SessionPayStatus.CONFIRMED,
+        },
+        data: { amount: feeAmount },
+      });
+    }
+
+    if (isClosed && !session.teacherPaidAt) {
+      return this.applyClosedSessionSettlement(sessionId);
+    }
+    if (!session.teacherPaidAt && feeChanged) {
+      return this.getSession(sessionId);
+    }
+    return updated;
+  }
+
+  private async applyClosedSessionSettlement(sessionId: string) {
+    const session = await this.getSession(sessionId);
+    const confirmed = session.entries.filter(
+      (e) =>
+        e.payStatus === SessionPayStatus.CONFIRMED ||
+        e.payStatus === SessionPayStatus.PARTIALLY_REFUNDED,
+    );
+    let net = 0;
+    for (const e of confirmed) {
+      net += Number(e.amount) - Number(e.refundedAmount);
+    }
+    const { teacherShare, centerShare } = splitSessionNet({
+      net,
+      feeAmount: Number(session.feeAmount),
+      teacherPercent: session.teacherPercent,
+      centerAmount: session.centerAmount,
+    });
+
+    await this.prisma.classSession.update({
+      where: { id: session.id },
+      data: {
+        settledTeacherAmount: teacherShare,
+        settledCenterAmount: centerShare,
+      },
+    });
+
+    return this.getSession(sessionId);
   }
 
   private async assertNotBlocked(studentId: string, teacherId: string) {

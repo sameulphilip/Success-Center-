@@ -157,6 +157,7 @@ export default function OpsPage() {
   const [sessionDate, setSessionDate] = useState(cairoYmd);
   const [selectedId, setSelectedId] = useState('');
   const [detail, setDetail] = useState<Session | null>(null);
+  const editLocked = detail?.status === 'CLOSED' && !!detail?.teacherPaidAt;
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [grades, setGrades] = useState<GradeLevel[]>([]);
   const [blocks, setBlocks] = useState<Block[]>([]);
@@ -545,6 +546,7 @@ export default function OpsPage() {
         }),
       });
       setDetail(updated);
+      if (settle?.id === selectedId) setSettle(updated);
       await loadLists();
       setMsg('تم تعديل الجلسة');
     } catch (err: any) {
@@ -1112,16 +1114,24 @@ export default function OpsPage() {
                   </div>
                 }
               >
-                {detail.status === 'OPEN' && isManager ? (
+                {isManager ? (
                   <form
                     onSubmit={saveSession}
                     className="mb-4 max-w-xl rounded-xl border border-mist p-3 space-y-2"
                   >
                     <p className="font-bold text-navy text-sm">تعديل الجلسة</p>
+                    {detail.status === 'CLOSED' ? (
+                      <p className="text-xs text-amber-800 bg-amber-50 rounded-lg px-2 py-1.5">
+                        {detail.teacherPaidAt
+                          ? 'الجلسة مقفولة والمدرس اتدفع — التعديل للعنوان والمادة فقط.'
+                          : 'الجلسة مقفولة — التعديل يحدّث التسوية تلقائيًا قبل دفع المدرس.'}
+                      </p>
+                    ) : null}
                     <FieldLabel label="المدرس">
                       <select
                         className="field"
                         required
+                        disabled={editLocked}
                         value={editForm.teacherId}
                         onChange={(e) => {
                           const teacherId = e.target.value;
@@ -1207,6 +1217,7 @@ export default function OpsPage() {
                           type="number"
                           min={0}
                           required
+                          disabled={editLocked}
                           value={editForm.feeAmount}
                           onChange={(e) =>
                             setEditForm({
@@ -1222,6 +1233,7 @@ export default function OpsPage() {
                           type="number"
                           min={0}
                           required
+                          disabled={editLocked}
                           value={editForm.centerAmount}
                           onChange={(e) =>
                             setEditForm({
@@ -1235,11 +1247,17 @@ export default function OpsPage() {
                     <p className="text-[11px] text-navy/45">
                       {Number(editForm.centerAmount || 0) >
                       Number(editForm.feeAmount || 0)
-                        ? 'مبلغ السنتر أكبر من سعر الحصة — المدرس مش هياخد من الحصة دي · التحصيل اللي اتعمل قبل كده مش بيتغير'
+                        ? 'مبلغ السنتر أكبر من سعر الحصة — المدرس مش هياخد من الحصة دي'
                         : `المدرس ياخد الباقي: ${(
                             Number(editForm.feeAmount || 0) -
                             Number(editForm.centerAmount || 0)
-                          ).toLocaleString('en-EG')} ج.م للطالب · التحصيل اللي اتعمل قبل كده مش بيتغير`}
+                          ).toLocaleString('en-EG')} ج.م للطالب${
+                            detail?.status === 'CLOSED' && !detail?.teacherPaidAt
+                              ? ' · تحديث السعر يعدّل تحصيل الطلاب قبل تسوية المدرس'
+                              : detail?.status === 'OPEN'
+                                ? ' · تحديث السعر يعدّل تحصيل الطلاب اللي اتسجّلوا'
+                                : ''
+                          }`}
                     </p>
                     <button
                       type="submit"
