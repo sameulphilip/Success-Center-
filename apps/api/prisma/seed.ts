@@ -56,6 +56,7 @@ const roleDefs: {
     permissions: [
       'dashboard',
       'students',
+      'teachers',
       'attendance',
       'finance.receipts',
       'finance.safe',

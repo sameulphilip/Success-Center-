@@ -50,7 +50,11 @@ export class TeachersController {
   }
 
   @Post()
-  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  @Roles(
+    RoleCode.SUPER_ADMIN,
+    RoleCode.CENTER_MANAGER,
+    RoleCode.RECEPTION,
+  )
   create(
     @Body()
     body: {

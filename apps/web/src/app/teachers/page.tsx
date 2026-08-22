@@ -9,7 +9,7 @@ import {
   PageHero,
   SectionCard,
 } from '@/components/ui';
-import { api } from '@/lib/api';
+import { api, getStoredUser } from '@/lib/api';
 import { AppDialog } from '@/components/AppDialog';
 import { TablePager, usePaged } from '@/components/TablePager';
 
@@ -31,7 +31,13 @@ const emptyForm = (): TeacherForm => ({
   gradeLevelIds: [],
 });
 
+function canManageTeachers(role?: string) {
+  return role === 'SUPER_ADMIN' || role === 'CENTER_MANAGER';
+}
+
 export default function TeachersPage() {
+  const role = getStoredUser()?.role;
+  const manageTeachers = canManageTeachers(role);
   const [teachers, setTeachers] = useState<any[]>([]);
   const [subjects, setSubjects] = useState<any[]>([]);
   const [grades, setGrades] = useState<any[]>([]);
@@ -61,6 +67,7 @@ export default function TeachersPage() {
   }, []);
 
   function startEdit(t: any) {
+    if (!manageTeachers) return;
     setEditingId(t.id);
     setError('');
     setForm({
@@ -94,6 +101,10 @@ export default function TeachersPage() {
         phone: form.phone.trim() || undefined,
       };
       if (editingId) {
+        if (!manageTeachers) {
+          setError('تعديل المدرسين متاح لمدير السنتر فقط');
+          return;
+        }
         await api(`/teachers/${editingId}`, {
           method: 'PATCH',
           body: JSON.stringify(payload),
@@ -114,6 +125,7 @@ export default function TeachersPage() {
   }
 
   async function onDelete(t: any) {
+    if (!manageTeachers) return;
     const name = `${t.firstName} ${t.lastName === '-' ? '' : t.lastName}`.trim();
     setPendingDelete({ id: t.id, name });
   }
@@ -219,14 +231,16 @@ export default function TeachersPage() {
                   <th>الصفوف</th>
                   <th>المواد</th>
                   <th>سعر الحصة</th>
-                  <th>إجراءات</th>
+                  {manageTeachers ? <th>إجراءات</th> : null}
                 </tr>
               </thead>
               <tbody>
                 {paged.slice.map((t) => (
                   <tr
                     key={t.id}
-                    className={editingId === t.id ? 'bg-gold/10' : undefined}
+                    className={
+                      manageTeachers && editingId === t.id ? 'bg-gold/10' : undefined
+                    }
                   >
                     <td className="font-semibold text-navy">
                       {t.firstName} {t.lastName === '-' ? '' : t.lastName}
@@ -271,25 +285,27 @@ export default function TeachersPage() {
                     <td className="font-bold tabular-nums">
                       {Number(t.hourlyRate).toLocaleString('en-EG')}
                     </td>
-                    <td>
-                      <div className="flex flex-wrap gap-1">
-                        <button
-                          type="button"
-                          className="btn-ghost text-xs px-2 py-1"
-                          onClick={() => startEdit(t)}
-                        >
-                          تعديل
-                        </button>
-                        <button
-                          type="button"
-                          className="btn-ghost text-xs px-2 py-1 text-red-700"
-                          disabled={busy === `del-${t.id}`}
-                          onClick={() => void onDelete(t)}
-                        >
-                          {busy === `del-${t.id}` ? '…' : 'مسح'}
-                        </button>
-                      </div>
-                    </td>
+                    {manageTeachers ? (
+                      <td>
+                        <div className="flex flex-wrap gap-1">
+                          <button
+                            type="button"
+                            className="btn-ghost text-xs px-2 py-1"
+                            onClick={() => startEdit(t)}
+                          >
+                            تعديل
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-ghost text-xs px-2 py-1 text-red-700"
+                            disabled={busy === `del-${t.id}`}
+                            onClick={() => void onDelete(t)}
+                          >
+                            {busy === `del-${t.id}` ? '…' : 'مسح'}
+                          </button>
+                        </div>
+                      </td>
+                    ) : null}
                   </tr>
                 ))}
               </tbody>
@@ -312,7 +328,9 @@ export default function TeachersPage() {
         </SectionCard>
 
         <SectionCard
-          title={editingId ? 'تعديل مدرس' : 'إضافة مدرس'}
+          title={
+            manageTeachers && editingId ? 'تعديل مدرس' : 'إضافة مدرس'
+          }
           subtitle="اختَر الصف الدراسي والمادة"
         >
           <form onSubmit={onSubmit} className="space-y-3">
@@ -394,11 +412,11 @@ export default function TeachersPage() {
             <button className="btn-accent w-full" disabled={busy === 'save'}>
               {busy === 'save'
                 ? 'جاري الحفظ…'
-                : editingId
+                : manageTeachers && editingId
                   ? 'حفظ التعديلات'
                   : 'حفظ المدرس'}
             </button>
-            {editingId ? (
+            {manageTeachers && editingId ? (
               <button
                 type="button"
                 className="btn-ghost w-full"
