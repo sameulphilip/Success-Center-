@@ -8,6 +8,7 @@ import { AppDialog, type DialogTone } from '@/components/AppDialog';
 import { EmptyState, PageHero, SectionCard } from '@/components/ui';
 import { TablePager, usePaged } from '@/components/TablePager';
 import { api, getStoredUser, openFileInTab } from '@/lib/api';
+import { openStudentPaymentWhatsApp } from '@/lib/whatsapp';
 
 type Transfer = {
   id: string;
@@ -93,13 +94,24 @@ export default function OnlineWalletPage() {
   async function confirmTransfer(t: Transfer) {
     setBusy(t.id);
     try {
-      await api(`/booking/submissions/${t.id}/mark-paid`, {
+      const res = await api<{
+        receiptNumber?: string;
+        portalAccount?: { phone: string } | null;
+      }>(`/booking/submissions/${t.id}/mark-paid`, {
         method: 'POST',
         body: JSON.stringify({
           method: t.paymentMethod,
           vodafoneTxn: t.vodafoneTxn,
         }),
       });
+      const phone = res.portalAccount?.phone || t.studentPhone;
+      if (phone) {
+        openStudentPaymentWhatsApp({
+          studentName: t.studentName,
+          studentPhone: phone,
+          receiptNumber: res.receiptNumber,
+        });
+      }
       await load();
       setDialog({
         message: `تم تأكيد تحويل ${t.studentName}`,

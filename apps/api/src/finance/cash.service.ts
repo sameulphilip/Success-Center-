@@ -198,8 +198,32 @@ export class CashService {
       return (p.receiptNumber || '').startsWith('BK-') || blob.includes('حجز');
     };
 
+    const vodafoneBookingReceipts = payments
+      .filter((p) => isBookingPay(p) && isVodafone(p.method))
+      .map((p) => p.receiptNumber)
+      .filter((r): r is string => !!r);
+
+    const onlineWalletReceipts = new Set<string>();
+    if (vodafoneBookingReceipts.length) {
+      const onlineSubs = await this.prisma.bookingSubmission.findMany({
+        where: {
+          receiptNumber: { in: vodafoneBookingReceipts },
+          payChannel: 'online',
+        },
+        select: { receiptNumber: true },
+      });
+      for (const s of onlineSubs) {
+        if (s.receiptNumber) onlineWalletReceipts.add(s.receiptNumber);
+      }
+    }
+
     const drawerPayments = payments.filter(
-      (p) => !(isBookingPay(p) && isVodafone(p.method)),
+      (p) =>
+        !(
+          isBookingPay(p) &&
+          isVodafone(p.method) &&
+          onlineWalletReceipts.has(p.receiptNumber || '')
+        ),
     );
 
     const bookings: MoneyRow[] = [];

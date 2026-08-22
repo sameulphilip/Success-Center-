@@ -13,6 +13,7 @@ import {
 import { AppDialog, type DialogTone } from '@/components/AppDialog';
 import { TablePager, usePaged } from '@/components/TablePager';
 import { api, getStoredUser, openFileInTab } from '@/lib/api';
+import { openStudentPaymentWhatsApp } from '@/lib/whatsapp';
 
 type DialogState = {
   title?: string;
@@ -604,6 +605,11 @@ export default function BookingsAdminPage() {
     id: string,
     method: PayMethod,
     vodafoneTxn?: string,
+    ctx?: {
+      studentName?: string;
+      studentPhone?: string;
+      openWhatsApp?: boolean;
+    },
   ) {
     setBusy(`paid-${id}`);
     try {
@@ -637,6 +643,16 @@ export default function BookingsAdminPage() {
         );
       } else {
         notify(`تم تأكيد الدفع · ${methodAr}`, 'success', 'تم الدفع');
+      }
+      if (ctx?.openWhatsApp) {
+        const phone = res.portalAccount?.phone || ctx.studentPhone;
+        if (phone) {
+          openStudentPaymentWhatsApp({
+            studentName: ctx.studentName || '',
+            studentPhone: phone,
+            receiptNumber: res.receiptNumber,
+          });
+        }
       }
       await loadSubmissions(
         selectedFormId || undefined,
@@ -1674,6 +1690,11 @@ export default function BookingsAdminPage() {
                                     s.id,
                                     s.paymentMethod as PayMethod,
                                     s.vodafoneTxn || undefined,
+                                    {
+                                      studentName: s.studentName,
+                                      studentPhone: s.studentPhone,
+                                      openWhatsApp: true,
+                                    },
                                   );
                                 },
                                 'تأكيد التحويل',
@@ -1935,6 +1956,11 @@ export default function BookingsAdminPage() {
                                         s.id,
                                         s.paymentMethod as PayMethod,
                                         s.vodafoneTxn || undefined,
+                                        {
+                                          studentName: s.studentName,
+                                          studentPhone: s.studentPhone,
+                                          openWhatsApp: true,
+                                        },
                                       );
                                     },
                                     'تأكيد التحويل',
