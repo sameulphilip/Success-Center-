@@ -104,10 +104,11 @@ export class BookingController {
     @Body()
     body: {
       id?: string;
-      teacherId: string;
+      teacherId?: string;
       subjectId?: string;
       subjectName: string;
       isOnline?: boolean;
+      isWaitingList?: boolean;
       feeAmount?: number;
       pageNumber?: number;
       sortOrder?: number;

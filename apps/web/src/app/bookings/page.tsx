@@ -29,6 +29,9 @@ type Offering = {
   teacherName: string;
   subjectName: string;
   isOnline: boolean;
+  isWaitingList?: boolean;
+  teacherId?: string | null;
+  subjectId?: string | null;
   feeAmount: string | number;
   pageNumber: number;
   sortOrder: number;
@@ -159,6 +162,7 @@ export default function BookingsAdminPage() {
     subjectId: '',
     subjectName: '',
     isOnline: false,
+    isWaitingList: false,
   });
   const [editingSubmission, setEditingSubmission] = useState<Submission | null>(
     null,
@@ -524,6 +528,29 @@ export default function BookingsAdminPage() {
     }
   }
 
+  async function toggleOfferingWaitingList(o: Offering) {
+    if (!formDetail) return;
+    setBusy(`wait-${o.id}`);
+    try {
+      await api(`/booking/forms/${formDetail.id}/offerings`, {
+        method: 'POST',
+        body: JSON.stringify({
+          id: o.id,
+          ...(o.teacherId ? { teacherId: o.teacherId } : {}),
+          subjectId: o.subjectId || undefined,
+          subjectName: o.subjectName,
+          isOnline: o.isOnline,
+          isWaitingList: !o.isWaitingList,
+        }),
+      });
+      await loadDetail(formDetail.id);
+    } catch (err: any) {
+      notify(err.message || 'فشل التحديث');
+    } finally {
+      setBusy('');
+    }
+  }
+
   async function addOffering(e: FormEvent) {
     e.preventDefault();
     if (!formDetail) return;
@@ -549,6 +576,7 @@ export default function BookingsAdminPage() {
           subjectId: offeringForm.subjectId || undefined,
           subjectName,
           isOnline: offeringForm.isOnline,
+          isWaitingList: offeringForm.isWaitingList,
         }),
       });
       setOfferingForm({
@@ -556,6 +584,7 @@ export default function BookingsAdminPage() {
         subjectId: '',
         subjectName: '',
         isOnline: false,
+        isWaitingList: false,
       });
       await Promise.all([
         loadDetail(formDetail.id),
@@ -1203,6 +1232,7 @@ export default function BookingsAdminPage() {
                       <th>المدرس</th>
                       <th>المادة</th>
                       <th>النوع</th>
+                      <th>قائمة انتظار</th>
                       <th>اختاروه</th>
                       <th>مدفوع</th>
                       <th>PDF</th>
@@ -1214,6 +1244,20 @@ export default function BookingsAdminPage() {
                         <td className="font-semibold">{o.teacherName}</td>
                         <td>{o.subjectName}</td>
                         <td>{o.isOnline ? 'Online' : 'حضور'}</td>
+                        <td>
+                          <button
+                            type="button"
+                            className={`text-xs px-2 py-1 rounded-full font-semibold ${
+                              o.isWaitingList
+                                ? 'bg-amber-100 text-amber-900'
+                                : 'bg-sand text-navy/45'
+                            }`}
+                            disabled={busy === `wait-${o.id}`}
+                            onClick={() => void toggleOfferingWaitingList(o)}
+                          >
+                            {o.isWaitingList ? 'نعم' : 'لا'}
+                          </button>
+                        </td>
                         <td className="font-extrabold text-navy tabular-nums">
                           {o.pickCount ?? 0}
                         </td>
@@ -1361,6 +1405,19 @@ export default function BookingsAdminPage() {
                     }
                   />
                   Online
+                </label>
+                <label className="flex items-center gap-2 text-sm text-navy/70 pt-6">
+                  <input
+                    type="checkbox"
+                    checked={offeringForm.isWaitingList}
+                    onChange={(e) =>
+                      setOfferingForm({
+                        ...offeringForm,
+                        isWaitingList: e.target.checked,
+                      })
+                    }
+                  />
+                  قائمة انتظار
                 </label>
                 <div className="pt-6 lg:col-span-6">
                   <button

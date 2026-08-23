@@ -12,6 +12,7 @@ type Offering = {
   teacherName: string;
   subjectName: string;
   isOnline: boolean;
+  isWaitingList?: boolean;
   pageNumber: number;
 };
 
@@ -42,6 +43,7 @@ type SubmitResult = {
     teacherName: string;
     subjectName: string;
     isOnline: boolean;
+    isWaitingList?: boolean;
   }[];
 };
 
@@ -288,6 +290,11 @@ export default function PublicBookingPage() {
                         Online
                       </span>
                     ) : null}
+                    {s.isWaitingList ? (
+                      <span className="ms-2 text-[11px] text-violet-700 font-bold">
+                        قائمة انتظار
+                      </span>
+                    ) : null}
                   </span>
                 </li>
               ))}
@@ -400,7 +407,9 @@ export default function PublicBookingPage() {
                             className={`flex cursor-pointer items-center justify-between gap-3 rounded-xl border px-3 py-2.5 transition ${
                               checked
                                 ? 'border-[#C99612] bg-amber-50/70'
-                                : 'border-mist bg-white hover:bg-sand'
+                                : o.isWaitingList
+                                  ? 'border-violet-200 bg-violet-50/50 hover:bg-violet-50'
+                                  : 'border-mist bg-white hover:bg-sand'
                             }`}
                           >
                             <span className="flex items-center gap-3 min-w-0">
@@ -414,15 +423,22 @@ export default function PublicBookingPage() {
                                 <span className="block font-semibold text-navy truncate">
                                   {o.teacherName}
                                 </span>
-                                {o.isOnline ? (
-                                  <span className="text-[11px] font-bold text-amber-700">
-                                    Online
-                                  </span>
-                                ) : (
-                                  <span className="text-[11px] text-navy/40">
-                                    حضور
-                                  </span>
-                                )}
+                                <span className="flex flex-wrap items-center gap-2 mt-0.5">
+                                  {o.isWaitingList ? (
+                                    <span className="text-[11px] font-bold text-violet-700">
+                                      Waiting List · قائمة انتظار
+                                    </span>
+                                  ) : null}
+                                  {o.isOnline ? (
+                                    <span className="text-[11px] font-bold text-amber-700">
+                                      Online
+                                    </span>
+                                  ) : (
+                                    <span className="text-[11px] text-navy/40">
+                                      حضور
+                                    </span>
+                                  )}
+                                </span>
                               </span>
                             </span>
                           </label>

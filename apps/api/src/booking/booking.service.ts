@@ -393,6 +393,7 @@ export class BookingService {
         teacherName: o.teacherName,
         subjectName: o.subjectName,
         isOnline: o.isOnline,
+        isWaitingList: o.isWaitingList,
         pageNumber: o.pageNumber,
       })),
     };
@@ -647,10 +648,11 @@ export class BookingService {
     formId: string,
     data: {
       id?: string;
-      teacherId: string;
+      teacherId?: string;
       subjectId?: string;
       subjectName: string;
       isOnline?: boolean;
+      isWaitingList?: boolean;
       feeAmount?: number;
       pageNumber?: number;
       sortOrder?: number;
@@ -663,6 +665,45 @@ export class BookingService {
       throw new BadRequestException('المادة مطلوبة');
     }
 
+    if (data.id) {
+      const existing = await this.prisma.bookingOffering.findFirst({
+        where: { id: data.id, formId },
+      });
+      if (!existing) throw new NotFoundException('المدرس غير موجود في الاستمارة');
+
+      let teacherId = existing.teacherId;
+      let teacherName = existing.teacherName;
+      if (data.teacherId?.trim()) {
+        const resolved = await this.ensureTeacherForOffering(
+          form.gradeLabel,
+          data.teacherId,
+        );
+        teacherId = resolved.teacherId;
+        teacherName = resolved.teacherName;
+      }
+
+      let subjectId = data.subjectId ?? existing.subjectId;
+      if (!subjectId) {
+        subjectId = await this.resolveSubjectIdByName(subjectName);
+      }
+
+      return this.prisma.bookingOffering.update({
+        where: { id: data.id },
+        data: {
+          teacherName,
+          subjectName,
+          teacherId,
+          subjectId,
+          isOnline: data.isOnline ?? existing.isOnline,
+          isWaitingList: data.isWaitingList ?? existing.isWaitingList,
+          feeAmount: data.feeAmount ?? existing.feeAmount,
+          pageNumber: data.pageNumber ?? existing.pageNumber,
+          sortOrder: data.sortOrder ?? existing.sortOrder,
+          isActive: data.isActive ?? existing.isActive,
+        },
+      });
+    }
+
     const { teacherId, teacherName } = await this.ensureTeacherForOffering(
       form.gradeLabel,
       data.teacherId,
@@ -673,26 +714,20 @@ export class BookingService {
       subjectId = await this.resolveSubjectIdByName(subjectName);
     }
 
-    const payload = {
-      teacherName,
-      subjectName,
-      teacherId,
-      subjectId,
-      isOnline: data.isOnline ?? false,
-      feeAmount: data.feeAmount ?? 0,
-      pageNumber: data.pageNumber ?? 1,
-      sortOrder: data.sortOrder ?? 0,
-      isActive: data.isActive ?? true,
-    };
-
-    if (data.id) {
-      return this.prisma.bookingOffering.update({
-        where: { id: data.id },
-        data: payload,
-      });
-    }
     return this.prisma.bookingOffering.create({
-      data: { formId, ...payload },
+      data: {
+        formId,
+        teacherName,
+        subjectName,
+        teacherId,
+        subjectId,
+        isOnline: data.isOnline ?? false,
+        isWaitingList: data.isWaitingList ?? false,
+        feeAmount: data.feeAmount ?? 0,
+        pageNumber: data.pageNumber ?? 1,
+        sortOrder: data.sortOrder ?? 0,
+        isActive: data.isActive ?? true,
+      },
     });
   }
 
@@ -938,6 +973,7 @@ export class BookingService {
         teacherName: s.offering.teacherName,
         subjectName: s.offering.subjectName,
         isOnline: s.offering.isOnline,
+        isWaitingList: s.offering.isWaitingList,
       })),
     };
   }

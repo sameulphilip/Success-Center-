@@ -514,6 +514,8 @@ model BookingOffering {
   teacherName String
   subjectName String
   isOnline    Boolean            @default(false)
+  /** Shows "waiting list" badge on the public booking form */
+  isWaitingList Boolean          @default(false)
   feeAmount   Decimal            @default(0) @db.Decimal(12, 2)
   pageNumber  Int                @default(1)
   sortOrder   Int                @default(0)
