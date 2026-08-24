@@ -1004,6 +1004,30 @@ export class OpsService {
     });
   }
 
+  async deleteEntry(entryId: string, role?: string) {
+    if (role !== RoleCode.SUPER_ADMIN && role !== RoleCode.CENTER_MANAGER) {
+      throw new ForbiddenException('مسح تسجيل الطالب للمدير فقط');
+    }
+    const entry = await this.prisma.sessionEntry.findUnique({
+      where: { id: entryId },
+      include: { session: true, student: true },
+    });
+    if (!entry) throw new NotFoundException('التسجيل غير موجود');
+    if (entry.session.teacherPaidAt) {
+      throw new BadRequestException(
+        'المدرس اتدفع — مفيش مسح تسجيل بعد تسوية المدرس',
+      );
+    }
+
+    await this.prisma.sessionEntry.delete({ where: { id: entryId } });
+
+    if (entry.session.status === ClassSessionStatus.CLOSED) {
+      await this.applyClosedSessionSettlement(entry.sessionId);
+    }
+
+    return { ok: true, deletedId: entryId };
+  }
+
   listBlocks() {
     return this.prisma.studentBlock.findMany({
       where: { isActive: true },

@@ -229,6 +229,15 @@ export class OpsController {
     });
   }
 
+  @Delete('entries/:id')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  removeEntry(
+    @Param('id') id: string,
+    @CurrentUser() user: { role: string },
+  ) {
+    return this.ops.deleteEntry(id, user?.role);
+  }
+
   @Get('blocks')
   blocks() {
     return this.ops.listBlocks();

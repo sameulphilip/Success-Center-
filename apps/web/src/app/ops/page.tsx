@@ -166,6 +166,10 @@ export default function OpsPage() {
   const [msg, setMsg] = useState('');
   const [settle, setSettle] = useState<Session | null>(null);
   const [ask, setAsk] = useState<null | 'close' | 'delete'>(null);
+  const [entryToDelete, setEntryToDelete] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
   const [scanNotice, setScanNotice] = useState<{
     tone: 'success' | 'error' | 'info';
     title: string;
@@ -611,6 +615,22 @@ export default function OpsPage() {
       await api(`/ops/entries/${id}/confirm`, { method: 'POST' });
       if (selectedId) await loadDetail(selectedId);
       setMsg('تم تأكيد فودافون كاش');
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function runDeleteEntry() {
+    if (!entryToDelete || !isManager) return;
+    setBusy(`del-${entryToDelete.id}`);
+    try {
+      await api(`/ops/entries/${entryToDelete.id}`, { method: 'DELETE' });
+      setEntryToDelete(null);
+      if (selectedId) await loadDetail(selectedId);
+      await loadLists();
+      setMsg('اتمسح تسجيل الطالب من الجلسة');
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -1526,6 +1546,21 @@ export default function OpsPage() {
                                 استرجاع
                               </button>
                             ) : null}
+                            {isManager && !detail.teacherPaidAt ? (
+                              <button
+                                type="button"
+                                className="btn-ghost text-xs px-2 py-1 w-full text-rose-700"
+                                disabled={busy === `del-${e.id}`}
+                                onClick={() =>
+                                  setEntryToDelete({
+                                    id: e.id,
+                                    name: `${e.student.firstName} ${e.student.lastName === '-' ? '' : e.student.lastName}`.trim(),
+                                  })
+                                }
+                              >
+                                مسح
+                              </button>
+                            ) : null}
                           </td>
                         </tr>
                       ))}
@@ -1866,6 +1901,20 @@ export default function OpsPage() {
         cancelLabel="رجوع"
         onConfirm={() => void runDeleteSession()}
         onClose={() => setAsk(null)}
+      />
+      <AppDialog
+        open={!!entryToDelete}
+        tone="danger"
+        title="مسح تسجيل الطالب"
+        message={
+          entryToDelete
+            ? `هيتشال ${entryToDelete.name} من الجلسة خالص، ويقدر يتسجل تاني بعد كده.`
+            : ''
+        }
+        confirmLabel="مسح التسجيل"
+        cancelLabel="رجوع"
+        onConfirm={() => void runDeleteEntry()}
+        onClose={() => setEntryToDelete(null)}
       />
       <AppDialog
         open={!!scanNotice}
