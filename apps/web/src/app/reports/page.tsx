@@ -27,7 +27,7 @@ function money(n: number | string | undefined | null) {
   return `${Number(n || 0).toLocaleString('en-EG')} EGP`;
 }
 
-type Tab = 'finance' | 'attendance' | 'profit';
+type Tab = 'finance' | 'attendance' | 'profit' | 'bookings';
 
 export default function ReportsPage() {
   const [from, setFrom] = useState(monthStart());
@@ -35,6 +35,7 @@ export default function ReportsPage() {
   const [finance, setFinance] = useState<any>(null);
   const [attendance, setAttendance] = useState<any>(null);
   const [profit, setProfit] = useState<any>(null);
+  const [bookings, setBookings] = useState<any>(null);
   const [tab, setTab] = useState<Tab>('profit');
   const [error, setError] = useState('');
   const [exporting, setExporting] = useState(false);
@@ -69,14 +70,16 @@ export default function ReportsPage() {
   async function load() {
     setError('');
     try {
-      const [f, a, p] = await Promise.all([
+      const [f, a, p, b] = await Promise.all([
         api<any>(`/reports/finance?from=${from}&to=${to}`),
         api<any>(`/reports/attendance?from=${from}&to=${to}`),
         api<any>(`/reports/profit?from=${from}&to=${to}`),
+        api<any>(`/reports/bookings?from=${from}&to=${to}`),
       ]);
       setFinance(f);
       setAttendance(a);
       setProfit(p);
+      setBookings(b);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'فشل تحميل التقارير');
     }
@@ -91,13 +94,17 @@ export default function ReportsPage() {
           ? `/reports/finance/pdf?from=${from}&to=${to}`
           : tab === 'attendance'
             ? `/reports/attendance/pdf?from=${from}&to=${to}`
-            : `/reports/profit/pdf?from=${from}&to=${to}`;
+            : tab === 'bookings'
+              ? `/reports/bookings/pdf?from=${from}&to=${to}`
+              : `/reports/profit/pdf?from=${from}&to=${to}`;
       const name =
         tab === 'finance'
           ? `finance-${from}-${to}.pdf`
           : tab === 'attendance'
             ? `attendance-${from}-${to}.pdf`
-            : `profit-${from}-${to}.pdf`;
+            : tab === 'bookings'
+              ? `bookings-${from}-${to}.pdf`
+              : `profit-${from}-${to}.pdf`;
       await downloadFile(path, name);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'فشل تصدير PDF');
@@ -114,14 +121,26 @@ export default function ReportsPage() {
   const pSubjects = usePaged(profit?.bySubject || [], `s:${from}:${to}`);
   const pRooms = usePaged(profit?.byRoom || [], `r:${from}:${to}`);
   const pPays = usePaged(finance?.payments || [], `p:${from}:${to}`);
-  const pOutstanding = usePaged(finance?.outstanding || [], `o:${from}:${to}`);
   const pAbsents = usePaged(attendance?.byStudent || [], `a:${from}:${to}`);
+  const pBookingForms = usePaged(bookings?.byForm || [], `bf:${from}:${to}`);
+  const pBookingPaid = usePaged(bookings?.paid || [], `bp:${from}:${to}`);
+
+  const payMethodAr: Record<string, string> = {
+    CASH: 'كاش',
+    VODAFONE_CASH: 'فودافون',
+    INSTAPAY: 'إنستاباي',
+    OTHER: 'أخرى',
+  };
+  const channelAr: Record<string, string> = {
+    center: 'من السنتر',
+    online: 'أونلاين',
+  };
 
   return (
     <AppShell>
       <PageHeader
         title="التقارير"
-        subtitle="ربحية · مالي · حضور · تصدير PDF"
+        subtitle="ربحية · مالي · استمارات · حضور · تصدير PDF"
         action={
           <div className="flex flex-wrap gap-2 items-end">
             <label className="text-xs text-navy/50">
@@ -182,11 +201,9 @@ export default function ReportsPage() {
               : '—',
           },
           {
-            label: 'المتأخرات',
-            value: finance
-              ? Math.round(finance.summary.outstandingAmount).toLocaleString(
-                  'en-EG',
-                )
+            label: 'استمارات مدفوعة',
+            value: bookings
+              ? Math.round(bookings.summary.paidAmount).toLocaleString('en-EG')
               : '—',
           },
         ]}
@@ -199,6 +216,7 @@ export default function ReportsPage() {
           [
             ['profit', 'ربحية'],
             ['finance', 'مالي'],
+            ['bookings', 'استمارات'],
             ['attendance', 'حضور'],
           ] as const
         ).map(([id, label]) => (
@@ -438,10 +456,9 @@ export default function ReportsPage() {
               value={`${Number(finance.summary.invoiced).toLocaleString('en-EG')} EGP`}
             />
             <KpiCard
-              label="المتأخرات"
-              value={`${Number(finance.summary.outstandingAmount).toLocaleString('en-EG')} EGP`}
-              hint={`${finance.summary.outstandingStudents} طالب`}
-              accent="red"
+              label="عدد الإيصالات"
+              value={finance.summary.paymentsCount}
+              hint="في الفترة"
             />
             <KpiCard
               label="صافي تقديري"
@@ -450,7 +467,7 @@ export default function ReportsPage() {
             />
           </div>
 
-          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          <div className="mt-4">
             <SectionCard title="آخر المدفوعات">
               <div className="table-scroll">
                 <table className="data-table">
@@ -491,49 +508,156 @@ export default function ReportsPage() {
                 onPage={pPays.setPage}
               />
             </SectionCard>
+          </div>
+        </>
+      ) : null}
 
-            <SectionCard title="المتأخرون في الدفع">
+      {tab === 'bookings' && bookings ? (
+        <>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <KpiCard
+              label="استمارات مسجّلة"
+              value={bookings.summary.submitted}
+              hint={`ملغي ${bookings.summary.cancelled}`}
+            />
+            <KpiCard
+              label="مدفوعة"
+              value={bookings.summary.paid}
+              accent="green"
+            />
+            <KpiCard
+              label="تحصيل الاستمارات"
+              value={money(bookings.summary.paidAmount)}
+              accent="gold"
+            />
+            <KpiCard
+              label="بانتظار الدفع"
+              value={bookings.summary.pending}
+              accent="red"
+            />
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {(bookings.byMethod || []).map((row: any) => (
+              <KpiCard
+                key={row.method}
+                label={payMethodAr[row.method] || row.method}
+                value={money(row.amount)}
+                hint={`${row.count} استمارة`}
+              />
+            ))}
+            {(bookings.byChannel || []).map((row: any) => (
+              <KpiCard
+                key={row.channel}
+                label={channelAr[row.channel] || row.channel}
+                value={money(row.amount)}
+                hint={`${row.count} استمارة`}
+              />
+            ))}
+          </div>
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <SectionCard title="حسب الاستمارة">
               <div className="table-scroll">
                 <table className="data-table">
                   <thead>
                     <tr>
-                      <th>الطالب</th>
-                      <th>الحالة</th>
-                      <th>المتبقي</th>
+                      <th>الصف</th>
+                      <th>مسجّل</th>
+                      <th>مدفوع</th>
+                      <th>معلّق</th>
+                      <th>التحصيل</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {pOutstanding.slice.map((inv: any) => {
-                      const due =
-                        Number(inv.feeAmount) -
-                        Number(inv.discount) +
-                        Number(inv.extras) -
-                        Number(inv.paidAmount);
-                      return (
-                        <tr key={inv.id}>
-                          <td>
-                            {inv.student.firstName} {inv.student.lastName}
-                          </td>
-                          <td>
-                            <span className="badge-warn">{inv.status}</span>
-                          </td>
-                          <td className="font-bold text-navy tabular-nums">
-                            {due.toLocaleString('en-EG')}
-                          </td>
-                        </tr>
-                      );
-                    })}
+                    {pBookingForms.slice.map((row: any) => (
+                      <tr key={row.formId}>
+                        <td className="font-medium">
+                          {row.gradeLabel || row.label}
+                        </td>
+                        <td className="tabular-nums">{row.submitted}</td>
+                        <td className="tabular-nums font-bold text-navy">
+                          {row.paid}
+                        </td>
+                        <td className="tabular-nums">{row.pending}</td>
+                        <td className="tabular-nums font-bold">
+                          {money(row.amount)}
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
+                {!bookings.byForm?.length ? (
+                  <EmptyState>لا توجد استمارات في الفترة</EmptyState>
+                ) : null}
               </div>
               <TablePager
-                page={pOutstanding.page}
-                pages={pOutstanding.pages}
-                total={pOutstanding.total}
-                size={pOutstanding.size}
-                from={pOutstanding.from}
-                to={pOutstanding.to}
-                onPage={pOutstanding.setPage}
+                page={pBookingForms.page}
+                pages={pBookingForms.pages}
+                total={pBookingForms.total}
+                size={pBookingForms.size}
+                from={pBookingForms.from}
+                to={pBookingForms.to}
+                onPage={pBookingForms.setPage}
+              />
+            </SectionCard>
+
+            <SectionCard title="الاستمارات المدفوعة">
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>م</th>
+                      <th>الطالب</th>
+                      <th>الصف</th>
+                      <th>الدفع</th>
+                      <th>المبلغ</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pBookingPaid.slice.map((s: any) => (
+                      <tr key={s.id}>
+                        <td className="tabular-nums font-bold">
+                          {s.formSerial ?? '—'}
+                        </td>
+                        <td>
+                          <span className="font-medium block">
+                            {s.studentName}
+                          </span>
+                          <span className="text-[11px] text-navy/45">
+                            {s.studentPhone}
+                          </span>
+                        </td>
+                        <td className="text-xs">
+                          {s.form?.gradeLabel || s.form?.title || '—'}
+                        </td>
+                        <td className="text-xs">
+                          {payMethodAr[s.paymentMethod] ||
+                            s.paymentMethod ||
+                            '—'}
+                          {s.payChannel
+                            ? ` · ${channelAr[s.payChannel] || s.payChannel}`
+                            : ''}
+                        </td>
+                        <td className="font-bold tabular-nums">
+                          {money(s.totalAmount)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!bookings.paid?.length ? (
+                  <EmptyState>لا استمارات مدفوعة في الفترة</EmptyState>
+                ) : null}
+              </div>
+              <TablePager
+                page={pBookingPaid.page}
+                pages={pBookingPaid.pages}
+                total={pBookingPaid.total}
+                size={pBookingPaid.size}
+                from={pBookingPaid.from}
+                to={pBookingPaid.to}
+                onPage={pBookingPaid.setPage}
               />
             </SectionCard>
           </div>

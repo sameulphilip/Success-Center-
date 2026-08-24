@@ -61,7 +61,10 @@ type Handout = {
   teacherPercent: string | number;
   centerAmount?: string | number | null;
   stock: number;
+  isActive?: boolean;
+  teacherId?: string | null;
   teacher?: Teacher | null;
+  _count?: { sales: number };
 };
 
 type HandoutSale = {
@@ -74,6 +77,10 @@ type HandoutSale = {
   payStatus: string;
   cashTo?: 'DRAWER' | 'OWNER' | 'TEACHER_HOLD' | 'SAFE';
   receiptNumber: string;
+  buyerPhone?: string | null;
+  vodafoneTxn?: string | null;
+  note?: string | null;
+  settlementId?: string | null;
   product: { title: string };
 };
 
@@ -144,6 +151,15 @@ const emptyOfferForm = {
   isActive: true,
 };
 
+const emptyHandoutForm = {
+  title: '',
+  price: 0,
+  centerAmount: 0,
+  teacherId: '',
+  stock: 50,
+  isActive: true,
+};
+
 export default function RevenuePage() {
   const me = getStoredUser();
   const toOwner =
@@ -169,7 +185,7 @@ export default function RevenuePage() {
   const [offerForm, setOfferForm] = useState({ ...emptyOfferForm });
   const [editingOfferId, setEditingOfferId] = useState('');
   const [confirm, setConfirm] = useState<null | {
-    kind: 'sale' | 'offer';
+    kind: 'sale' | 'offer' | 'handout' | 'handoutSale';
     id: string;
     label: string;
   }>(null);
@@ -180,12 +196,15 @@ export default function RevenuePage() {
     buyerName: '',
     qty: 1,
   });
-  const [handoutForm, setHandoutForm] = useState({
-    title: '',
-    price: 0,
-    centerAmount: 0,
-    teacherId: '',
-    stock: 50,
+  const [handoutForm, setHandoutForm] = useState({ ...emptyHandoutForm });
+  const [editingHandoutId, setEditingHandoutId] = useState('');
+  const [editingHandoutSaleId, setEditingHandoutSaleId] = useState('');
+  const [handoutSaleForm, setHandoutSaleForm] = useState({
+    qty: 1,
+    method: 'CASH',
+    vodafoneTxn: '',
+    buyerPhone: '',
+    note: '',
   });
   const [sellHandout, setSellHandout] = useState({
     productId: '',
@@ -252,9 +271,13 @@ export default function RevenuePage() {
       if (f.offerId && activeOffers.some((x) => x.id === f.offerId)) return f;
       return { ...f, offerId: activeOffers[0]?.id || '' };
     });
-    if (!sellHandout.productId && h[0]) {
-      setSellHandout((f) => ({ ...f, productId: h[0].id }));
-    }
+    const activeHandouts = h.filter((x) => x.isActive !== false);
+    setSellHandout((f) => {
+      if (f.productId && activeHandouts.some((x) => x.id === f.productId)) {
+        return f;
+      }
+      return { ...f, productId: activeHandouts[0]?.id || h[0]?.id || '' };
+    });
   }
 
   useEffect(() => {
@@ -409,15 +432,114 @@ export default function RevenuePage() {
   async function createHandout(e: FormEvent) {
     e.preventDefault();
     setBusy('handout');
+    setError('');
     try {
-      await api('/revenue/handouts', {
-        method: 'POST',
+      if (editingHandoutId) {
+        const updated = await api<{ updatedSales?: number }>(
+          `/revenue/handouts/${editingHandoutId}/update`,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              title: handoutForm.title,
+              price: Number(handoutForm.price),
+              centerAmount: Number(handoutForm.centerAmount),
+              teacherId: handoutForm.teacherId || null,
+              stock: Number(handoutForm.stock),
+              isActive: handoutForm.isActive,
+            }),
+          },
+        );
+        const n = updated.updatedSales || 0;
+        setMsg(
+          n
+            ? `تم تعديل الملزمة وتحديث ${n} عملية بيع`
+            : 'تم تعديل الملزمة',
+        );
+        setEditingHandoutId('');
+        setHandoutForm({ ...emptyHandoutForm });
+      } else {
+        await api('/revenue/handouts', {
+          method: 'POST',
+          body: JSON.stringify({
+            ...handoutForm,
+            teacherId: handoutForm.teacherId || undefined,
+          }),
+        });
+        setMsg('تم إضافة الملزمة');
+        setHandoutForm({ ...emptyHandoutForm });
+      }
+      await load();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  function startEditHandout(h: Handout) {
+    setEditingHandoutId(h.id);
+    setHandoutForm({
+      title: h.title,
+      price: Number(h.price),
+      centerAmount: centerCutOf(h.price, h.teacherPercent, h.centerAmount),
+      teacherId: h.teacherId || h.teacher?.id || '',
+      stock: h.stock,
+      isActive: h.isActive !== false,
+    });
+    setError('');
+    setMsg('');
+  }
+
+  function cancelEditHandout() {
+    setEditingHandoutId('');
+    setHandoutForm({ ...emptyHandoutForm });
+  }
+
+  function startEditHandoutSale(s: HandoutSale) {
+    setEditingHandoutSaleId(s.id);
+    setHandoutSaleForm({
+      qty: s.qty,
+      method: s.method || 'CASH',
+      vodafoneTxn: s.vodafoneTxn || '',
+      buyerPhone: s.buyerPhone || '',
+      note: s.note || '',
+    });
+    setError('');
+    setMsg('');
+  }
+
+  function cancelEditHandoutSale() {
+    setEditingHandoutSaleId('');
+    setHandoutSaleForm({
+      qty: 1,
+      method: 'CASH',
+      vodafoneTxn: '',
+      buyerPhone: '',
+      note: '',
+    });
+  }
+
+  async function saveHandoutSale(e: FormEvent) {
+    e.preventDefault();
+    if (!editingHandoutSaleId) return;
+    setBusy(`hsave-${editingHandoutSaleId}`);
+    setError('');
+    try {
+      await api(`/revenue/handouts/sales/${editingHandoutSaleId}`, {
+        method: 'PATCH',
         body: JSON.stringify({
-          ...handoutForm,
-          teacherId: handoutForm.teacherId || undefined,
+          qty: Number(handoutSaleForm.qty),
+          method: handoutSaleForm.method,
+          vodafoneTxn:
+            handoutSaleForm.method === 'VODAFONE_CASH'
+              ? handoutSaleForm.vodafoneTxn
+              : null,
+          buyerPhone: handoutSaleForm.buyerPhone || null,
+          note: handoutSaleForm.note || null,
         }),
       });
-      setMsg('تم إضافة الملزمة');
+      setMsg('تم تعديل بيع الملزمة');
+      cancelEditHandoutSale();
       await load();
     } catch (err: any) {
       setError(err.message);
@@ -514,6 +636,19 @@ export default function RevenuePage() {
         }
         if (editingOfferId === confirm.id) cancelEditOffer();
         setMsg('تم مسح العرض وكل أكواده');
+      } else if (confirm.kind === 'handout') {
+        await api(`/revenue/handouts/${confirm.id}`, { method: 'DELETE' });
+        if (sellHandout.productId === confirm.id) {
+          setSellHandout((s) => ({ ...s, productId: '' }));
+        }
+        if (editingHandoutId === confirm.id) cancelEditHandout();
+        setMsg('تم مسح الملزمة وكل مبيعاتها');
+      } else if (confirm.kind === 'handoutSale') {
+        await api(`/revenue/handouts/sales/${confirm.id}`, {
+          method: 'DELETE',
+        });
+        if (editingHandoutSaleId === confirm.id) cancelEditHandoutSale();
+        setMsg('تم مسح بيع الملزمة ورجع المخزون');
       } else {
         await api(`/revenue/online/sales/${confirm.id}`, { method: 'DELETE' });
         setMsg('تم مسح البيع والكود رجع متاح');
@@ -1023,7 +1158,9 @@ export default function RevenuePage() {
 
       {tab === 'handouts' ? (
         <div className="grid gap-4 xl:grid-cols-2">
-          <SectionCard title="إضافة ملزمة">
+          <SectionCard
+            title={editingHandoutId ? 'تعديل ملزمة' : 'إضافة ملزمة'}
+          >
             <form onSubmit={createHandout} className="space-y-2">
               <FieldLabel label="الاسم">
                 <input
@@ -1085,6 +1222,38 @@ export default function RevenuePage() {
                     }
                   />
                 </FieldLabel>
+                <FieldLabel label={editingHandoutId ? 'نشط' : 'المخزون'}>
+                  {editingHandoutId ? (
+                    <select
+                      className="field"
+                      value={handoutForm.isActive ? '1' : '0'}
+                      onChange={(e) =>
+                        setHandoutForm({
+                          ...handoutForm,
+                          isActive: e.target.value === '1',
+                        })
+                      }
+                    >
+                      <option value="1">نشط</option>
+                      <option value="0">متوقف</option>
+                    </select>
+                  ) : (
+                    <input
+                      className="field"
+                      type="number"
+                      min={0}
+                      value={handoutForm.stock}
+                      onChange={(e) =>
+                        setHandoutForm({
+                          ...handoutForm,
+                          stock: Number(e.target.value),
+                        })
+                      }
+                    />
+                  )}
+                </FieldLabel>
+              </div>
+              {editingHandoutId ? (
                 <FieldLabel label="المخزون">
                   <input
                     className="field"
@@ -1099,7 +1268,7 @@ export default function RevenuePage() {
                     }
                   />
                 </FieldLabel>
-              </div>
+              ) : null}
               <p className="text-[11px] text-navy/45">
                 {Number(handoutForm.centerAmount || 0) >
                 Number(handoutForm.price || 0)
@@ -1109,28 +1278,68 @@ export default function RevenuePage() {
                       Number(handoutForm.centerAmount || 0)
                     ).toLocaleString('en-EG')} ج.م للنسخة`}
               </p>
-              <button
-                type="submit"
-                className="btn-primary w-full"
-                disabled={busy === 'handout'}
-              >
-                حفظ الملزمة
-              </button>
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  className="btn-primary flex-1"
+                  disabled={busy === 'handout'}
+                >
+                  {editingHandoutId ? 'حفظ التعديل' : 'حفظ الملزمة'}
+                </button>
+                {editingHandoutId ? (
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    onClick={cancelEditHandout}
+                  >
+                    إلغاء
+                  </button>
+                ) : null}
+              </div>
             </form>
             <ul className="mt-4 space-y-2 text-sm">
               {pHandouts.slice.map((h) => (
                 <li
                   key={h.id}
-                  className="rounded-xl bg-sand px-3 py-2 flex justify-between"
+                  className={`rounded-xl bg-sand px-3 py-2 ${
+                    editingHandoutId === h.id ? 'ring-2 ring-navy/25' : ''
+                  } ${h.isActive === false ? 'opacity-55' : ''}`}
                 >
-                  <span>
-                    <span className="font-semibold">{h.title}</span>
-                    <span className="text-[11px] text-navy/45 block">
-                      {Number(h.price).toLocaleString('en-EG')} · مخزون {h.stock}{' '}
-                      · سنتر{' '}
-                      {centerCutOf(h.price, h.teacherPercent, h.centerAmount)} ج.م
-                    </span>
+                  <span className="font-semibold block">{h.title}</span>
+                  <span className="text-[11px] text-navy/45 block">
+                    {h.teacher
+                      ? `${teacherName(h.teacher)} · `
+                      : ''}
+                    {Number(h.price).toLocaleString('en-EG')} · مخزون {h.stock}{' '}
+                    · سنتر{' '}
+                    {centerCutOf(h.price, h.teacherPercent, h.centerAmount)} ج.م
+                    {h.isActive === false ? ' · متوقف' : ''}
                   </span>
+                  {toOwner ? (
+                    <div className="mt-1 flex gap-3">
+                      <button
+                        type="button"
+                        className="text-xs font-bold text-navy/70 hover:underline"
+                        onClick={() => startEditHandout(h)}
+                      >
+                        تعديل
+                      </button>
+                      <button
+                        type="button"
+                        className="text-xs font-bold text-rose-700 hover:underline"
+                        disabled={busy === `handout-${h.id}`}
+                        onClick={() =>
+                          setConfirm({
+                            kind: 'handout',
+                            id: h.id,
+                            label: `${h.title} · مخزون ${h.stock} · ${h._count?.sales ?? 0} مبيعات`,
+                          })
+                        }
+                      >
+                        مسح الملزمة
+                      </button>
+                    </div>
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -1159,7 +1368,9 @@ export default function RevenuePage() {
                     })
                   }
                 >
-                  {handouts.map((h) => (
+                  {handouts
+                    .filter((h) => h.isActive !== false)
+                    .map((h) => (
                     <option key={h.id} value={h.id}>
                       {h.title} ({h.stock})
                     </option>
@@ -1234,11 +1445,108 @@ export default function RevenuePage() {
                 بيع
               </button>
             </form>
+            {editingHandoutSaleId ? (
+              <form
+                onSubmit={saveHandoutSale}
+                className="mt-4 rounded-xl border border-amber-200 bg-amber-50/50 p-3 space-y-2"
+              >
+                <p className="text-sm font-semibold text-navy">تعديل بيع ملزمة</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <FieldLabel label="الكمية">
+                    <input
+                      className="field"
+                      type="number"
+                      min={1}
+                      required
+                      value={handoutSaleForm.qty}
+                      onChange={(e) =>
+                        setHandoutSaleForm({
+                          ...handoutSaleForm,
+                          qty: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </FieldLabel>
+                  <FieldLabel label="موبايل المشتري">
+                    <input
+                      className="field"
+                      value={handoutSaleForm.buyerPhone}
+                      onChange={(e) =>
+                        setHandoutSaleForm({
+                          ...handoutSaleForm,
+                          buyerPhone: e.target.value,
+                        })
+                      }
+                    />
+                  </FieldLabel>
+                </div>
+                <FieldLabel label="الدفع">
+                  <select
+                    className="field"
+                    value={handoutSaleForm.method}
+                    onChange={(e) =>
+                      setHandoutSaleForm({
+                        ...handoutSaleForm,
+                        method: e.target.value,
+                      })
+                    }
+                  >
+                    <option value="CASH">كاش</option>
+                    <option value="VODAFONE_CASH">فودافون كاش</option>
+                  </select>
+                </FieldLabel>
+                {handoutSaleForm.method === 'VODAFONE_CASH' ? (
+                  <FieldLabel label="رقم العملية">
+                    <input
+                      className="field"
+                      required
+                      value={handoutSaleForm.vodafoneTxn}
+                      onChange={(e) =>
+                        setHandoutSaleForm({
+                          ...handoutSaleForm,
+                          vodafoneTxn: e.target.value,
+                        })
+                      }
+                    />
+                  </FieldLabel>
+                ) : null}
+                <FieldLabel label="ملاحظة">
+                  <input
+                    className="field"
+                    value={handoutSaleForm.note}
+                    onChange={(e) =>
+                      setHandoutSaleForm({
+                        ...handoutSaleForm,
+                        note: e.target.value,
+                      })
+                    }
+                  />
+                </FieldLabel>
+                <div className="flex gap-2">
+                  <button
+                    type="submit"
+                    className="btn-primary"
+                    disabled={busy === `hsave-${editingHandoutSaleId}`}
+                  >
+                    حفظ
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    onClick={cancelEditHandoutSale}
+                  >
+                    إلغاء
+                  </button>
+                </div>
+              </form>
+            ) : null}
             <ul className="mt-4 space-y-2 text-sm">
               {pHandoutSales.slice.map((s) => (
                 <li
                   key={s.id}
-                  className="rounded-xl border border-mist px-3 py-2"
+                  className={`rounded-xl border border-mist px-3 py-2 ${
+                    editingHandoutSaleId === s.id ? 'ring-2 ring-navy/25' : ''
+                  }`}
                 >
                   <p className="font-semibold">{s.product.title}</p>
                   <p className="text-[11px] text-navy/45">
@@ -1246,6 +1554,7 @@ export default function RevenuePage() {
                     {Number(s.teacherShare).toLocaleString('en-EG')} · سنتر{' '}
                     {Number(s.centerShare).toLocaleString('en-EG')} ·{' '}
                     {cashToLabel(s.cashTo)}
+                    {s.buyerPhone ? ` · ${s.buyerPhone}` : ''}
                   </p>
                   {s.payStatus === 'PENDING_CONFIRM' ? (
                     <button
@@ -1255,6 +1564,37 @@ export default function RevenuePage() {
                     >
                       تأكيد فودافون
                     </button>
+                  ) : null}
+                  {toOwner ? (
+                    <div className="mt-2 flex gap-3">
+                      {!s.settlementId ? (
+                        <button
+                          type="button"
+                          className="text-xs font-bold text-navy/70 hover:underline"
+                          onClick={() => startEditHandoutSale(s)}
+                        >
+                          تعديل
+                        </button>
+                      ) : (
+                        <span className="text-[11px] text-navy/40">
+                          متصفّى مع المدرس
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        className="text-xs font-bold text-rose-700 hover:underline"
+                        disabled={busy === `handoutSale-${s.id}`}
+                        onClick={() =>
+                          setConfirm({
+                            kind: 'handoutSale',
+                            id: s.id,
+                            label: `${s.product.title} · ×${s.qty} · ${Number(s.amount).toLocaleString('en-EG')} ج.م`,
+                          })
+                        }
+                      >
+                        مسح البيع
+                      </button>
+                    </div>
                   ) : null}
                 </li>
               ))}
@@ -1474,13 +1814,31 @@ export default function RevenuePage() {
       <AppDialog
         open={!!confirm}
         tone="danger"
-        title={confirm?.kind === 'offer' ? 'مسح عرض الأكواد' : 'مسح كود متباع'}
+        title={
+          confirm?.kind === 'offer'
+            ? 'مسح عرض الأكواد'
+            : confirm?.kind === 'handout'
+              ? 'مسح الملزمة'
+              : confirm?.kind === 'handoutSale'
+                ? 'مسح بيع ملزمة'
+                : 'مسح كود متباع'
+        }
         message={
           confirm?.kind === 'offer'
             ? `هيتشال العرض «${confirm.label}» وكل الأكواد والمبيعات المرتبطة بيه.`
-            : `هيتشال البيع والكود يرجع متاح.\n${confirm?.label || ''}`
+            : confirm?.kind === 'handout'
+              ? `هيتشال الملزمة «${confirm.label}» وكل مبيعاتها.`
+              : confirm?.kind === 'handoutSale'
+                ? `هيتشال البيع ويرجع المخزون.\n${confirm?.label || ''}`
+                : `هيتشال البيع والكود يرجع متاح.\n${confirm?.label || ''}`
         }
-        confirmLabel={busy.startsWith('sale-') || busy.startsWith('offer-') ? 'جاري المسح...' : 'مسح'}
+        confirmLabel={
+          busy.startsWith('sale-') ||
+          busy.startsWith('offer-') ||
+          busy.startsWith('handout')
+            ? 'جاري المسح...'
+            : 'مسح'
+        }
         cancelLabel="رجوع"
         onConfirm={() => void doDeleteConfirm()}
         onClose={() => setConfirm(null)}

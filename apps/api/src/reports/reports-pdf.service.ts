@@ -46,11 +46,6 @@ export class ReportsPdfService {
     const kpis = [
       ['Collected', `${Number(s.collected).toLocaleString('en-EG')} EGP`],
       ['Invoiced', `${Number(s.invoiced).toLocaleString('en-EG')} EGP`],
-      [
-        'Outstanding',
-        `${Number(s.outstandingAmount).toLocaleString('en-EG')} EGP`,
-      ],
-      ['Outstanding students', String(s.outstandingStudents)],
       ['Payments count', String(s.paymentsCount)],
       ['Teacher payables', `${Number(s.teacherPayables).toLocaleString('en-EG')} EGP`],
       ['Net estimate', `${Number(s.netEstimate).toLocaleString('en-EG')} EGP`],
@@ -74,17 +69,71 @@ export class ReportsPdfService {
       doc.text(line);
     }
 
+    doc.end();
+    return done;
+  }
+
+  async bookingsPdf(from?: string, to?: string): Promise<Buffer> {
+    const data = await this.reports.bookings(from, to);
+    const doc = new PDFDocument({ margin: 48, size: 'A4' });
+    const chunks: Buffer[] = [];
+    doc.on('data', (c: Buffer) => chunks.push(c));
+
+    const done = new Promise<Buffer>((resolve, reject) => {
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+    });
+
+    doc
+      .fillColor('#0B2545')
+      .fontSize(20)
+      .text(this.centerName(), { align: 'left' });
+    doc
+      .fillColor('#C99612')
+      .fontSize(11)
+      .text('BOOKING FORMS REPORT', { align: 'left' });
+    doc.moveDown(0.5);
+    doc
+      .fillColor('#334155')
+      .fontSize(10)
+      .text(
+        `Period: ${new Date(data.from).toISOString().slice(0, 10)} → ${new Date(data.to).toISOString().slice(0, 10)}`,
+      );
+    doc
+      .text(`Generated: ${new Date().toLocaleString('en-GB')}`)
+      .moveDown();
+
+    const s = data.summary;
+    for (const [label, value] of [
+      ['Submitted', String(s.submitted)],
+      ['Paid', String(s.paid)],
+      ['Paid amount', `${Number(s.paidAmount).toLocaleString('en-EG')} EGP`],
+      ['Pending', String(s.pending)],
+      ['Cancelled', String(s.cancelled)],
+    ] as const) {
+      doc
+        .fillColor('#475569')
+        .fontSize(10)
+        .text(`${label}: `, { continued: true })
+        .fillColor('#0B2545')
+        .text(value);
+    }
+
     doc.moveDown();
-    doc.fillColor('#0B2545').fontSize(13).text('Outstanding invoices').moveDown(0.4);
+    doc.fillColor('#0B2545').fontSize(13).text('By form').moveDown(0.4);
     doc.fillColor('#64748B').fontSize(9);
-    for (const inv of data.outstanding.slice(0, 40)) {
-      const due =
-        Number(inv.feeAmount) -
-        Number(inv.discount) +
-        Number(inv.extras) -
-        Number(inv.paidAmount);
+    for (const row of data.byForm) {
       doc.text(
-        `${inv.student.firstName} ${inv.student.lastName}  ${inv.status}  due ${Math.max(due, 0).toLocaleString('en-EG')} EGP`,
+        `${row.gradeLabel || row.label}  submitted ${row.submitted}  paid ${row.paid}  ${Number(row.amount).toLocaleString('en-EG')} EGP`,
+      );
+    }
+
+    doc.moveDown();
+    doc.fillColor('#0B2545').fontSize(13).text('Paid submissions').moveDown(0.4);
+    doc.fillColor('#64748B').fontSize(9);
+    for (const row of data.paid.slice(0, 50)) {
+      doc.text(
+        `${row.formSerial ?? '—'}  ${row.studentName}  ${row.studentPhone}  ${Number(row.totalAmount).toLocaleString('en-EG')} EGP  ${row.paymentMethod || ''}`,
       );
     }
 

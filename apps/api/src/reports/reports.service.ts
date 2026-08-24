@@ -11,7 +11,7 @@ export class ReportsService {
     const toDate = to ? new Date(to) : new Date();
     toDate.setHours(23, 59, 59, 999);
 
-    const [payments, invoices, payouts, outstanding] = await Promise.all([
+    const [payments, invoices, payouts] = await Promise.all([
       this.prisma.payment.findMany({
         where: { paidAt: { gte: fromDate, lte: toDate } },
         include: { student: true, invoice: { include: { group: true } } },
@@ -25,11 +25,6 @@ export class ReportsService {
         where: { createdAt: { gte: fromDate, lte: toDate } },
         include: { teacher: true },
       }),
-      this.prisma.invoice.findMany({
-        where: { status: { in: ['PENDING', 'PARTIAL', 'OVERDUE'] } },
-        include: { student: true, group: true },
-        orderBy: { dueDate: 'asc' },
-      }),
     ]);
 
     const collected = payments.reduce((s, p) => s + Number(p.amount), 0);
@@ -37,11 +32,6 @@ export class ReportsService {
       (s, i) => s + Number(i.feeAmount) - Number(i.discount) + Number(i.extras),
       0,
     );
-    const outstandingAmount = outstanding.reduce((s, i) => {
-      const due =
-        Number(i.feeAmount) - Number(i.discount) + Number(i.extras) - Number(i.paidAmount);
-      return s + Math.max(due, 0);
-    }, 0);
     const teacherPay = payouts.reduce(
       (s, p) => s + Number(p.grossAmount) - Number(p.deductions),
       0,
@@ -53,15 +43,132 @@ export class ReportsService {
       summary: {
         collected,
         invoiced,
-        outstandingAmount,
-        outstandingStudents: new Set(outstanding.map((o) => o.studentId)).size,
         paymentsCount: payments.length,
         teacherPayables: teacherPay,
         netEstimate: collected - teacherPay,
       },
       payments,
-      outstanding,
       payouts,
+    };
+  }
+
+  async bookings(from?: string, to?: string) {
+    const fromDate = from
+      ? new Date(from)
+      : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+    const toDate = to ? new Date(to) : new Date();
+    toDate.setHours(23, 59, 59, 999);
+
+    const [created, paid] = await Promise.all([
+      this.prisma.bookingSubmission.findMany({
+        where: { createdAt: { gte: fromDate, lte: toDate } },
+        include: {
+          form: { select: { id: true, title: true, gradeLabel: true, slug: true } },
+          selections: {
+            include: {
+              offering: {
+                select: { teacherName: true, subjectName: true, isOnline: true },
+              },
+            },
+          },
+        },
+        orderBy: [{ formSerial: 'desc' }, { createdAt: 'desc' }],
+      }),
+      this.prisma.bookingSubmission.findMany({
+        where: {
+          status: 'PAID',
+          paidAt: { gte: fromDate, lte: toDate },
+        },
+        include: {
+          form: { select: { id: true, title: true, gradeLabel: true, slug: true } },
+          selections: {
+            include: {
+              offering: {
+                select: { teacherName: true, subjectName: true, isOnline: true },
+              },
+            },
+          },
+        },
+        orderBy: { paidAt: 'desc' },
+      }),
+    ]);
+
+    const submitted = created.filter((s) => s.status !== 'CANCELLED');
+    const pending = created.filter((s) => s.status === 'SUBMITTED').length;
+    const cancelled = created.filter((s) => s.status === 'CANCELLED').length;
+    const paidAmount = paid.reduce((s, r) => s + Number(r.totalAmount), 0);
+
+    type FormAgg = {
+      formId: string;
+      label: string;
+      gradeLabel: string;
+      submitted: number;
+      paid: number;
+      amount: number;
+      pending: number;
+    };
+    const byFormMap = new Map<string, FormAgg>();
+    for (const s of created) {
+      const formId = s.formId;
+      const row = byFormMap.get(formId) || {
+        formId,
+        label: s.form?.title || s.formId,
+        gradeLabel: s.form?.gradeLabel || '',
+        submitted: 0,
+        paid: 0,
+        amount: 0,
+        pending: 0,
+      };
+      if (s.status !== 'CANCELLED') row.submitted += 1;
+      if (s.status === 'SUBMITTED') row.pending += 1;
+      byFormMap.set(formId, row);
+    }
+    for (const s of paid) {
+      const row = byFormMap.get(s.formId) || {
+        formId: s.formId,
+        label: s.form?.title || s.formId,
+        gradeLabel: s.form?.gradeLabel || '',
+        submitted: 0,
+        paid: 0,
+        amount: 0,
+        pending: 0,
+      };
+      row.paid += 1;
+      row.amount += Number(s.totalAmount);
+      byFormMap.set(s.formId, row);
+    }
+
+    const byMethodMap = new Map<string, { method: string; count: number; amount: number }>();
+    const byChannelMap = new Map<string, { channel: string; count: number; amount: number }>();
+    for (const s of paid) {
+      const method = s.paymentMethod || 'OTHER';
+      const m = byMethodMap.get(method) || { method, count: 0, amount: 0 };
+      m.count += 1;
+      m.amount += Number(s.totalAmount);
+      byMethodMap.set(method, m);
+
+      const channel = s.payChannel || 'center';
+      const c = byChannelMap.get(channel) || { channel, count: 0, amount: 0 };
+      c.count += 1;
+      c.amount += Number(s.totalAmount);
+      byChannelMap.set(channel, c);
+    }
+
+    return {
+      from: fromDate,
+      to: toDate,
+      summary: {
+        submitted: submitted.length,
+        paid: paid.length,
+        paidAmount,
+        pending,
+        cancelled,
+      },
+      byForm: Array.from(byFormMap.values()).sort((a, b) => b.amount - a.amount),
+      byMethod: Array.from(byMethodMap.values()).sort((a, b) => b.amount - a.amount),
+      byChannel: Array.from(byChannelMap.values()).sort((a, b) => b.amount - a.amount),
+      paid,
+      recent: created.slice(0, 80),
     };
   }
 

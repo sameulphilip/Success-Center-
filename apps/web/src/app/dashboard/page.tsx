@@ -10,8 +10,6 @@ import {
   CartesianGrid,
   Cell,
   Legend,
-  Line,
-  LineChart,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -178,20 +176,6 @@ type DashboardStats = {
   };
 };
 
-const STATUS_AR: Record<string, string> = {
-  PRESENT: 'حاضر',
-  ABSENT: 'غائب',
-  LATE: 'متأخر',
-  EXCUSED: 'بعذر',
-};
-
-const SOURCE_AR: Record<string, string> = {
-  MANUAL: 'يدوي',
-  QR_STUDENT: 'QR طالب',
-  QR_GATE: 'بوابة',
-  NFC_CARD: 'NFC',
-};
-
 const INVOICE_AR: Record<string, string> = {
   PENDING: 'معلّق',
   PARTIAL: 'جزئي',
@@ -209,8 +193,6 @@ const CHART = {
   excused: '#64748B',
   grid: '#E2E8F0',
 };
-
-const PIE_COLORS = ['#0B2545', '#C99612', '#163A5F', '#64748B', '#059669'];
 
 function money(n: number) {
   return `${Math.round(Number(n || 0)).toLocaleString('en-EG')} ج.م`;
@@ -295,37 +277,9 @@ export default function DashboardPage() {
     day: 'numeric',
   });
 
-  const attendancePie = useMemo(
-    () =>
-      (stats?.attendanceByStatus || []).map((a) => ({
-        name: STATUS_AR[a.status] || a.status,
-        value: a._count,
-        key: a.status,
-      })),
-    [stats],
-  );
-
-  const sourceBars = useMemo(
-    () =>
-      (stats?.attendanceBySource || []).map((a) => ({
-        source: SOURCE_AR[a.source] || a.source,
-        count: a._count,
-      })),
-    [stats],
-  );
-
   const collectionChart = useMemo(
     () =>
       (stats?.collectionTrend || []).map((d) => ({
-        ...d,
-        label: shortDay(d.date),
-      })),
-    [stats],
-  );
-
-  const attendanceRateChart = useMemo(
-    () =>
-      (stats?.attendanceTrend || []).map((d) => ({
         ...d,
         label: shortDay(d.date),
       })),
@@ -366,7 +320,6 @@ export default function DashboardPage() {
     return h * 60 + m >= nowMinutes - 30;
   });
   const pOpen = usePaged(stats?.ops?.openSessions || [], stats?.ops?.openSessions?.length);
-  const pAbs = usePaged(stats?.topAbsentees || [], stats?.topAbsentees?.length);
   const pTeach = usePaged(stats?.ops?.topTeachers || [], stats?.ops?.topTeachers?.length);
   const pPays = usePaged(stats?.recentPayments || [], stats?.recentPayments?.length);
 
@@ -406,7 +359,7 @@ export default function DashboardPage() {
               SUCCESS OPS
             </p>
             <p className="mt-2 text-sm text-white/60">
-              حسابات · تشغيل حصص · حضور — يُحدَّث كل دقيقة
+              حسابات · تشغيل حصص — يُحدَّث كل دقيقة
             </p>
           </div>
           <div className="grid grid-cols-3 gap-3 text-center">
@@ -440,16 +393,9 @@ export default function DashboardPage() {
           hint={`جدد هذا الشهر: ${k?.newStudentsMonth ?? 0}`}
         />
         <Kpi
-          label="المدرسون / المجموعات"
-          value={`${k?.totalTeachers ?? stats?.totalTeachers ?? 0} / ${k?.totalGroups ?? 0}`}
-          hint={`تسجيلات نشطة: ${k?.activeEnrollments ?? 0}`}
+          label="المدرسون"
+          value={k?.totalTeachers ?? stats?.totalTeachers ?? 0}
           accent="gold"
-        />
-        <Kpi
-          label="حضور اليوم"
-          value={k?.studentsPresent ?? stats?.studentsPresent ?? '—'}
-          hint={`غياب ${k?.studentsAbsent ?? 0} · تأخير ${k?.studentsLate ?? 0}`}
-          accent="green"
         />
         <Kpi
           label="تحصيل اليوم"
@@ -461,11 +407,6 @@ export default function DashboardPage() {
           label="تحصيل الشهر"
           value={money(k?.collectedMonth ?? 0)}
           hint={`${k?.paymentsMonthCount ?? 0} إيصال`}
-        />
-        <Kpi
-          label="تسجيلات اليوم"
-          value={k?.markedToday ?? '—'}
-          hint="كل حالات الحضور المسجّلة"
         />
       </div>
 
@@ -690,13 +631,13 @@ export default function DashboardPage() {
       </div>
 
       <div className="mt-4 grid gap-4 xl:grid-cols-5">
-        <section className="panel p-5 xl:col-span-3">
+        <section className="panel p-5 xl:col-span-5">
           <div className="mb-4 flex items-center justify-between gap-2">
             <div>
               <h3 className="section-title">اتجاه التحصيل (إيصالات)</h3>
               <p className="text-xs text-navy/45 mt-1">آخر 14 يوم</p>
             </div>
-            <span className="badge-gold">مالي</span>
+            <span className="badge-gold">إيصالات</span>
           </div>
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
@@ -730,124 +671,10 @@ export default function DashboardPage() {
             </ResponsiveContainer>
           </div>
         </section>
-
-        <section className="panel p-5 xl:col-span-2">
-          <div className="mb-4 flex items-center justify-between gap-2">
-            <div>
-              <h3 className="section-title">حضور اليوم</h3>
-              <p className="text-xs text-navy/45 mt-1">توزيع الحالات</p>
-            </div>
-            <span className="badge-navy">مباشر</span>
-          </div>
-          <div className="h-72">
-            {attendancePie.length ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={attendancePie}
-                    dataKey="value"
-                    nameKey="name"
-                    innerRadius={58}
-                    outerRadius={90}
-                    paddingAngle={3}
-                  >
-                    {attendancePie.map((entry, i) => (
-                      <Cell
-                        key={entry.key}
-                        fill={
-                          entry.key === 'PRESENT'
-                            ? CHART.present
-                            : entry.key === 'ABSENT'
-                              ? CHART.absent
-                              : entry.key === 'LATE'
-                                ? CHART.late
-                                : PIE_COLORS[i % PIE_COLORS.length]
-                        }
-                      />
-                    ))}
-                  </Pie>
-                  <Tooltip contentStyle={tooltipStyle} />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="h-full grid place-items-center text-sm text-navy/40">
-                لا يوجد حضور مسجّل اليوم بعد
-              </div>
-            )}
-          </div>
-        </section>
-      </div>
-
-      <div className="mt-4 grid gap-4 xl:grid-cols-5">
-        <section className="panel p-5 xl:col-span-3">
-          <div className="mb-4 flex items-center justify-between gap-2">
-            <div>
-              <h3 className="section-title">نسبة الحضور اليومية</h3>
-              <p className="text-xs text-navy/45 mt-1">آخر 14 يوم (%)</p>
-            </div>
-          </div>
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={attendanceRateChart}>
-                <CartesianGrid strokeDasharray="3 3" stroke={CHART.grid} vertical={false} />
-                <XAxis dataKey="label" tick={{ fill: '#64748b', fontSize: 11 }} />
-                <YAxis
-                  domain={[0, 100]}
-                  tick={{ fill: '#64748b', fontSize: 11 }}
-                  tickFormatter={(v) => `${v}%`}
-                />
-                <Tooltip
-                  contentStyle={tooltipStyle}
-                  formatter={(value: number) => [`${value}%`, 'نسبة الحضور']}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="rate"
-                  stroke={CHART.navy}
-                  strokeWidth={2.5}
-                  dot={{ r: 3, fill: CHART.gold }}
-                  activeDot={{ r: 5 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </section>
-
-        <section className="panel p-5 xl:col-span-2">
-          <div className="mb-4 flex items-center justify-between gap-2">
-            <div>
-              <h3 className="section-title">مصدر التسجيل</h3>
-              <p className="text-xs text-navy/45 mt-1">اليوم: يدوي / QR / NFC</p>
-            </div>
-          </div>
-          <div className="h-64">
-            {sourceBars.length ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={sourceBars} layout="vertical" margin={{ left: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={CHART.grid} horizontal={false} />
-                  <XAxis type="number" allowDecimals={false} tick={{ fill: '#64748b', fontSize: 11 }} />
-                  <YAxis
-                    type="category"
-                    dataKey="source"
-                    width={72}
-                    tick={{ fill: '#64748b', fontSize: 11 }}
-                  />
-                  <Tooltip contentStyle={tooltipStyle} />
-                  <Bar dataKey="count" fill={CHART.navy} radius={[0, 8, 8, 0]} barSize={18} />
-                </BarChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="h-full grid place-items-center text-sm text-navy/40">
-                لا توجد بيانات مصادر بعد
-              </div>
-            )}
-          </div>
-        </section>
       </div>
 
       {/* Tables / lists */}
-      <div className="mt-4 grid gap-4 xl:grid-cols-2">
+      <div className="mt-4 grid gap-4">
         <section className="panel p-5">
           <div className="mb-4 flex items-center justify-between">
             <h3 className="section-title">جدول اليوم</h3>
@@ -869,12 +696,8 @@ export default function DashboardPage() {
                     </p>
                     <span className="text-[11px] text-navy/45">{s.classroom}</span>
                   </div>
-                  <p className="text-sm text-navy/80 mt-1">
-                    {s.subject} — {s.groupName}
-                  </p>
-                  <p className="text-xs text-navy/45 mt-0.5">
-                    {s.teacher || '—'} · {s.enrolled} طالب
-                  </p>
+                  <p className="text-sm text-navy/80 mt-1">{s.subject}</p>
+                  <p className="text-xs text-navy/45 mt-0.5">{s.teacher || '—'}</p>
                 </div>
               ))}
             {!stats?.todaySchedule?.length ? (
@@ -883,56 +706,6 @@ export default function DashboardPage() {
               </p>
             ) : null}
           </div>
-        </section>
-
-        <section className="panel p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <h3 className="section-title">أعلى الغياب (الشهر)</h3>
-            <Link href="/reports" className="text-xs font-semibold text-gold-deep">
-              تقرير الحضور
-            </Link>
-          </div>
-          <div className="space-y-2">
-            {pAbs.slice.map((a, idx) => (
-              <Link
-                key={a.studentId}
-                href={`/students/${a.studentId}`}
-                className="flex items-center justify-between gap-3 rounded-xl bg-sand px-3 py-2.5 hover:bg-amber-50 transition"
-              >
-                <div className="min-w-0 flex items-center gap-3">
-                  <span className="grid h-7 w-7 place-items-center rounded-full bg-navy text-[11px] font-bold text-white">
-                    {pAbs.from + idx}
-                  </span>
-                  <div className="min-w-0">
-                    <p className="font-semibold text-navy truncate">{a.name}</p>
-                    <p className="text-[11px] text-navy/40 font-mono truncate">
-                      {a.studentUid}
-                    </p>
-                  </div>
-                </div>
-                <div className="text-left shrink-0">
-                  <p className="font-extrabold text-red-600 tabular-nums">
-                    {a.absent}
-                  </p>
-                  <p className="text-[10px] text-navy/40">غياب</p>
-                </div>
-              </Link>
-            ))}
-            {!stats?.topAbsentees?.length ? (
-              <p className="text-sm text-navy/45 py-8 text-center">
-                لا يوجد غياب ملحوظ هذا الشهر
-              </p>
-            ) : null}
-          </div>
-          <TablePager
-            page={pAbs.page}
-            pages={pAbs.pages}
-            total={pAbs.total}
-            size={pAbs.size}
-            from={pAbs.from}
-            to={pAbs.to}
-            onPage={pAbs.setPage}
-          />
         </section>
       </div>
 
@@ -1020,7 +793,6 @@ export default function DashboardPage() {
               <thead>
                 <tr>
                   <th>الطالب</th>
-                  <th>المجموعة</th>
                   <th>الإيصال</th>
                   <th>المبلغ</th>
                 </tr>
@@ -1031,7 +803,6 @@ export default function DashboardPage() {
                     <td className="font-semibold">
                       {p.student.firstName} {p.student.lastName}
                     </td>
-                    <td>{p.invoice?.group?.name || '—'}</td>
                     <td className="font-mono text-xs">{p.receiptNumber}</td>
                     <td className="font-bold tabular-nums">
                       {Number(p.amount).toLocaleString('en-EG')}

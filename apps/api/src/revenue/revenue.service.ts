@@ -519,6 +519,292 @@ export class RevenueService {
     });
   }
 
+  async updateHandout(
+    id: string,
+    data: {
+      title?: string;
+      price?: number;
+      teacherPercent?: number;
+      centerAmount?: number;
+      teacherId?: string | null;
+      stock?: number;
+      isActive?: boolean;
+    },
+  ) {
+    const product = await this.prisma.handoutProduct.findUnique({
+      where: { id },
+    });
+    if (!product) throw new NotFoundException('الملزمة غير موجودة');
+
+    const price =
+      data.price != null && !Number.isNaN(Number(data.price))
+        ? Number(data.price)
+        : Number(product.price);
+    if (price < 0) throw new BadRequestException('السعر غير صالح');
+
+    const hasShare =
+      data.centerAmount != null ||
+      data.teacherPercent != null ||
+      data.price != null;
+    let center = storedCenter(product);
+    let teacherPercent = Number(product.teacherPercent);
+    if (hasShare) {
+      center =
+        data.centerAmount != null && !Number.isNaN(Number(data.centerAmount))
+          ? Number(data.centerAmount)
+          : data.teacherPercent != null
+            ? Math.round(
+                price * (1 - Number(data.teacherPercent) / 100) * 100,
+              ) / 100
+            : storedCenter({ ...product, price });
+      if (center < 0) {
+        throw new BadRequestException('مبلغ السنتر غير صالح');
+      }
+      teacherPercent = teacherPercentFromCenter(price, center);
+    }
+
+    if (data.stock != null && (Number.isNaN(Number(data.stock)) || data.stock < 0)) {
+      throw new BadRequestException('المخزون غير صالح');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.handoutProduct.update({
+        where: { id },
+        data: {
+          ...(data.title != null ? { title: data.title.trim() } : {}),
+          price,
+          teacherPercent,
+          centerAmount: center,
+          ...(data.teacherId !== undefined
+            ? { teacherId: data.teacherId || null }
+            : {}),
+          ...(data.stock != null ? { stock: Math.floor(Number(data.stock)) } : {}),
+          ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+        },
+      });
+
+      let updatedSales = 0;
+      if (hasShare) {
+        const sales = await tx.handoutSale.findMany({
+          where: { productId: id },
+          select: { id: true, qty: true },
+        });
+        for (const sale of sales) {
+          const { teacherShare, centerShare } = splitExtraRevenue(
+            price,
+            center,
+            sale.qty,
+          );
+          await tx.handoutSale.update({
+            where: { id: sale.id },
+            data: {
+              unitPrice: price,
+              amount: price * sale.qty,
+              teacherShare,
+              centerShare,
+            },
+          });
+          updatedSales += 1;
+        }
+      }
+
+      const full = await tx.handoutProduct.findUniqueOrThrow({
+        where: { id: updated.id },
+        include: {
+          teacher: true,
+          _count: { select: { sales: true } },
+        },
+      });
+      return { ...full, updatedSales };
+    });
+  }
+
+  private async unwindHandoutSale(
+    tx: Prisma.TransactionClient,
+    sale: {
+      id: string;
+      productId: string;
+      qty: number;
+      amount: unknown;
+      teacherShare: unknown;
+      centerShare: unknown;
+      settlementId: string | null;
+    },
+    restoreStock: boolean,
+  ) {
+    if (sale.settlementId) {
+      const st = await tx.extraTeacherSettlement.findUnique({
+        where: { id: sale.settlementId },
+      });
+      if (st) {
+        const teacherPaid = Math.max(
+          0,
+          Number(st.teacherPaid) - Number(sale.teacherShare || 0),
+        );
+        const centerToSafe = Math.max(
+          0,
+          Number(st.centerToSafe) - Number(sale.centerShare || 0),
+        );
+        const grossAmount = Math.max(
+          0,
+          Number(st.grossAmount) - Number(sale.amount || 0),
+        );
+        const handoutCount = Math.max(0, st.handoutCount - 1);
+        if (st.onlineCount === 0 && handoutCount === 0) {
+          await tx.handoutSale.delete({ where: { id: sale.id } });
+          await tx.extraTeacherSettlement.delete({ where: { id: st.id } });
+        } else {
+          await tx.handoutSale.delete({ where: { id: sale.id } });
+          await tx.extraTeacherSettlement.update({
+            where: { id: st.id },
+            data: { teacherPaid, centerToSafe, grossAmount, handoutCount },
+          });
+        }
+      } else {
+        await tx.handoutSale.delete({ where: { id: sale.id } });
+      }
+    } else {
+      await tx.handoutSale.delete({ where: { id: sale.id } });
+    }
+    if (restoreStock) {
+      await tx.handoutProduct.update({
+        where: { id: sale.productId },
+        data: { stock: { increment: sale.qty } },
+      });
+    }
+  }
+
+  async deleteHandout(id: string) {
+    const product = await this.prisma.handoutProduct.findUnique({
+      where: { id },
+      select: { id: true, title: true },
+    });
+    if (!product) throw new NotFoundException('الملزمة غير موجودة');
+    await this.prisma.$transaction(async (tx) => {
+      const sales = await tx.handoutSale.findMany({
+        where: { productId: id },
+        select: {
+          id: true,
+          productId: true,
+          qty: true,
+          amount: true,
+          teacherShare: true,
+          centerShare: true,
+          settlementId: true,
+        },
+      });
+      for (const sale of sales) {
+        await this.unwindHandoutSale(tx, sale, false);
+      }
+      await tx.handoutProduct.delete({ where: { id } });
+    });
+    return { ok: true, deletedId: id, title: product.title };
+  }
+
+  async updateHandoutSale(
+    id: string,
+    data: {
+      qty?: number;
+      method?: SessionPayMethod;
+      vodafoneTxn?: string | null;
+      buyerPhone?: string | null;
+      note?: string | null;
+    },
+  ) {
+    const sale = await this.prisma.handoutSale.findUnique({
+      where: { id },
+      include: { product: true },
+    });
+    if (!sale) throw new NotFoundException('البيع غير موجود');
+    if (sale.settlementId) {
+      throw new BadRequestException(
+        'البيع اتتصفى مع المدرس — مفيش تعديل بعد التصفية',
+      );
+    }
+
+    const qty =
+      data.qty != null ? Math.max(1, Math.floor(Number(data.qty))) : sale.qty;
+    if (!Number.isFinite(qty) || qty < 1) {
+      throw new BadRequestException('الكمية غير صالحة');
+    }
+
+    const method = data.method ?? sale.method;
+    const vodafoneTxn =
+      data.vodafoneTxn !== undefined
+        ? data.vodafoneTxn?.trim() || null
+        : sale.vodafoneTxn;
+    if (method === SessionPayMethod.VODAFONE_CASH && !vodafoneTxn) {
+      throw new BadRequestException('رقم عملية فودافون مطلوب');
+    }
+
+    const unitPrice = Number(sale.product.price);
+    const { teacherShare, centerShare } = splitExtraRevenue(
+      unitPrice,
+      storedCenter(sale.product),
+      qty,
+    );
+    const qtyDelta = qty - sale.qty;
+
+    return this.prisma.$transaction(async (tx) => {
+      if (qtyDelta !== 0) {
+        const product = await tx.handoutProduct.findUnique({
+          where: { id: sale.productId },
+        });
+        if (!product) throw new NotFoundException('الملزمة غير موجودة');
+        if (qtyDelta > 0 && product.stock < qtyDelta) {
+          throw new BadRequestException('المخزون غير كافٍ');
+        }
+        await tx.handoutProduct.update({
+          where: { id: sale.productId },
+          data: { stock: { decrement: qtyDelta } },
+        });
+      }
+
+      const isCash = method === SessionPayMethod.CASH;
+      return tx.handoutSale.update({
+        where: { id },
+        data: {
+          qty,
+          unitPrice,
+          amount: unitPrice * qty,
+          teacherShare,
+          centerShare,
+          method,
+          vodafoneTxn,
+          ...(data.buyerPhone !== undefined
+            ? {
+                buyerPhone: data.buyerPhone
+                  ? normalizePhone(data.buyerPhone)
+                  : null,
+              }
+            : {}),
+          ...(data.note !== undefined ? { note: data.note } : {}),
+          ...(isCash && sale.payStatus === SessionPayStatus.PENDING_CONFIRM
+            ? {
+                payStatus: SessionPayStatus.CONFIRMED,
+                confirmedAt: new Date(),
+              }
+            : !isCash && sale.payStatus === SessionPayStatus.CONFIRMED
+              ? {
+                  payStatus: SessionPayStatus.PENDING_CONFIRM,
+                  confirmedAt: null,
+                }
+              : {}),
+        },
+        include: { product: true, student: true, session: true },
+      });
+    });
+  }
+
+  async deleteHandoutSale(id: string) {
+    const sale = await this.prisma.handoutSale.findUnique({ where: { id } });
+    if (!sale) throw new NotFoundException('البيع غير موجود');
+    await this.prisma.$transaction((tx) =>
+      this.unwindHandoutSale(tx, sale, true),
+    );
+    return { ok: true, deletedId: id };
+  }
+
   async sellHandout(
     productId: string,
     data: {

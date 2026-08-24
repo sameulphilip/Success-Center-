@@ -159,6 +159,28 @@ export class RevenueController {
     return this.revenue.confirmHandoutSale(id, user?.userId);
   }
 
+  @Patch('handouts/sales/:id')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  updateHandoutSale(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      qty?: number;
+      method?: SessionPayMethod;
+      vodafoneTxn?: string | null;
+      buyerPhone?: string | null;
+      note?: string | null;
+    },
+  ) {
+    return this.revenue.updateHandoutSale(id, body);
+  }
+
+  @Delete('handouts/sales/:id')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  deleteHandoutSale(@Param('id') id: string) {
+    return this.revenue.deleteHandoutSale(id);
+  }
+
   @Get('handouts')
   handouts() {
     return this.revenue.listHandouts();
@@ -178,6 +200,48 @@ export class RevenueController {
     },
   ) {
     return this.revenue.createHandout(body);
+  }
+
+  @Post('handouts/:id/update')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  updateHandoutPost(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      title?: string;
+      price?: number;
+      teacherPercent?: number;
+      centerAmount?: number;
+      teacherId?: string | null;
+      stock?: number;
+      isActive?: boolean;
+    },
+  ) {
+    return this.revenue.updateHandout(id, body);
+  }
+
+  @Patch('handouts/:id')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  updateHandout(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      title?: string;
+      price?: number;
+      teacherPercent?: number;
+      centerAmount?: number;
+      teacherId?: string | null;
+      stock?: number;
+      isActive?: boolean;
+    },
+  ) {
+    return this.revenue.updateHandout(id, body);
+  }
+
+  @Delete('handouts/:id')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  deleteHandout(@Param('id') id: string) {
+    return this.revenue.deleteHandout(id);
   }
 
   @Post('handouts/:id/sell')

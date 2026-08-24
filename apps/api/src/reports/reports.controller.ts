@@ -32,6 +32,11 @@ export class ReportsController {
     return this.reports.finance(from, to);
   }
 
+  @Get('bookings')
+  bookings(@Query('from') from?: string, @Query('to') to?: string) {
+    return this.reports.bookings(from, to);
+  }
+
   @Get('attendance')
   attendance(
     @Query('from') from?: string,
@@ -54,6 +59,19 @@ export class ReportsController {
   ) {
     const buffer = await this.pdf.financePdf(from, to);
     const filename = `finance-${from || 'from'}-${to || 'to'}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
+  }
+
+  @Get('bookings/pdf')
+  async bookingsPdf(
+    @Res() res: Response,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    const buffer = await this.pdf.bookingsPdf(from, to);
+    const filename = `bookings-${from || 'from'}-${to || 'to'}.pdf`;
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(buffer);
