@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AppShell } from '@/components/AppShell';
 import { PageHeader } from '@/components/PageHeader';
 import {
@@ -13,6 +13,14 @@ import {
 import { TablePager, usePaged } from '@/components/TablePager';
 import { api, downloadFile } from '@/lib/api';
 import { AppDialog } from '@/components/AppDialog';
+import {
+  reportPrintHref,
+  SECTION_LABELS,
+  TAB_LABELS,
+  TAB_SECTIONS,
+  type ReportSection,
+  type ReportTab,
+} from '@/lib/report-print';
 
 function monthStart() {
   const d = new Date();
@@ -27,13 +35,13 @@ function money(n: number | string | undefined | null) {
   return `${Number(n || 0).toLocaleString('en-EG')} EGP`;
 }
 
-type Tab = 'finance' | 'attendance' | 'profit' | 'bookings';
+type Tab = ReportTab;
 
 export default function ReportsPage() {
   const [from, setFrom] = useState(monthStart());
   const [to, setTo] = useState(today());
   const [finance, setFinance] = useState<any>(null);
-  const [attendance, setAttendance] = useState<any>(null);
+  const [teachers, setTeachers] = useState<any>(null);
   const [profit, setProfit] = useState<any>(null);
   const [bookings, setBookings] = useState<any>(null);
   const [tab, setTab] = useState<Tab>('profit');
@@ -41,6 +49,39 @@ export default function ReportsPage() {
   const [exporting, setExporting] = useState(false);
   const [payoutBusy, setPayoutBusy] = useState<string>('');
   const [notice, setNotice] = useState('');
+  const [openTeacherId, setOpenTeacherId] = useState('');
+  const [printOpen, setPrintOpen] = useState(false);
+  const [printTab, setPrintTab] = useState<Tab>('profit');
+  const [printSections, setPrintSections] = useState<ReportSection[]>([]);
+  const [printShowCollected, setPrintShowCollected] = useState(true);
+
+  const printOptions = useMemo(() => TAB_SECTIONS[printTab], [printTab]);
+
+  function openPrintPicker(forTab: Tab, preset?: ReportSection[]) {
+    setPrintTab(forTab);
+    setPrintSections(preset?.length ? [...preset] : [...TAB_SECTIONS[forTab]]);
+    setPrintShowCollected(true);
+    setPrintOpen(true);
+  }
+
+  function togglePrintSection(section: ReportSection) {
+    setPrintSections((prev) =>
+      prev.includes(section)
+        ? prev.filter((s) => s !== section)
+        : [...prev, section],
+    );
+  }
+
+  function confirmPrint() {
+    if (!printSections.length) {
+      queueMicrotask(() => setPrintOpen(true));
+      return;
+    }
+    const href = reportPrintHref(printTab, from, to, printSections, {
+      hideCollected: printTab === 'teachers' && !printShowCollected,
+    });
+    window.open(href, '_blank', 'noopener,noreferrer');
+  }
 
   async function createPayoutFromProfit(teacherId: string, label: string) {
     if (!teacherId || teacherId === 'center-only') {
@@ -70,14 +111,14 @@ export default function ReportsPage() {
   async function load() {
     setError('');
     try {
-      const [f, a, p, b] = await Promise.all([
+      const [f, t, p, b] = await Promise.all([
         api<any>(`/reports/finance?from=${from}&to=${to}`),
-        api<any>(`/reports/attendance?from=${from}&to=${to}`),
+        api<any>(`/reports/teachers?from=${from}&to=${to}`),
         api<any>(`/reports/profit?from=${from}&to=${to}`),
         api<any>(`/reports/bookings?from=${from}&to=${to}`),
       ]);
       setFinance(f);
-      setAttendance(a);
+      setTeachers(t);
       setProfit(p);
       setBookings(b);
     } catch (e) {
@@ -92,16 +133,16 @@ export default function ReportsPage() {
       const path =
         tab === 'finance'
           ? `/reports/finance/pdf?from=${from}&to=${to}`
-          : tab === 'attendance'
-            ? `/reports/attendance/pdf?from=${from}&to=${to}`
+          : tab === 'teachers'
+            ? `/reports/teachers/pdf?from=${from}&to=${to}`
             : tab === 'bookings'
               ? `/reports/bookings/pdf?from=${from}&to=${to}`
               : `/reports/profit/pdf?from=${from}&to=${to}`;
       const name =
         tab === 'finance'
           ? `finance-${from}-${to}.pdf`
-          : tab === 'attendance'
-            ? `attendance-${from}-${to}.pdf`
+          : tab === 'teachers'
+            ? `teachers-${from}-${to}.pdf`
             : tab === 'bookings'
               ? `bookings-${from}-${to}.pdf`
               : `profit-${from}-${to}.pdf`;
@@ -121,7 +162,10 @@ export default function ReportsPage() {
   const pSubjects = usePaged(profit?.bySubject || [], `s:${from}:${to}`);
   const pRooms = usePaged(profit?.byRoom || [], `r:${from}:${to}`);
   const pPays = usePaged(finance?.payments || [], `p:${from}:${to}`);
-  const pAbsents = usePaged(attendance?.byStudent || [], `a:${from}:${to}`);
+  const pTeacherSessions = usePaged(
+    teachers?.byTeacher || [],
+    `ts:${from}:${to}`,
+  );
   const pBookingForms = usePaged(bookings?.byForm || [], `bf:${from}:${to}`);
   const pBookingPaid = usePaged(bookings?.paid || [], `bp:${from}:${to}`);
 
@@ -140,7 +184,7 @@ export default function ReportsPage() {
     <AppShell>
       <PageHeader
         title="التقارير"
-        subtitle="ربحية · مالي · استمارات · حضور · تصدير PDF"
+        subtitle="ربحية · مالي · استمارات · مدرسين · طباعة وتصدير PDF"
         action={
           <div className="flex flex-wrap gap-2 items-end">
             <label className="text-xs text-navy/50">
@@ -163,6 +207,13 @@ export default function ReportsPage() {
             </label>
             <button type="button" className="btn-ghost" onClick={() => void load()}>
               تحديث
+            </button>
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={() => openPrintPicker(tab)}
+            >
+              طباعة التقرير
             </button>
             <button
               type="button"
@@ -217,7 +268,7 @@ export default function ReportsPage() {
             ['profit', 'ربحية'],
             ['finance', 'مالي'],
             ['bookings', 'استمارات'],
-            ['attendance', 'حضور'],
+            ['teachers', 'مدرسين'],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -233,6 +284,9 @@ export default function ReportsPage() {
 
       {tab === 'profit' && profit ? (
         <>
+          <div className="mb-2 flex justify-end">
+            <button type="button" className="btn-ghost text-xs" onClick={() => openPrintPicker('profit', ['summary'])}>طباعة الملخص</button>
+          </div>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <KpiCard
               label="إجمالي التحصيل"
@@ -277,7 +331,12 @@ export default function ReportsPage() {
           </div>
 
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
-            <SectionCard title="حسب المدرس">
+            <SectionCard
+              title="حسب المدرس"
+              action={
+                <button type="button" className="btn-ghost text-xs" onClick={() => openPrintPicker('profit', ['by-teacher'])}>طباعة</button>
+              }
+            >
               <div className="table-scroll">
                 <table className="data-table">
                   <thead>
@@ -335,7 +394,12 @@ export default function ReportsPage() {
               />
             </SectionCard>
 
-            <SectionCard title="حسب المادة">
+            <SectionCard
+              title="حسب المادة"
+              action={
+                <button type="button" className="btn-ghost text-xs" onClick={() => openPrintPicker('profit', ['by-subject'])}>طباعة</button>
+              }
+            >
               <div className="table-scroll">
                 <table className="data-table">
                   <thead>
@@ -372,7 +436,12 @@ export default function ReportsPage() {
               />
             </SectionCard>
 
-            <SectionCard title="حسب القاعة (تأجير)">
+            <SectionCard
+              title="حسب القاعة (تأجير)"
+              action={
+                <button type="button" className="btn-ghost text-xs" onClick={() => openPrintPicker('profit', ['by-room'])}>طباعة</button>
+              }
+            >
               <div className="table-scroll">
                 <table className="data-table">
                   <thead>
@@ -409,7 +478,12 @@ export default function ReportsPage() {
               />
             </SectionCard>
 
-            <SectionCard title="آخر الحصص المقفلة">
+            <SectionCard
+              title="آخر الحصص المقفلة"
+              action={
+                <button type="button" className="btn-ghost text-xs" onClick={() => openPrintPicker('profit', ['recent-sessions'])}>طباعة</button>
+              }
+            >
               <ul className="space-y-2 text-sm max-h-96 overflow-auto">
                 {profit.recentSessions.slice(0, 8).map((s: any) => (
                   <li
@@ -445,6 +519,9 @@ export default function ReportsPage() {
 
       {tab === 'finance' && finance ? (
         <>
+          <div className="mb-2 flex justify-end">
+            <button type="button" className="btn-ghost text-xs" onClick={() => openPrintPicker('finance', ['summary'])}>طباعة الملخص</button>
+          </div>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <KpiCard
               label="التحصيل"
@@ -468,7 +545,12 @@ export default function ReportsPage() {
           </div>
 
           <div className="mt-4">
-            <SectionCard title="آخر المدفوعات">
+            <SectionCard
+              title="آخر المدفوعات"
+              action={
+                <button type="button" className="btn-ghost text-xs" onClick={() => openPrintPicker('finance', ['payments'])}>طباعة</button>
+              }
+            >
               <div className="table-scroll">
                 <table className="data-table">
                   <thead>
@@ -514,6 +596,15 @@ export default function ReportsPage() {
 
       {tab === 'bookings' && bookings ? (
         <>
+          <div className="mb-2 flex justify-end">
+            <button
+              type="button"
+              className="btn-ghost text-xs"
+              onClick={() => openPrintPicker('bookings', ['summary'])}
+            >
+              طباعة الملخص
+            </button>
+          </div>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <KpiCard
               label="استمارات مسجّلة"
@@ -557,7 +648,12 @@ export default function ReportsPage() {
           </div>
 
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
-            <SectionCard title="حسب الاستمارة">
+            <SectionCard
+              title="حسب الاستمارة"
+              action={
+                <button type="button" className="btn-ghost text-xs" onClick={() => openPrintPicker('bookings', ['by-form'])}>طباعة</button>
+              }
+            >
               <div className="table-scroll">
                 <table className="data-table">
                   <thead>
@@ -602,7 +698,12 @@ export default function ReportsPage() {
               />
             </SectionCard>
 
-            <SectionCard title="الاستمارات المدفوعة">
+            <SectionCard
+              title="الاستمارات المدفوعة"
+              action={
+                <button type="button" className="btn-ghost text-xs" onClick={() => openPrintPicker('bookings', ['paid'])}>طباعة</button>
+              }
+            >
               <div className="table-scroll">
                 <table className="data-table">
                   <thead>
@@ -664,87 +765,147 @@ export default function ReportsPage() {
         </>
       ) : null}
 
-      {tab === 'attendance' && attendance ? (
+      {tab === 'teachers' && teachers ? (
         <>
+          <div className="mb-2 flex justify-end">
+            <button
+              type="button"
+              className="btn-ghost text-xs"
+              onClick={() => openPrintPicker('teachers', ['summary'])}
+            >
+              طباعة الملخص
+            </button>
+          </div>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <KpiCard label="سجلات" value={attendance.summary.totalRecords} />
+            <KpiCard
+              label="مدرسين"
+              value={teachers.summary.teachers}
+              accent="gold"
+            />
+            <KpiCard label="جلسات" value={teachers.summary.sessions} />
             <KpiCard
               label="حضور"
-              value={attendance.summary.present}
+              value={teachers.summary.present}
+              hint={`مسجّل ${teachers.summary.registered}`}
               accent="green"
             />
             <KpiCard
-              label="غياب"
-              value={attendance.summary.absent}
-              accent="red"
-            />
-            <KpiCard
-              label="طلاب متابعون"
-              value={attendance.summary.uniqueStudents}
-              accent="gold"
+              label="تحصيل الجلسات"
+              value={money(teachers.summary.collected)}
             />
           </div>
 
-          <div className="mt-4 grid gap-4 lg:grid-cols-2">
-            <SectionCard title="أكثر الطلاب غيابًا">
-              <div className="table-scroll">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>الطالب</th>
-                      <th>حاضر</th>
-                      <th>غائب</th>
-                      <th>متأخر</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pAbsents.slice.map((row: any) => (
-                      <tr key={row.student.id}>
-                        <td>
-                          {row.student.firstName} {row.student.lastName}
-                        </td>
-                        <td>{row.present}</td>
-                        <td className="font-bold text-amber-800">{row.absent}</td>
-                        <td>{row.late}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+          <div className="mt-4">
+            <SectionCard
+              title="المدرسين والجلسات"
+              action={
+                <button
+                  type="button"
+                  className="btn-ghost text-xs"
+                  onClick={() =>
+                    openPrintPicker('teachers', ['teachers-sessions'])
+                  }
+                >
+                  طباعة
+                </button>
+              }
+            >
+              <div className="space-y-3">
+                {pTeacherSessions.slice.map((t: any) => {
+                  const open = openTeacherId === t.teacherId;
+                  return (
+                    <div
+                      key={t.teacherId}
+                      className="rounded-xl border border-mist bg-white overflow-hidden"
+                    >
+                      <button
+                        type="button"
+                        className="w-full text-right px-4 py-3 hover:bg-sand/60 transition"
+                        onClick={() =>
+                          setOpenTeacherId(open ? '' : t.teacherId)
+                        }
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <p className="font-extrabold text-navy">{t.name}</p>
+                            <p className="text-[12px] text-navy/50 mt-0.5">
+                              {t.sessionsCount} جلسة · حضور {t.presentCount} ·
+                              مسجّل {t.registeredCount}
+                            </p>
+                          </div>
+                          <div className="text-left">
+                            <p className="tabular-nums font-black text-navy">
+                              {money(t.collected)}
+                            </p>
+                            <p className="text-[11px] text-navy/40">
+                              {open ? 'إخفاء الجلسات' : 'عرض الجلسات'}
+                            </p>
+                          </div>
+                        </div>
+                      </button>
+                      {open ? (
+                        <div className="border-t border-mist px-3 py-2 bg-sand/30">
+                          <div className="table-scroll">
+                            <table className="data-table">
+                              <thead>
+                                <tr>
+                                  <th>التاريخ</th>
+                                  <th>المادة</th>
+                                  <th>الحالة</th>
+                                  <th>حضور</th>
+                                  <th>مسجّل</th>
+                                  <th>التحصيل</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {t.sessions.map((s: any) => (
+                                  <tr key={s.id}>
+                                    <td className="tabular-nums text-xs">
+                                      {s.sessionDate}
+                                    </td>
+                                    <td>
+                                      <span className="font-medium">
+                                        {s.subject}
+                                      </span>
+                                      {s.title ? (
+                                        <span className="block text-[11px] text-navy/40">
+                                          {s.title}
+                                        </span>
+                                      ) : null}
+                                    </td>
+                                    <td className="text-xs">
+                                      {s.status === 'CLOSED' ? 'مقفولة' : 'مفتوحة'}
+                                    </td>
+                                    <td className="font-bold tabular-nums text-navy">
+                                      {s.present}
+                                    </td>
+                                    <td className="tabular-nums">{s.registered}</td>
+                                    <td className="tabular-nums font-bold">
+                                      {money(s.collected)}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+                {!teachers.byTeacher?.length ? (
+                  <EmptyState>لا توجد جلسات في الفترة</EmptyState>
+                ) : null}
               </div>
               <TablePager
-                page={pAbsents.page}
-                pages={pAbsents.pages}
-                total={pAbsents.total}
-                size={pAbsents.size}
-                from={pAbsents.from}
-                to={pAbsents.to}
-                onPage={pAbsents.setPage}
+                page={pTeacherSessions.page}
+                pages={pTeacherSessions.pages}
+                total={pTeacherSessions.total}
+                size={pTeacherSessions.size}
+                from={pTeacherSessions.from}
+                to={pTeacherSessions.to}
+                onPage={pTeacherSessions.setPage}
               />
-            </SectionCard>
-
-            <SectionCard title="سجل الغياب">
-              <ul className="space-y-2 text-sm max-h-96 overflow-auto">
-                {attendance.absentees.slice(0, 8).map((a: any) => (
-                  <li
-                    key={a.id}
-                    className="flex justify-between gap-3 rounded-xl bg-sand px-3 py-2"
-                  >
-                    <span>
-                      {a.student.firstName} {a.student.lastName}
-                      <span className="text-navy/45">
-                        {' '}
-                        — {a.session.group.subject.nameEn}
-                      </span>
-                    </span>
-                    <span className="text-xs text-navy/40">
-                      {String(a.markedAt).slice(0, 10)}
-                    </span>
-                  </li>
-                ))}
-                {!attendance.absentees.length ? (
-                  <EmptyState>لا يوجد غياب في الفترة</EmptyState>
-                ) : null}
-              </ul>
             </SectionCard>
           </div>
         </>
@@ -757,6 +918,89 @@ export default function ReportsPage() {
         confirmLabel="حسناً"
         onClose={() => setNotice('')}
       />
+      <AppDialog
+        open={printOpen}
+        tone="info"
+        title="تخصيص الطباعة"
+        message={`اختر الأجزاء اللي تظهر في ${TAB_LABELS[printTab]}`}
+        confirmLabel="طباعة المحدد"
+        cancelLabel="إلغاء"
+        onConfirm={confirmPrint}
+        onClose={() => setPrintOpen(false)}
+      >
+        <div className="mt-4 space-y-2">
+          <div className="flex flex-wrap gap-2 mb-3">
+            <button
+              type="button"
+              className="btn-ghost text-xs"
+              onClick={() => setPrintSections([...printOptions])}
+            >
+              تحديد الكل
+            </button>
+            <button
+              type="button"
+              className="btn-ghost text-xs"
+              onClick={() => setPrintSections([])}
+            >
+              إلغاء الكل
+            </button>
+          </div>
+          {printOptions.map((section) => {
+            const checked = printSections.includes(section);
+            return (
+              <label
+                key={section}
+                className={`flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 transition ${
+                  checked
+                    ? 'border-navy/30 bg-sand'
+                    : 'border-mist bg-white hover:bg-sand/40'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-[#0B2545]"
+                  checked={checked}
+                  onChange={() => togglePrintSection(section)}
+                />
+                <span className="text-sm font-bold text-navy">
+                  {SECTION_LABELS[section]}
+                </span>
+              </label>
+            );
+          })}
+          {printTab === 'teachers' ? (
+            <label
+              className={`flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 transition ${
+                printShowCollected
+                  ? 'border-navy/30 bg-sand'
+                  : 'border-mist bg-white hover:bg-sand/40'
+              }`}
+            >
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-[#0B2545]"
+                checked={printShowCollected}
+                onChange={(e) => setPrintShowCollected(e.target.checked)}
+              />
+              <span className="text-sm font-bold text-navy">
+                إظهار عمود التحصيل
+              </span>
+            </label>
+          ) : null}
+          {!printSections.length ? (
+            <p className="text-xs text-rose-700 mt-2">
+              لازم تختار جزء واحد على الأقل
+            </p>
+          ) : (
+            <p className="text-xs text-navy/45 mt-2">
+              سيتم طباعة {printSections.length} من {printOptions.length}
+              {printTab === 'teachers' && !printShowCollected
+                ? ' · بدون عمود التحصيل'
+                : ''}
+            </p>
+          )}
+        </div>
+      </AppDialog>
     </AppShell>
   );
 }

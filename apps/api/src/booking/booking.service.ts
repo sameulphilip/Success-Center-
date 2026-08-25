@@ -766,14 +766,24 @@ export class BookingService {
   }
 
   async onlineWallet() {
-    const rows = await this.prisma.bookingSubmission.findMany({
-      where: { payChannel: 'online' },
-      include: {
-        form: { select: { id: true, title: true, gradeLabel: true, slug: true } },
-      },
-      orderBy: [{ createdAt: 'desc' }],
-      take: 2000,
-    });
+    const [rows, claimsAgg, claims] = await Promise.all([
+      this.prisma.bookingSubmission.findMany({
+        where: { payChannel: 'online' },
+        include: {
+          form: { select: { id: true, title: true, gradeLabel: true, slug: true } },
+        },
+        orderBy: [{ createdAt: 'desc' }],
+        take: 2000,
+      }),
+      this.prisma.onlineWalletClaim.aggregate({
+        _sum: { amount: true },
+        _count: true,
+      }),
+      this.prisma.onlineWalletClaim.findMany({
+        orderBy: { createdAt: 'desc' },
+        take: 30,
+      }),
+    ]);
     let confirmedAmount = 0;
     let pendingAmount = 0;
     let confirmedCount = 0;
@@ -793,16 +803,22 @@ export class BookingService {
         hasTransferProof: !!transferProofPath,
       };
     });
+    const claimedAmount = Number(claimsAgg._sum.amount || 0);
+    const availableAmount = Math.max(0, confirmedAmount - claimedAmount);
     return {
       totals: {
         confirmedAmount,
         pendingAmount,
+        claimedAmount,
+        availableAmount,
         totalAmount: confirmedAmount + pendingAmount,
         confirmedCount,
         pendingCount,
+        claimedCount: claimsAgg._count,
         count: transfers.length,
       },
       transfers,
+      claims,
     };
   }
 

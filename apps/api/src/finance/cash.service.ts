@@ -321,7 +321,7 @@ export class CashService {
       payStatus: SessionPayStatus.CONFIRMED,
       cashTo: ExtraRevenueCashTo.OWNER,
     };
-    const [closes, safeExp, ownerExp, handovers, onlineOwner, handoutOwner, rentalOwner, settledCenter] =
+    const [closes, safeExp, ownerExp, handovers, onlineOwner, handoutOwner, rentalOwner, settledCenter, walletClaims] =
       await Promise.all([
         this.prisma.cashDayClose.aggregate({ _sum: { transferredToSafe: true } }),
         this.prisma.cashExpense.aggregate({
@@ -348,22 +348,26 @@ export class CashService {
         this.prisma.extraTeacherSettlement.aggregate({
           _sum: { centerToSafe: true },
         }),
+        this.prisma.onlineWalletClaim.aggregate({ _sum: { amount: true } }),
       ]);
     const intoSafe =
       money(closes._sum.transferredToSafe) + money(settledCenter._sum.centerToSafe);
     const outSafeExp = money(safeExp._sum.amount);
     const handed = money(handovers._sum.amount);
     const ownerSpent = money(ownerExp._sum.amount);
+    const walletClaimed = money(walletClaims._sum.amount);
     const ownerExtraRevenue =
       money(onlineOwner._sum.centerShare) +
       money(handoutOwner._sum.centerShare) +
-      money(rentalOwner._sum.amount);
+      money(rentalOwner._sum.amount) +
+      walletClaimed;
     return {
       safeBalance: intoSafe - outSafeExp - handed,
       ownerBalance: handed - ownerSpent + ownerExtraRevenue,
       totalHandedToOwner: handed,
       ownerSpent,
       ownerExtraRevenue,
+      onlineWalletClaimed: walletClaimed,
     };
   }
 
@@ -779,7 +783,7 @@ export class CashService {
   }
 
   private async onlineFormWallet() {
-    const [confirmed, pending] = await Promise.all([
+    const [confirmed, pending, claimed] = await Promise.all([
       this.prisma.bookingSubmission.aggregate({
         where: { payChannel: 'online', status: BookingStatus.PAID },
         _sum: { totalAmount: true },
@@ -790,12 +794,21 @@ export class CashService {
         _sum: { totalAmount: true },
         _count: true,
       }),
+      this.prisma.onlineWalletClaim.aggregate({
+        _sum: { amount: true },
+        _count: true,
+      }),
     ]);
+    const confirmedAmount = money(confirmed._sum.totalAmount);
+    const claimedAmount = money(claimed._sum.amount);
     return {
-      confirmedAmount: money(confirmed._sum.totalAmount),
+      confirmedAmount,
       pendingAmount: money(pending._sum.totalAmount),
+      claimedAmount,
+      availableAmount: Math.max(0, confirmedAmount - claimedAmount),
       confirmedCount: confirmed._count,
       pendingCount: pending._count,
+      claimedCount: claimed._count,
     };
   }
 
@@ -1549,6 +1562,49 @@ export class CashService {
         note: body.note?.trim() || null,
         createdByUserId: userId,
       },
+    });
+  }
+
+  async claimOnlineWallet(
+    userId: string,
+    body: { amount?: number; note?: string },
+  ) {
+    const wallet = await this.onlineFormWallet();
+    const available = wallet.availableAmount;
+    if (available <= 0.009) {
+      throw new BadRequestException('مفيش رصيد متاح في المحفظة الإلكترونية');
+    }
+    const amount =
+      body.amount != null && !Number.isNaN(Number(body.amount))
+        ? Number(body.amount)
+        : available;
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException('المبلغ غير صالح');
+    }
+    if (amount > available + 0.009) {
+      throw new BadRequestException(
+        `الرصيد المتاح في المحفظة ${Math.round(available)} ج.م`,
+      );
+    }
+    const claim = await this.prisma.onlineWalletClaim.create({
+      data: {
+        amount,
+        note: body.note?.trim() || null,
+        createdByUserId: userId,
+      },
+    });
+    const balances = await this.balances();
+    return {
+      claim,
+      availableAfter: Math.max(0, available - amount),
+      ownerBalance: balances.ownerBalance,
+    };
+  }
+
+  listOnlineWalletClaims(take = 30) {
+    return this.prisma.onlineWalletClaim.findMany({
+      orderBy: { createdAt: 'desc' },
+      take,
     });
   }
 }

@@ -141,12 +141,8 @@ export class ReportsPdfService {
     return done;
   }
 
-  async attendancePdf(
-    from?: string,
-    to?: string,
-    groupId?: string,
-  ): Promise<Buffer> {
-    const data = await this.reports.attendance(from, to, groupId);
+  async teachersPdf(from?: string, to?: string): Promise<Buffer> {
+    const data = await this.reports.teachers(from, to);
     const doc = new PDFDocument({ margin: 48, size: 'A4' });
     const chunks: Buffer[] = [];
     doc.on('data', (c: Buffer) => chunks.push(c));
@@ -163,7 +159,7 @@ export class ReportsPdfService {
     doc
       .fillColor('#C99612')
       .fontSize(11)
-      .text('ATTENDANCE REPORT', { align: 'left' });
+      .text('TEACHERS / SESSIONS REPORT', { align: 'left' });
     doc.moveDown(0.5);
     doc
       .fillColor('#334155')
@@ -176,15 +172,13 @@ export class ReportsPdfService {
 
     const s = data.summary;
     doc.fillColor('#0B2545').fontSize(13).text('Summary').moveDown(0.4);
-    const rows = [
-      ['Total records', s.totalRecords],
-      ['Present', s.present],
-      ['Absent', s.absent],
-      ['Late', s.late],
-      ['Excused', s.excused],
-      ['Students tracked', s.uniqueStudents],
-    ];
-    for (const [label, value] of rows) {
+    for (const [label, value] of [
+      ['Teachers', s.teachers],
+      ['Sessions', s.sessions],
+      ['Present (checked-in)', s.present],
+      ['Registered', s.registered],
+      ['Collected', `${Number(s.collected).toLocaleString('en-EG')} EGP`],
+    ] as const) {
       doc
         .fillColor('#475569')
         .fontSize(10)
@@ -193,22 +187,20 @@ export class ReportsPdfService {
         .text(String(value));
     }
 
-    doc.moveDown();
-    doc.fillColor('#0B2545').fontSize(13).text('Top absentees').moveDown(0.4);
-    doc.fillColor('#64748B').fontSize(9);
-    for (const row of data.byStudent.slice(0, 40)) {
-      doc.text(
-        `${row.student.firstName} ${row.student.lastName}  present=${row.present} absent=${row.absent} late=${row.late}`,
-      );
-    }
-
-    doc.moveDown();
-    doc.fillColor('#0B2545').fontSize(13).text('Absence log').moveDown(0.4);
-    doc.fillColor('#64748B').fontSize(9);
-    for (const a of data.absentees.slice(0, 50)) {
-      doc.text(
-        `${String(a.markedAt).slice(0, 10)}  ${a.student?.firstName || ''} ${a.student?.lastName || ''}  ${a.session?.group?.subject?.nameEn || ''} ${a.session?.group?.name || ''}`,
-      );
+    for (const t of data.byTeacher) {
+      doc.moveDown();
+      doc
+        .fillColor('#0B2545')
+        .fontSize(12)
+        .text(
+          `${t.name}  ·  ${t.sessionsCount} sessions  ·  present ${t.presentCount}  ·  registered ${t.registeredCount}`,
+        );
+      doc.fillColor('#64748B').fontSize(9);
+      for (const sess of t.sessions) {
+        doc.text(
+          `  ${sess.sessionDate}  ${sess.subject}${sess.title ? ` (${sess.title})` : ''}  ${sess.status}  present ${sess.present}/${sess.registered}`,
+        );
+      }
     }
 
     doc.end();

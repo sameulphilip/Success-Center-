@@ -210,4 +210,21 @@ export class FinanceController {
   ) {
     return this.cash.handover(user.userId, body);
   }
+
+  @Post('cash/online-wallet/claim')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  @RequirePerms('finance.safe')
+  claimOnlineWallet(
+    @CurrentUser() user: { userId: string },
+    @Body() body: { amount?: number; note?: string },
+  ) {
+    return this.cash.claimOnlineWallet(user.userId, body || {});
+  }
+
+  @Get('cash/online-wallet/claims')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  @RequirePerms('finance.safe')
+  listOnlineWalletClaims() {
+    return this.cash.listOnlineWalletClaims();
+  }
 }

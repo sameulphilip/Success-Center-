@@ -36,12 +36,21 @@ type WalletPack = {
   totals: {
     confirmedAmount: number;
     pendingAmount: number;
+    claimedAmount?: number;
+    availableAmount?: number;
     totalAmount: number;
     confirmedCount: number;
     pendingCount: number;
+    claimedCount?: number;
     count: number;
   };
   transfers: Transfer[];
+  claims?: Array<{
+    id: string;
+    amount: string | number;
+    note?: string | null;
+    createdAt: string;
+  }>;
 };
 
 const methodLabel: Record<string, string> = {
@@ -54,10 +63,15 @@ function money(n: number) {
 }
 
 export default function OnlineWalletPage() {
-  const isAdmin = getStoredUser()?.role === 'SUPER_ADMIN';
+  const me = getStoredUser();
+  const isAdmin = me?.role === 'SUPER_ADMIN';
+  const canClaim =
+    me?.role === 'SUPER_ADMIN' || me?.role === 'CENTER_MANAGER';
   const [pack, setPack] = useState<WalletPack | null>(null);
   const [filter, setFilter] = useState<'all' | 'pending' | 'confirmed'>('all');
   const [busy, setBusy] = useState('');
+  const [claimAmount, setClaimAmount] = useState('');
+  const [claimNote, setClaimNote] = useState('');
   const [dialog, setDialog] = useState<{
     title?: string;
     message: string;
@@ -174,7 +188,72 @@ export default function OnlineWalletPage() {
     }
   }
 
+  async function claimToOwner(all = false) {
+    const available = Number(pack?.totals?.availableAmount ?? 0);
+    if (available <= 0) {
+      setDialog({
+        message: 'مفيش رصيد متاح للتحويل',
+        tone: 'error',
+        confirmLabel: 'حسناً',
+      });
+      return;
+    }
+    const amount = all ? available : Number(claimAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setDialog({
+        message: 'اكتب مبلغ صالح',
+        tone: 'error',
+        confirmLabel: 'حسناً',
+      });
+      return;
+    }
+    setDialog({
+      title: 'تحويل لحساب صاحب السنتر',
+      message: `تحويل ${money(amount)} من المحفظة الإلكترونية لحساب صاحب السنتر؟`,
+      tone: 'info',
+      confirmLabel: 'تأكيد التحويل',
+      cancelLabel: 'رجوع',
+      onConfirm: () => {
+        setDialog(null);
+        void (async () => {
+          setBusy('claim');
+          try {
+            const res = await api<{
+              ownerBalance: number;
+              availableAfter: number;
+            }>('/finance/cash/online-wallet/claim', {
+              method: 'POST',
+              body: JSON.stringify({
+                amount,
+                note: claimNote.trim() || undefined,
+              }),
+            });
+            setClaimAmount('');
+            setClaimNote('');
+            await load();
+            setDialog({
+              title: 'تم التحويل',
+              message: `اتحوّل ${money(amount)} لحساب صاحب السنتر.\nالرصيد المتاح دلوقتي ${money(res.availableAfter)} · حساب صاحب السنتر ${money(res.ownerBalance)}`,
+              tone: 'success',
+              confirmLabel: 'حسناً',
+            });
+          } catch (err: any) {
+            setDialog({
+              message: err.message || 'فشل التحويل',
+              tone: 'error',
+              confirmLabel: 'حسناً',
+            });
+          } finally {
+            setBusy('');
+          }
+        })();
+      },
+    });
+  }
+
   const totals = pack?.totals;
+  const available = Number(totals?.availableAmount ?? totals?.confirmedAmount ?? 0);
+  const claimed = Number(totals?.claimedAmount ?? 0);
 
   return (
     <AppShell>
@@ -194,24 +273,97 @@ export default function OnlineWalletPage() {
         subtitle="المبالغ دي مش في الدرج. دي تحويلات الاستمارة الأونلاين بعد ما الطالب يحوّل."
         metrics={[
           {
-            label: 'مؤكد في المحفظة',
-            value: money(totals?.confirmedAmount ?? 0),
+            label: 'متاح للتحويل',
+            value: money(available),
             highlight: true,
+          },
+          {
+            label: 'مؤكد إجمالي',
+            value: money(totals?.confirmedAmount ?? 0),
+          },
+          {
+            label: 'اتحوّل لصاحب السنتر',
+            value: money(claimed),
           },
           {
             label: 'بانتظار التأكيد',
             value: money(totals?.pendingAmount ?? 0),
           },
-          {
-            label: 'تحويلات مؤكدة',
-            value: (totals?.confirmedCount ?? 0).toLocaleString('en-EG'),
-          },
-          {
-            label: 'لسه متأكدة',
-            value: (totals?.pendingCount ?? 0).toLocaleString('en-EG'),
-          },
         ]}
       />
+
+      {canClaim ? (
+        <SectionCard
+          className="mb-4"
+          title="تحويل لحساب صاحب السنتر"
+          subtitle="الرصيد المتاح من التحويلات المؤكدة يدخل حساب صاحب السنتر"
+        >
+          <div className="grid gap-3 sm:grid-cols-3">
+            <label className="text-xs text-navy/50">
+              المبلغ
+              <input
+                className="field mt-1"
+                type="number"
+                min={0}
+                step="1"
+                placeholder={String(Math.round(available) || '')}
+                value={claimAmount}
+                onChange={(e) => setClaimAmount(e.target.value)}
+              />
+            </label>
+            <label className="text-xs text-navy/50 sm:col-span-2">
+              ملاحظة
+              <input
+                className="field mt-1"
+                value={claimNote}
+                onChange={(e) => setClaimNote(e.target.value)}
+                placeholder="تحويل أسبوعي · فودافون"
+              />
+            </label>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={busy === 'claim' || available <= 0}
+              onClick={() => void claimToOwner(false)}
+            >
+              تحويل المبلغ
+            </button>
+            <button
+              type="button"
+              className="btn-accent"
+              disabled={busy === 'claim' || available <= 0}
+              onClick={() => void claimToOwner(true)}
+            >
+              تحويل كل المتاح ({money(available)})
+            </button>
+          </div>
+          {pack?.claims?.length ? (
+            <ul className="mt-4 space-y-2 text-sm">
+              {pack.claims.slice(0, 8).map((c) => (
+                <li
+                  key={c.id}
+                  className="flex justify-between gap-3 rounded-xl bg-sand px-3 py-2"
+                >
+                  <span>
+                    تحويل لحساب صاحب السنتر
+                    {c.note ? (
+                      <span className="text-navy/45"> · {c.note}</span>
+                    ) : null}
+                    <span className="block text-[11px] text-navy/40 mt-0.5">
+                      {new Date(c.createdAt).toLocaleString('ar-EG')}
+                    </span>
+                  </span>
+                  <span className="font-extrabold tabular-nums text-navy">
+                    {money(Number(c.amount))}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </SectionCard>
+      ) : null}
 
       <div className="mb-4 flex flex-wrap gap-2">
         {(

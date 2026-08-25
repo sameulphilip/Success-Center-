@@ -860,3 +860,14 @@ model CashHandover {
 
   @@index([createdAt])
 }
+
+/// Owner claims confirmed online booking wallet (Vodafone/InstaPay) into their account
+model OnlineWalletClaim {
+  id              String   @id @default(cuid())
+  amount          Decimal  @db.Decimal(12, 2)
+  note            String?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  @@index([createdAt])
+}

@@ -37,13 +37,19 @@ export class ReportsController {
     return this.reports.bookings(from, to);
   }
 
+  @Get('teachers')
+  teachers(@Query('from') from?: string, @Query('to') to?: string) {
+    return this.reports.teachers(from, to);
+  }
+
   @Get('attendance')
   attendance(
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('groupId') groupId?: string,
   ) {
-    return this.reports.attendance(from, to, groupId);
+    // legacy alias — same teachers report (ops sessions)
+    return this.reports.teachers(from, to);
   }
 
   @Get('profit')
@@ -77,15 +83,27 @@ export class ReportsController {
     res.send(buffer);
   }
 
+  @Get('teachers/pdf')
+  async teachersPdf(
+    @Res() res: Response,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    const buffer = await this.pdf.teachersPdf(from, to);
+    const filename = `teachers-${from || 'from'}-${to || 'to'}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
+  }
+
   @Get('attendance/pdf')
   async attendancePdf(
     @Res() res: Response,
     @Query('from') from?: string,
     @Query('to') to?: string,
-    @Query('groupId') groupId?: string,
   ) {
-    const buffer = await this.pdf.attendancePdf(from, to, groupId);
-    const filename = `attendance-${from || 'from'}-${to || 'to'}.pdf`;
+    const buffer = await this.pdf.teachersPdf(from, to);
+    const filename = `teachers-${from || 'from'}-${to || 'to'}.pdf`;
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(buffer);

@@ -144,8 +144,11 @@ type CashSnapshot = {
   onlineFormWallet?: {
     confirmedAmount: number;
     pendingAmount: number;
+    claimedAmount?: number;
+    availableAmount?: number;
     confirmedCount: number;
     pendingCount: number;
+    claimedCount?: number;
   };
   teacherHolds?: Array<{
     teacherId: string;
@@ -679,10 +682,20 @@ export default function FinancePage() {
             </p>
           </div>
           <div className="text-left">
-            <p className="text-[11px] text-navy/45">مؤكد</p>
+            <p className="text-[11px] text-navy/45">متاح للتحويل</p>
             <p className="text-xl font-black tabular-nums text-navy">
-              {money(cash?.onlineFormWallet?.confirmedAmount ?? 0)}
+              {money(
+                cash?.onlineFormWallet?.availableAmount ??
+                  cash?.onlineFormWallet?.confirmedAmount ??
+                  0,
+              )}
             </p>
+            {(cash?.onlineFormWallet?.claimedAmount || 0) > 0 ? (
+              <p className="text-[12px] font-semibold text-navy/55">
+                اتحوّل لصاحب السنتر{' '}
+                {money(cash?.onlineFormWallet?.claimedAmount ?? 0)}
+              </p>
+            ) : null}
             {(cash?.onlineFormWallet?.pendingCount || 0) > 0 ? (
               <p className="text-[12px] font-semibold text-amber-800">
                 بانتظار التأكيد{' '}

@@ -172,71 +172,123 @@ export class ReportsService {
     };
   }
 
-  async attendance(from?: string, to?: string, groupId?: string) {
-    const fromDate = from ? new Date(from) : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  async attendance(from?: string, to?: string, _groupId?: string) {
+    return this.teachers(from, to);
+  }
+
+  async teachers(from?: string, to?: string) {
+    const fromDate = from
+      ? new Date(from)
+      : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
     const toDate = to ? new Date(to) : new Date();
     toDate.setHours(23, 59, 59, 999);
 
-    const records = await this.prisma.attendanceRecord.findMany({
+    const sessions = await this.prisma.classSession.findMany({
       where: {
-        studentId: { not: null },
-        markedAt: { gte: fromDate, lte: toDate },
-        ...(groupId ? { session: { groupId } } : {}),
+        sessionDate: { gte: fromDate, lte: toDate },
       },
       include: {
-        student: true,
-        session: { include: { group: { include: { subject: true, teacher: true } } } },
+        teacher: true,
+        subject: true,
+        entries: {
+          select: {
+            id: true,
+            payStatus: true,
+            checkedInAt: true,
+            amount: true,
+            refundedAmount: true,
+          },
+        },
       },
-      orderBy: { markedAt: 'desc' },
+      orderBy: [{ sessionDate: 'desc' }, { createdAt: 'desc' }],
     });
 
-    const byStatus = records.reduce<Record<string, number>>((acc, r) => {
-      acc[r.status] = (acc[r.status] || 0) + 1;
-      return acc;
-    }, {});
+    const isActivePay = (status: string) =>
+      status === 'CONFIRMED' || status === 'PARTIALLY_REFUNDED';
 
-    const byStudentMap = new Map<
-      string,
-      { student: any; present: number; absent: number; late: number; excused: number }
-    >();
+    type SessionRow = {
+      id: string;
+      sessionDate: string;
+      title: string | null;
+      subject: string;
+      status: string;
+      feeAmount: number;
+      registered: number;
+      present: number;
+      collected: number;
+    };
 
-    for (const r of records) {
-      if (!r.studentId || !r.student) continue;
-      const row = byStudentMap.get(r.studentId) || {
-        student: r.student,
-        present: 0,
-        absent: 0,
-        late: 0,
-        excused: 0,
+    type TeacherRow = {
+      teacherId: string;
+      name: string;
+      sessionsCount: number;
+      presentCount: number;
+      registeredCount: number;
+      collected: number;
+      sessions: SessionRow[];
+    };
+
+    const byTeacher = new Map<string, TeacherRow>();
+    let totalPresent = 0;
+    let totalRegistered = 0;
+    let totalCollected = 0;
+
+    for (const s of sessions) {
+      const active = s.entries.filter((e) => isActivePay(e.payStatus));
+      const present = active.filter((e) => e.checkedInAt).length;
+      const registered = active.length;
+      const collected = active.reduce(
+        (sum, e) => sum + Number(e.amount) - Number(e.refundedAmount || 0),
+        0,
+      );
+      totalPresent += present;
+      totalRegistered += registered;
+      totalCollected += collected;
+
+      const teacherId = s.teacherId;
+      const name = `${s.teacher.firstName} ${s.teacher.lastName === '-' ? '' : s.teacher.lastName}`.trim();
+      const row = byTeacher.get(teacherId) || {
+        teacherId,
+        name,
+        sessionsCount: 0,
+        presentCount: 0,
+        registeredCount: 0,
+        collected: 0,
+        sessions: [],
       };
-      if (r.status === 'PRESENT') row.present += 1;
-      if (r.status === 'ABSENT') row.absent += 1;
-      if (r.status === 'LATE') row.late += 1;
-      if (r.status === 'EXCUSED') row.excused += 1;
-      byStudentMap.set(r.studentId, row);
+      row.sessionsCount += 1;
+      row.presentCount += present;
+      row.registeredCount += registered;
+      row.collected += collected;
+      row.sessions.push({
+        id: s.id,
+        sessionDate: String(s.sessionDate).slice(0, 10),
+        title: s.title,
+        subject: s.subject?.nameAr || s.subject?.nameEn || s.title || 'حصة',
+        status: s.status,
+        feeAmount: Number(s.feeAmount),
+        registered,
+        present,
+        collected,
+      });
+      byTeacher.set(teacherId, row);
     }
 
-    const byStudent = Array.from(byStudentMap.values()).sort(
-      (a, b) => b.absent - a.absent,
+    const teachers = Array.from(byTeacher.values()).sort(
+      (a, b) => b.sessionsCount - a.sessionsCount || b.presentCount - a.presentCount,
     );
-
-    const absentees = records.filter((r) => r.status === 'ABSENT');
 
     return {
       from: fromDate,
       to: toDate,
       summary: {
-        totalRecords: records.length,
-        present: byStatus.PRESENT || 0,
-        absent: byStatus.ABSENT || 0,
-        late: byStatus.LATE || 0,
-        excused: byStatus.EXCUSED || 0,
-        uniqueStudents: byStudentMap.size,
+        teachers: teachers.length,
+        sessions: sessions.length,
+        present: totalPresent,
+        registered: totalRegistered,
+        collected: totalCollected,
       },
-      byStatus,
-      byStudent,
-      absentees,
-      recent: records.slice(0, 100),
+      byTeacher: teachers,
     };
   }
 
