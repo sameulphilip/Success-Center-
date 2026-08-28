@@ -114,6 +114,11 @@ function RevenuePrintContent() {
     handouts: any[];
     handoutSales: any[];
     rentals: any[];
+    inventory: {
+      onlineByTeacher: any[];
+      handoutsByTeacher: any[];
+      summary: Record<string, number>;
+    } | null;
   } | null>(null);
   const [error, setError] = useState('');
 
@@ -124,9 +129,17 @@ function RevenuePrintContent() {
       api<any[]>('/revenue/handouts'),
       api<any[]>('/revenue/handouts/sales'),
       api<any[]>('/revenue/rentals'),
+      api<any>('/revenue/inventory-by-teacher'),
     ])
-      .then(([offers, onlineSales, handouts, handoutSales, rentals]) =>
-        setData({ offers, onlineSales, handouts, handoutSales, rentals }),
+      .then(([offers, onlineSales, handouts, handoutSales, rentals, inventory]) =>
+        setData({
+          offers,
+          onlineSales,
+          handouts,
+          handoutSales,
+          rentals,
+          inventory,
+        }),
       )
       .catch((e) =>
         setError(e instanceof Error ? e.message : 'فشل تحميل الإيرادات'),
@@ -156,6 +169,7 @@ function RevenuePrintContent() {
       handouts: data.handouts,
       handoutSales,
       rentals,
+      inventory: data.inventory,
     };
   }, [data, from, to]);
 
@@ -252,22 +266,80 @@ function RevenuePrintContent() {
                 'العرض',
                 'المدرس',
                 'السعر',
-                'مبلغ السنتر',
                 'أكواد',
-                'مبيعات',
+                'مباع',
+                'باقي',
                 'الحالة',
               ]}
-              rows={filtered.offers.map((o) => [
-                o.title,
-                teacherName(o.teacher),
-                money(o.price),
-                money(o.centerAmount ?? o.price),
-                String(o._count?.codes ?? '—'),
-                String(o._count?.sales ?? '—'),
-                o.isActive ? 'نشط' : 'متوقف',
-              ])}
+              rows={filtered.offers.map((o) => {
+                const inv = filtered.inventory?.onlineByTeacher
+                  .flatMap((t) => t.offers)
+                  .find((x: any) => x.id === o.id);
+                const total = inv?.totalCodes ?? o._count?.codes ?? 0;
+                const sold = inv?.sold ?? o._count?.sales ?? 0;
+                const remaining = inv?.remaining ?? Math.max(0, total - sold);
+                return [
+                  o.title,
+                  teacherName(o.teacher),
+                  money(o.price),
+                  String(total),
+                  String(sold),
+                  String(remaining),
+                  o.isActive ? 'نشط' : 'متوقف',
+                ];
+              })}
               empty="لا عروض"
             />
+          </ReportPrintBlock>
+        ) : null}
+
+        {showSection(selected, 'online-by-teacher') &&
+        filtered.inventory?.onlineByTeacher?.length ? (
+          <>
+            <ReportPrintBlock title="ملخص أكواد أونلاين حسب المدرس">
+              <ReportTable
+                headers={[
+                  'المدرس',
+                  'عروض',
+                  'إجمالي أكواد',
+                  'مباع',
+                  'باقي',
+                ]}
+                rows={filtered.inventory.onlineByTeacher.map((t: any) => [
+                  t.name,
+                  String(t.offersCount),
+                  String(t.totalCodes),
+                  String(t.sold),
+                  String(t.remaining),
+                ])}
+                empty="لا بيانات"
+              />
+            </ReportPrintBlock>
+            {filtered.inventory.onlineByTeacher.map((t: any) => (
+              <ReportPrintBlock
+                key={t.teacherId}
+                title={`${t.name} · ${t.totalCodes} كود · مباع ${t.sold} · باقي ${t.remaining}`}
+              >
+                <ReportTable
+                  headers={['العرض', 'السعر', 'أكواد', 'مباع', 'باقي', 'الحالة']}
+                  rows={(t.offers || []).map((o: any) => [
+                    o.title,
+                    money(o.price),
+                    String(o.totalCodes),
+                    String(o.sold),
+                    String(o.remaining),
+                    o.isActive ? 'نشط' : 'متوقف',
+                  ])}
+                  empty="لا عروض"
+                />
+              </ReportPrintBlock>
+            ))}
+          </>
+        ) : showSection(selected, 'online-by-teacher') ? (
+          <ReportPrintBlock title="أكواد أونلاين حسب المدرس">
+            <p className="px-4 py-6 text-center text-sm text-[#0B2545]/40">
+              لا عروض أونلاين
+            </p>
           </ReportPrintBlock>
         ) : null}
 
@@ -310,22 +382,87 @@ function RevenuePrintContent() {
                 'الملزمة',
                 'المدرس',
                 'السعر',
-                'مبلغ السنتر',
-                'المخزون',
-                'مبيعات',
+                'إجمالي',
+                'مباع',
+                'باقي',
                 'الحالة',
               ]}
-              rows={filtered.handouts.map((h) => [
-                h.title,
-                teacherName(h.teacher),
-                money(h.price),
-                money(h.centerAmount ?? h.price),
-                String(h.stock),
-                String(h._count?.sales ?? '—'),
-                h.isActive ? 'نشط' : 'متوقف',
-              ])}
+              rows={filtered.handouts.map((h) => {
+                const inv = filtered.inventory?.handoutsByTeacher
+                  .flatMap((t: any) => t.products)
+                  .find((x: any) => x.id === h.id);
+                const sold = inv?.sold ?? h._count?.sales ?? 0;
+                const remaining = inv?.stock ?? h.stock ?? 0;
+                const total = inv?.totalCopies ?? remaining + sold;
+                return [
+                  h.title,
+                  teacherName(h.teacher),
+                  money(h.price),
+                  String(total),
+                  String(sold),
+                  String(remaining),
+                  h.isActive ? 'نشط' : 'متوقف',
+                ];
+              })}
               empty="لا ملازم"
             />
+          </ReportPrintBlock>
+        ) : null}
+
+        {showSection(selected, 'handouts-by-teacher') &&
+        filtered.inventory?.handoutsByTeacher?.length ? (
+          <>
+            <ReportPrintBlock title="ملخص الملازم حسب المدرس">
+              <ReportTable
+                headers={[
+                  'المدرس',
+                  'منتجات',
+                  'إجمالي نسخ',
+                  'مباع',
+                  'باقي',
+                ]}
+                rows={filtered.inventory.handoutsByTeacher.map((t: any) => [
+                  t.name,
+                  String(t.productsCount),
+                  String(t.totalCopies),
+                  String(t.sold),
+                  String(t.remaining),
+                ])}
+                empty="لا بيانات"
+              />
+            </ReportPrintBlock>
+            {filtered.inventory.handoutsByTeacher.map((t: any) => (
+              <ReportPrintBlock
+                key={t.teacherId}
+                title={`${t.name} · ${t.totalCopies} نسخة · مباع ${t.sold} · باقي ${t.remaining}`}
+              >
+                <ReportTable
+                  headers={[
+                    'الملزمة',
+                    'السعر',
+                    'إجمالي',
+                    'مباع',
+                    'باقي',
+                    'الحالة',
+                  ]}
+                  rows={(t.products || []).map((p: any) => [
+                    p.title,
+                    money(p.price),
+                    String(p.totalCopies),
+                    String(p.sold),
+                    String(p.stock),
+                    p.isActive ? 'نشط' : 'متوقف',
+                  ])}
+                  empty="لا ملازم"
+                />
+              </ReportPrintBlock>
+            ))}
+          </>
+        ) : showSection(selected, 'handouts-by-teacher') ? (
+          <ReportPrintBlock title="ملازم حسب المدرس">
+            <p className="px-4 py-6 text-center text-sm text-[#0B2545]/40">
+              لا ملازم
+            </p>
           </ReportPrintBlock>
         ) : null}
 

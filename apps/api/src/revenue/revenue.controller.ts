@@ -27,6 +27,11 @@ export class RevenueController {
   constructor(private readonly revenue: RevenueService) {}
 
   // Online
+  @Get('inventory-by-teacher')
+  inventoryByTeacher() {
+    return this.revenue.inventoryByTeacher();
+  }
+
   @Get('online/offers')
   listOffers() {
     return this.revenue.listOffers();

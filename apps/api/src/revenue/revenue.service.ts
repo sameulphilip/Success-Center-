@@ -28,6 +28,12 @@ function genCode() {
   return randomBytes(4).toString('hex').toUpperCase();
 }
 
+function personName(t?: { firstName?: string; lastName?: string } | null) {
+  if (!t?.firstName) return '';
+  const last = t.lastName && t.lastName !== '-' ? t.lastName : '';
+  return `${t.firstName} ${last}`.trim();
+}
+
 function cashToForRole(
   role?: string,
   kind: 'hold' | 'drawer' = 'hold',
@@ -1003,5 +1009,173 @@ export class RevenueService {
       data: { status: RentalStatus.CANCELLED },
       include: { classroom: true },
     });
+  }
+
+  /** Inventory snapshot: codes & handouts per teacher (totals + per offer/product). */
+  async inventoryByTeacher() {
+    const [offers, handouts, codeGroups, handoutSold] = await Promise.all([
+      this.prisma.onlineOffer.findMany({
+        include: { teacher: true },
+        orderBy: [{ teacher: { firstName: 'asc' } }, { title: 'asc' }],
+      }),
+      this.prisma.handoutProduct.findMany({
+        include: { teacher: true },
+        orderBy: [{ title: 'asc' }],
+      }),
+      this.prisma.onlineAccessCode.groupBy({
+        by: ['offerId', 'status'],
+        _count: true,
+      }),
+      this.prisma.handoutSale.groupBy({
+        by: ['productId'],
+        _sum: { qty: true },
+        _count: true,
+      }),
+    ]);
+
+    const codeByOffer = new Map<
+      string,
+      { total: number; sold: number; available: number }
+    >();
+    for (const row of codeGroups) {
+      const cur = codeByOffer.get(row.offerId) || {
+        total: 0,
+        sold: 0,
+        available: 0,
+      };
+      const n = row._count;
+      cur.total += n;
+      if (row.status === OnlineCodeStatus.SOLD) cur.sold += n;
+      if (row.status === OnlineCodeStatus.AVAILABLE) cur.available += n;
+      codeByOffer.set(row.offerId, cur);
+    }
+
+    const soldQtyByProduct = new Map(
+      handoutSold.map((r) => [r.productId, Number(r._sum.qty || 0)]),
+    );
+
+    type OnlineTeacherRow = {
+      teacherId: string;
+      name: string;
+      offersCount: number;
+      totalCodes: number;
+      sold: number;
+      remaining: number;
+      offers: Array<{
+        id: string;
+        title: string;
+        price: number;
+        isActive: boolean;
+        totalCodes: number;
+        sold: number;
+        remaining: number;
+      }>;
+    };
+
+    const onlineMap = new Map<string, OnlineTeacherRow>();
+    for (const o of offers) {
+      const stats = codeByOffer.get(o.id) || {
+        total: 0,
+        sold: 0,
+        available: 0,
+      };
+      const teacherId = o.teacherId;
+      const name = personName(o.teacher) || '—';
+      const row = onlineMap.get(teacherId) || {
+        teacherId,
+        name,
+        offersCount: 0,
+        totalCodes: 0,
+        sold: 0,
+        remaining: 0,
+        offers: [],
+      };
+      row.offersCount += 1;
+      row.totalCodes += stats.total;
+      row.sold += stats.sold;
+      row.remaining += stats.available;
+      row.offers.push({
+        id: o.id,
+        title: o.title,
+        price: Number(o.price),
+        isActive: o.isActive,
+        totalCodes: stats.total,
+        sold: stats.sold,
+        remaining: stats.available,
+      });
+      onlineMap.set(teacherId, row);
+    }
+
+    type HandoutTeacherRow = {
+      teacherId: string;
+      name: string;
+      productsCount: number;
+      totalCopies: number;
+      sold: number;
+      remaining: number;
+      products: Array<{
+        id: string;
+        title: string;
+        price: number;
+        isActive: boolean;
+        stock: number;
+        sold: number;
+        totalCopies: number;
+      }>;
+    };
+
+    const handoutMap = new Map<string, HandoutTeacherRow>();
+    for (const h of handouts) {
+      const sold = soldQtyByProduct.get(h.id) || 0;
+      const remaining = h.stock;
+      const totalCopies = remaining + sold;
+      const teacherId = h.teacherId || 'none';
+      const name = h.teacher ? personName(h.teacher) : 'بدون مدرس';
+      const row = handoutMap.get(teacherId) || {
+        teacherId,
+        name,
+        productsCount: 0,
+        totalCopies: 0,
+        sold: 0,
+        remaining: 0,
+        products: [],
+      };
+      row.productsCount += 1;
+      row.totalCopies += totalCopies;
+      row.sold += sold;
+      row.remaining += remaining;
+      row.products.push({
+        id: h.id,
+        title: h.title,
+        price: Number(h.price),
+        isActive: h.isActive,
+        stock: remaining,
+        sold,
+        totalCopies,
+      });
+      handoutMap.set(teacherId, row);
+    }
+
+    const onlineByTeacher = [...onlineMap.values()].sort(
+      (a, b) => b.totalCodes - a.totalCodes || a.name.localeCompare(b.name, 'ar'),
+    );
+    const handoutsByTeacher = [...handoutMap.values()].sort(
+      (a, b) => b.totalCopies - a.totalCopies || a.name.localeCompare(b.name, 'ar'),
+    );
+
+    return {
+      onlineByTeacher,
+      handoutsByTeacher,
+      summary: {
+        onlineTeachers: onlineByTeacher.length,
+        onlineCodes: onlineByTeacher.reduce((n, t) => n + t.totalCodes, 0),
+        onlineSold: onlineByTeacher.reduce((n, t) => n + t.sold, 0),
+        onlineRemaining: onlineByTeacher.reduce((n, t) => n + t.remaining, 0),
+        handoutTeachers: handoutsByTeacher.length,
+        handoutCopies: handoutsByTeacher.reduce((n, t) => n + t.totalCopies, 0),
+        handoutSold: handoutsByTeacher.reduce((n, t) => n + t.sold, 0),
+        handoutRemaining: handoutsByTeacher.reduce((n, t) => n + t.remaining, 0),
+      },
+    };
   }
 }

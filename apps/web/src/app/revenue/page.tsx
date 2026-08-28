@@ -807,9 +807,11 @@ export default function RevenuePage() {
               <button
                 type="button"
                 className="btn-ghost text-xs"
-                onClick={() => openPrintPicker('online', ['offers'])}
+                onClick={() =>
+                  openPrintPicker('online', ['online-by-teacher'])
+                }
               >
-                طباعة
+                طباعة تفصيل المدرسين
               </button>
             }
           >
@@ -1249,9 +1251,11 @@ export default function RevenuePage() {
               <button
                 type="button"
                 className="btn-ghost text-xs"
-                onClick={() => openPrintPicker('handouts', ['handout-products'])}
+                onClick={() =>
+                  openPrintPicker('handouts', ['handouts-by-teacher'])
+                }
               >
-                طباعة
+                طباعة تفصيل المدرسين
               </button>
             }
           >
