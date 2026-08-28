@@ -50,6 +50,8 @@ type DaySheet = {
   summaryCounts: {
     forms: number;
     formsAmount: number;
+    formsOnline?: number;
+    formsOnlineAmount?: number;
     codes: number;
     codesAmount: number;
     handouts: number;
@@ -269,11 +271,18 @@ export default function CloseDayPrintPage() {
                 ملخص أعداد اليوم
               </h2>
             </div>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <Stat
-                label="استمارات"
+                label="استمارات السنتر"
                 value={`${sheet.summaryCounts.forms.toLocaleString('en-EG')} · ${money(sheet.summaryCounts.formsAmount)}`}
               />
+              {(sheet.summaryCounts.formsOnline ?? 0) > 0 ? (
+                <Stat
+                  label="استمارات أونلاين"
+                  value={`${sheet.summaryCounts.formsOnline!.toLocaleString('en-EG')} · ${money(sheet.summaryCounts.formsOnlineAmount ?? 0)}`}
+                  tone="sky"
+                />
+              ) : null}
               <Stat
                 label="أكواد أونلاين"
                 value={`${sheet.summaryCounts.codes.toLocaleString('en-EG')} · ${money(sheet.summaryCounts.codesAmount)}`}
@@ -283,6 +292,11 @@ export default function CloseDayPrintPage() {
                 value={`${sheet.summaryCounts.handouts.toLocaleString('en-EG')} · ${money(sheet.summaryCounts.handoutsAmount)}`}
               />
             </div>
+            {(sheet.summaryCounts.formsOnline ?? 0) > 0 ? (
+              <p className="mt-2 text-[11px] text-sky-800/80">
+                استمارات أونلاين مش محسوبة في عدّ الدرج — في محفظة الأونلاين
+              </p>
+            ) : null}
           </section>
         ) : null}
 
@@ -516,7 +530,7 @@ function Stat({
   label: string;
   value: string;
   gold?: boolean;
-  tone?: 'rose' | 'emerald';
+  tone?: 'rose' | 'emerald' | 'sky';
 }) {
   const valueCls = gold
     ? 'text-[#a67c0a]'
@@ -524,7 +538,9 @@ function Stat({
       ? 'text-rose-800'
       : tone === 'emerald'
         ? 'text-emerald-800'
-        : 'text-[#0B2545]';
+        : tone === 'sky'
+          ? 'text-sky-800'
+          : 'text-[#0B2545]';
   return (
     <div className="print-keep rounded-xl border border-[#ead9a8] bg-white px-3 py-2.5 text-center">
       <p className="text-[10px] text-[#0B2545]/45">{label}</p>

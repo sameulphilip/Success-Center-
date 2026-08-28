@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { AppShell } from '@/components/AppShell';
 import { PageHeader } from '@/components/PageHeader';
 import { AppDialog } from '@/components/AppDialog';
@@ -12,6 +12,23 @@ import {
 } from '@/components/ui';
 import { api, getStoredUser } from '@/lib/api';
 import { TablePager, usePaged } from '@/components/TablePager';
+import {
+  REVENUE_SECTION_LABELS,
+  REVENUE_TAB_LABELS,
+  REVENUE_TAB_SECTIONS,
+  revenuePrintHref,
+  type RevenueSection,
+  type RevenueTab,
+} from '@/lib/revenue-print';
+
+function monthStart() {
+  const d = new Date();
+  return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().slice(0, 10);
+}
+
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
 
 type Teacher = {
   id: string;
@@ -224,6 +241,39 @@ export default function RevenuePage() {
     method: 'CASH',
     vodafoneTxn: '',
   });
+
+  const [printOpen, setPrintOpen] = useState(false);
+  const [printTab, setPrintTab] = useState<RevenueTab>('online');
+  const [printFrom, setPrintFrom] = useState(monthStart());
+  const [printTo, setPrintTo] = useState(today());
+  const [printSections, setPrintSections] = useState<RevenueSection[]>([]);
+
+  const printOptions = useMemo(() => REVENUE_TAB_SECTIONS[printTab], [printTab]);
+
+  function openPrintPicker(forTab: RevenueTab, preset?: RevenueSection[]) {
+    setPrintTab(forTab);
+    setPrintSections(
+      preset?.length ? [...preset] : [...REVENUE_TAB_SECTIONS[forTab]],
+    );
+    setPrintOpen(true);
+  }
+
+  function togglePrintSection(section: RevenueSection) {
+    setPrintSections((prev) =>
+      prev.includes(section)
+        ? prev.filter((s) => s !== section)
+        : [...prev, section],
+    );
+  }
+
+  function confirmPrint() {
+    if (!printSections.length) {
+      queueMicrotask(() => setPrintOpen(true));
+      return;
+    }
+    const href = revenuePrintHref(printTab, printFrom, printTo, printSections);
+    window.open(href, '_blank', 'noopener,noreferrer');
+  }
 
   const pOnline = usePaged(onlineSales, onlineSales.length);
   const pHandoutSales = usePaged(handoutSales, handoutSales.length);
@@ -668,6 +718,12 @@ export default function RevenuePage() {
   );
   const subjectOptions = teacherSubjects.length ? teacherSubjects : subjects;
 
+  const uiTabToPrint: Record<'online' | 'handouts' | 'rooms', RevenueTab> = {
+    online: 'online',
+    handouts: 'handouts',
+    rooms: 'rooms',
+  };
+
   return (
     <AppShell>
       <PageHeader
@@ -676,6 +732,15 @@ export default function RevenuePage() {
           toOwner
             ? 'تحصيلك أنت بيروح لصاحب السنتر · الاستقبال بيتحسب في الدرج'
             : 'تحصيل الاستقبال بيتحسب في الدرج'
+        }
+        action={
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={() => openPrintPicker(uiTabToPrint[tab])}
+          >
+            طباعة التقرير
+          </button>
         }
       />
       <PageHero
@@ -737,6 +802,15 @@ export default function RevenuePage() {
               editingOfferId
                 ? 'تعديل السعر ومبلغ السنتر هيطبّق على كل الأكواد اللي اتباعت من العرض ده'
                 : undefined
+            }
+            action={
+              <button
+                type="button"
+                className="btn-ghost text-xs"
+                onClick={() => openPrintPicker('online', ['offers'])}
+              >
+                طباعة
+              </button>
             }
           >
             <form onSubmit={saveOffer} className="space-y-2">
@@ -1037,7 +1111,18 @@ export default function RevenuePage() {
               </form>
             </SectionCard>
 
-            <SectionCard title="مبيعات الأونلاين">
+            <SectionCard
+              title="مبيعات الأونلاين"
+              action={
+                <button
+                  type="button"
+                  className="btn-ghost text-xs"
+                  onClick={() => openPrintPicker('online', ['online-sales'])}
+                >
+                  طباعة
+                </button>
+              }
+            >
               <ul className="space-y-2 text-sm">
                 {pOnline.slice.map((s) => (
                   <li
@@ -1160,6 +1245,15 @@ export default function RevenuePage() {
         <div className="grid gap-4 xl:grid-cols-2">
           <SectionCard
             title={editingHandoutId ? 'تعديل ملزمة' : 'إضافة ملزمة'}
+            action={
+              <button
+                type="button"
+                className="btn-ghost text-xs"
+                onClick={() => openPrintPicker('handouts', ['handout-products'])}
+              >
+                طباعة
+              </button>
+            }
           >
             <form onSubmit={createHandout} className="space-y-2">
               <FieldLabel label="الاسم">
@@ -1354,7 +1448,18 @@ export default function RevenuePage() {
             />
           </SectionCard>
 
-          <SectionCard title="بيع ملزمة">
+          <SectionCard
+            title="بيع ملزمة"
+            action={
+              <button
+                type="button"
+                className="btn-ghost text-xs"
+                onClick={() => openPrintPicker('handouts', ['handout-sales'])}
+              >
+                طباعة المبيعات
+              </button>
+            }
+          >
             <form onSubmit={sellHandoutSubmit} className="space-y-2">
               <FieldLabel label="الملزمة">
                 <select
@@ -1757,7 +1862,18 @@ export default function RevenuePage() {
             </form>
           </SectionCard>
 
-          <SectionCard title="حجوزات القاعات">
+          <SectionCard
+            title="حجوزات القاعات"
+            action={
+              <button
+                type="button"
+                className="btn-ghost text-xs"
+                onClick={() => openPrintPicker('rooms', ['rentals'])}
+              >
+                طباعة
+              </button>
+            }
+          >
             <ul className="space-y-2 text-sm">
               {pRentals.slice.map((r) => (
                 <li
@@ -1843,6 +1959,95 @@ export default function RevenuePage() {
         onConfirm={() => void doDeleteConfirm()}
         onClose={() => setConfirm(null)}
       />
+      <AppDialog
+        open={printOpen}
+        tone="info"
+        title="تخصيص طباعة الإيرادات"
+        message={`اختر الأجزاء اللي تظهر في ${REVENUE_TAB_LABELS[printTab]}`}
+        confirmLabel="طباعة المحدد"
+        cancelLabel="إلغاء"
+        onConfirm={confirmPrint}
+        onClose={() => setPrintOpen(false)}
+      >
+        <div className="mt-4 space-y-3">
+          <div className="grid grid-cols-2 gap-2">
+            <label className="text-xs text-navy/50">
+              من
+              <input
+                type="date"
+                className="field mt-1"
+                value={printFrom}
+                onChange={(e) => setPrintFrom(e.target.value)}
+              />
+            </label>
+            <label className="text-xs text-navy/50">
+              إلى
+              <input
+                type="date"
+                className="field mt-1"
+                value={printTo}
+                onChange={(e) => setPrintTo(e.target.value)}
+              />
+            </label>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn-ghost text-xs"
+              onClick={() => {
+                setPrintTab('all');
+                setPrintSections([...REVENUE_TAB_SECTIONS.all]);
+              }}
+            >
+              كل الإيرادات
+            </button>
+            <button
+              type="button"
+              className="btn-ghost text-xs"
+              onClick={() => setPrintSections([...printOptions])}
+            >
+              تحديد الكل
+            </button>
+            <button
+              type="button"
+              className="btn-ghost text-xs"
+              onClick={() => setPrintSections([])}
+            >
+              إلغاء الكل
+            </button>
+          </div>
+          {printOptions.map((section) => {
+            const checked = printSections.includes(section);
+            return (
+              <label
+                key={section}
+                className={`flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 transition ${
+                  checked
+                    ? 'border-navy/30 bg-sand'
+                    : 'border-mist bg-white hover:bg-sand/40'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-[#0B2545]"
+                  checked={checked}
+                  onChange={() => togglePrintSection(section)}
+                />
+                <span className="text-sm font-bold text-navy">
+                  {REVENUE_SECTION_LABELS[section]}
+                </span>
+              </label>
+            );
+          })}
+          {!printSections.length ? (
+            <p className="text-xs text-rose-700">لازم تختار جزء واحد على الأقل</p>
+          ) : (
+            <p className="text-xs text-navy/45">
+              سيتم طباعة {printSections.length} من {printOptions.length}
+            </p>
+          )}
+        </div>
+      </AppDialog>
     </AppShell>
   );
 }

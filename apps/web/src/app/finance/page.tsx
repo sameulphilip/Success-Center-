@@ -150,6 +150,25 @@ type CashSnapshot = {
     pendingCount: number;
     claimedCount?: number;
   };
+  onlineFormsToday?: {
+    count: number;
+    amount: number;
+    byForm: Array<{
+      formId: string;
+      label: string;
+      count: number;
+      amount: number;
+      serials: number[];
+    }>;
+    items: Array<{
+      id: string;
+      formSerial: number | null;
+      studentName: string;
+      receiptNumber: string | null;
+      amount: number;
+      label: string;
+    }>;
+  };
   teacherHolds?: Array<{
     teacherId: string;
     teacherName: string;
@@ -1100,6 +1119,53 @@ export default function FinancePage() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          ) : null}
+
+          {cash?.onlineFormsToday?.count ? (
+            <div className="mb-4 overflow-hidden rounded-xl border border-sky-200/80">
+              <p className="bg-sky-50 px-3 py-2 text-[11px] font-semibold text-sky-900">
+                استمارات أونلاين النهاردة — مش في عدّ الدرج
+                <span className="text-sky-700/80 font-normal">
+                  {' '}
+                  · {cash.onlineFormsToday.count} استمارة ·{' '}
+                  {money(cash.onlineFormsToday.amount)}
+                </span>
+              </p>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-[11px] text-navy/40">
+                    <th className="px-3 py-1.5 text-right font-medium">الاستمارة</th>
+                    <th className="px-3 py-1.5 text-right font-medium">التسلسل</th>
+                    <th className="px-3 py-1.5 text-right font-medium">الطالب</th>
+                    <th className="px-3 py-1.5 text-left font-medium">المبلغ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {cash.onlineFormsToday.byForm.map((row) => (
+                    <tr key={row.formId} className="border-t border-sky-100">
+                      <td className="px-3 py-1.5 font-medium">{row.label}</td>
+                      <td className="px-3 py-1.5 font-mono text-[11px] text-navy/60">
+                        {row.serials.length
+                          ? row.serials
+                              .map((n) => `م ${n}`)
+                              .join(' · ')
+                          : '—'}
+                      </td>
+                      <td className="px-3 py-1.5 text-navy/55">
+                        {row.count} استمارة
+                      </td>
+                      <td className="px-3 py-1.5 tabular-nums text-left font-semibold">
+                        {money(row.amount)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="px-3 py-2 text-[10px] text-sky-800/70 border-t border-sky-100">
+                المبلغ في محفظة الأونلاين — يُسحب للدرج من صفحة محفظة الأونلاين
+                عند الحاجة
+              </p>
             </div>
           ) : null}
 

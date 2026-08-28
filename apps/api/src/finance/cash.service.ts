@@ -812,6 +812,64 @@ export class CashService {
     };
   }
 
+  /** Paid online booking forms for a business day — not in drawer count. */
+  private async onlineFormsForDay(ymd: string) {
+    const { start, end } = cairoBounds(ymd);
+    const subs = await this.prisma.bookingSubmission.findMany({
+      where: {
+        payChannel: 'online',
+        status: BookingStatus.PAID,
+        paidAt: { gte: start, lte: end },
+      },
+      select: {
+        id: true,
+        formId: true,
+        formSerial: true,
+        totalAmount: true,
+        studentName: true,
+        receiptNumber: true,
+        form: { select: { title: true, gradeLabel: true } },
+      },
+      orderBy: [{ formSerial: 'asc' }, { paidAt: 'asc' }],
+    });
+
+    type FormRow = {
+      formId: string;
+      label: string;
+      count: number;
+      amount: number;
+      serials: number[];
+    };
+    const byForm = new Map<string, FormRow>();
+    for (const s of subs) {
+      const cur = byForm.get(s.formId) || {
+        formId: s.formId,
+        label: `${s.form.title}${s.form.gradeLabel ? ` · ${s.form.gradeLabel}` : ''}`,
+        count: 0,
+        amount: 0,
+        serials: [] as number[],
+      };
+      cur.count += 1;
+      cur.amount += money(s.totalAmount);
+      if (s.formSerial != null) cur.serials.push(s.formSerial);
+      byForm.set(s.formId, cur);
+    }
+
+    return {
+      count: subs.length,
+      amount: subs.reduce((n, s) => n + money(s.totalAmount), 0),
+      byForm: [...byForm.values()],
+      items: subs.map((s) => ({
+        id: s.id,
+        formSerial: s.formSerial,
+        studentName: s.studentName,
+        receiptNumber: s.receiptNumber,
+        amount: money(s.totalAmount),
+        label: `${s.form.title}${s.form.gradeLabel ? ` · ${s.form.gradeLabel}` : ''}`,
+      })),
+    };
+  }
+
   async snapshot(ymd = cairoYmd(), viewer?: { userId: string; role?: string }) {
     const isReception = viewer?.role === 'RECEPTION';
     const expenseWhere: Prisma.CashExpenseWhereInput = isReception
@@ -825,7 +883,7 @@ export class CashService {
       paidFrom: CashExpenseFrom.DRAWER,
       businessDate,
     };
-    const [collected, drawerExpAgg, drawerToday, close, balances, expenses, handovers, closes, unclosedPrevious, extraRevenueSales, teacherHolds, extraSettlements, onlineFormWallet] =
+    const [collected, drawerExpAgg, drawerToday, close, balances, expenses, handovers, closes, unclosedPrevious, extraRevenueSales, teacherHolds, extraSettlements, onlineFormWallet, onlineFormsToday] =
       await Promise.all([
         this.dayCollections(ymd),
         this.prisma.cashExpense.aggregate({
@@ -856,6 +914,7 @@ export class CashService {
         this.teacherHolds(),
         this.extraSettlements(),
         this.onlineFormWallet(),
+        this.onlineFormsForDay(ymd),
       ]);
 
     const drawerExpenses = money(drawerExpAgg._sum.amount);
@@ -914,6 +973,7 @@ export class CashService {
       teacherHoldTotal: teacherHolds.reduce((n, h) => n + h.gross, 0),
       extraSettlements,
       onlineFormWallet,
+      onlineFormsToday,
       viewerScope: isReception ? 'reception' : 'owner',
       canOwnerExpense: !isReception,
       categories: EXPENSE_CATEGORIES,
@@ -1289,6 +1349,8 @@ export class CashService {
         formSerial: true,
         totalAmount: true,
         receiptNumber: true,
+        payChannel: true,
+        studentName: true,
         form: { select: { title: true, gradeLabel: true } },
       },
     });
@@ -1313,8 +1375,19 @@ export class CashService {
         serials: number[];
       }
     >();
+    const onlineBookingByForm = new Map<
+      string,
+      {
+        label: string;
+        count: number;
+        amount: number;
+        serials: number[];
+      }
+    >();
     for (const b of bookings) {
-      const cur = bookingByForm.get(b.formId) || {
+      const target =
+        b.payChannel === 'online' ? onlineBookingByForm : bookingByForm;
+      const cur = target.get(b.formId) || {
         label: `${b.form.title}${b.form.gradeLabel ? ` · ${b.form.gradeLabel}` : ''}`,
         count: 0,
         amount: 0,
@@ -1323,7 +1396,7 @@ export class CashService {
       cur.count += 1;
       cur.amount += money(b.totalAmount);
       if (b.formSerial != null) cur.serials.push(b.formSerial);
-      bookingByForm.set(b.formId, cur);
+      target.set(b.formId, cur);
     }
 
     const codeByOffer = new Map<
@@ -1395,6 +1468,16 @@ export class CashService {
         unit: 'استمارة',
         amount: r.amount,
         serials: formatNumRanges(r.serials, 'م '),
+      })),
+      ...[...onlineBookingByForm.entries()].map(([id, r]) => ({
+        key: `bk-on-${id}`,
+        kind: 'online-form',
+        label: r.label,
+        count: r.count,
+        unit: 'استمارة',
+        amount: r.amount,
+        serials: formatNumRanges(r.serials, 'م '),
+        note: 'أونلاين — مش في عدّ الدرج (محفظة أونلاين)',
       })),
       ...[...codeByOffer.entries()].map(([id, r]) => ({
         key: `on-${id}`,
@@ -1518,6 +1601,14 @@ export class CashService {
       summaryCounts: {
         forms: [...bookingByForm.values()].reduce((n, r) => n + r.count, 0),
         formsAmount: [...bookingByForm.values()].reduce((n, r) => n + r.amount, 0),
+        formsOnline: [...onlineBookingByForm.values()].reduce(
+          (n, r) => n + r.count,
+          0,
+        ),
+        formsOnlineAmount: [...onlineBookingByForm.values()].reduce(
+          (n, r) => n + r.amount,
+          0,
+        ),
         codes: online.length,
         codesAmount: online.reduce((n, s) => n + money(s.amount), 0),
         handouts: handouts.reduce((n, s) => n + s.qty, 0),
