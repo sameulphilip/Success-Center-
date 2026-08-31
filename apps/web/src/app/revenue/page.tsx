@@ -54,6 +54,7 @@ type Offer = {
   teacher: Teacher;
   subject?: Subject | null;
   _count?: { codes: number; sales: number };
+  availableCodes?: number;
 };
 
 type OnlineSale = {
@@ -140,6 +141,12 @@ function subjectsOf(t?: Teacher | null): { id: string; nameAr: string }[] {
     seen.add(s.id);
     return true;
   });
+}
+
+function offerAvailable(o?: Offer | null) {
+  if (!o) return 0;
+  if (o.availableCodes != null) return o.availableCodes;
+  return Math.max(0, (o._count?.codes ?? 0) - (o._count?.sales ?? 0));
 }
 
 function centerCutOf(
@@ -1025,11 +1032,45 @@ export default function RevenuePage() {
                       .filter((o) => o.isActive)
                       .map((o) => (
                       <option key={o.id} value={o.id}>
-                        {o.title}
+                        {o.title} · فاضل {offerAvailable(o)} كود
                       </option>
                     ))}
                   </select>
                 </FieldLabel>
+                {(() => {
+                  const offer = offers.find((o) => o.id === sellOnline.offerId);
+                  const available = offerAvailable(offer);
+                  if (!offer) return null;
+                  return (
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 px-3 py-2.5">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <p className="font-bold text-navy">{offer.title}</p>
+                          <p className="text-xs text-navy/55">
+                            {teacherName(offer.teacher)}
+                            {offer.subject?.nameAr
+                              ? ` · ${offer.subject.nameAr}`
+                              : ''}
+                          </p>
+                        </div>
+                        <div className="text-left shrink-0">
+                          <p className="text-[11px] font-bold text-emerald-900/70">
+                            فاضل
+                          </p>
+                          <p className="text-xl font-extrabold text-emerald-800 tabular-nums leading-tight">
+                            {available.toLocaleString('en-EG')}
+                          </p>
+                          <p className="text-[10px] text-emerald-900/60">كود</p>
+                        </div>
+                      </div>
+                      {available <= 0 ? (
+                        <p className="text-xs text-amber-800 font-semibold mt-2">
+                          لا توجد أكواد متاحة لهذا العرض
+                        </p>
+                      ) : null}
+                    </div>
+                  );
+                })()}
                 <div className="grid grid-cols-2 gap-2">
                   <FieldLabel label="اسم المشتري">
                     <input
@@ -1048,7 +1089,12 @@ export default function RevenuePage() {
                       className="field"
                       type="number"
                       min={1}
-                      max={5000}
+                      max={Math.max(
+                        1,
+                        offerAvailable(
+                          offers.find((o) => o.id === sellOnline.offerId),
+                        ),
+                      )}
                       required
                       value={sellOnline.qty}
                       onChange={(e) =>
@@ -1106,7 +1152,13 @@ export default function RevenuePage() {
                 <button
                   type="submit"
                   className="btn-accent w-full"
-                  disabled={busy === 'sellOn' || !offers.length}
+                  disabled={
+                    busy === 'sellOn' ||
+                    !offers.length ||
+                    offerAvailable(
+                      offers.find((o) => o.id === sellOnline.offerId),
+                    ) <= 0
+                  }
                 >
                   بيع كود وإصدار إيصال
                 </button>

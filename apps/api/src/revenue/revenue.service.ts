@@ -66,8 +66,8 @@ export class RevenueService {
   constructor(private readonly prisma: PrismaService) {}
 
   // —— Online offers / codes ——
-  listOffers() {
-    return this.prisma.onlineOffer.findMany({
+  async listOffers() {
+    const offers = await this.prisma.onlineOffer.findMany({
       include: {
         teacher: true,
         subject: true,
@@ -75,6 +75,18 @@ export class RevenueService {
       },
       orderBy: { createdAt: 'desc' },
     });
+    const availableRows = await this.prisma.onlineAccessCode.groupBy({
+      by: ['offerId'],
+      where: { status: OnlineCodeStatus.AVAILABLE },
+      _count: true,
+    });
+    const availableByOffer = new Map(
+      availableRows.map((r) => [r.offerId, r._count]),
+    );
+    return offers.map((o) => ({
+      ...o,
+      availableCodes: availableByOffer.get(o.id) || 0,
+    }));
   }
 
   private resolveOfferShare(price: number, data: {
