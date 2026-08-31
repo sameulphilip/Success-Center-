@@ -144,6 +144,7 @@ export class OpsController {
       method: SessionPayMethod;
       vodafoneTxn?: string;
       amount?: number;
+      discountReason?: string;
       note?: string;
     },
     @CurrentUser() user: { userId: string },

@@ -97,8 +97,8 @@ export default function MessagingPage() {
       {result ? <AlertBanner tone="success">{result}</AlertBanner> : null}
       {status && status.whatsappProvider === 'console' ? (
         <AlertBanner tone="info">
-          WhatsApp حالياً Console. لتفعيل الإرسال الحقيقي ضع WHATSAPP_PROVIDER=meta
-          أو twilio في ملف البيئة.
+          WhatsApp حالياً Console. لتفعيل الإرسال الحقيقي ضع WHATSAPP_PROVIDER=openwa
+          أو meta أو twilio في ملف البيئة.
         </AlertBanner>
       ) : null}
 

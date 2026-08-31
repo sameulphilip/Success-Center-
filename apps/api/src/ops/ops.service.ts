@@ -584,6 +584,7 @@ export class OpsService {
       method: SessionPayMethod;
       vodafoneTxn?: string;
       amount?: number;
+      discountReason?: string;
       note?: string;
     },
     userId?: string,
@@ -637,7 +638,24 @@ export class OpsService {
       throw new BadRequestException('رقم عملية فودافون كاش مطلوب');
     }
 
-    const amount = data.amount ?? Number(session.feeAmount);
+    const listedFee = Number(session.feeAmount);
+    const amount =
+      data.amount != null && !Number.isNaN(Number(data.amount))
+        ? Number(data.amount)
+        : listedFee;
+    if (amount < 0) {
+      throw new BadRequestException('المبلغ غير صالح');
+    }
+    if (amount > listedFee + 0.001) {
+      throw new BadRequestException('المبلغ أكبر من سعر الجلسة');
+    }
+    const discountReason = (data.discountReason || '').trim();
+    if (amount < listedFee - 0.001 && !discountReason) {
+      throw new BadRequestException(
+        'سبب الخصم مطلوب عند الدفع بأقل من سعر الجلسة',
+      );
+    }
+
     const isCash = data.method === SessionPayMethod.CASH;
     const receiptNumber = `SP-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`;
 
@@ -646,6 +664,8 @@ export class OpsService {
         sessionId,
         studentId: student.id,
         amount,
+        listedFee,
+        discountReason: amount < listedFee - 0.001 ? discountReason : null,
         method: data.method,
         vodafoneTxn: data.vodafoneTxn?.trim() || null,
         receiptNumber,

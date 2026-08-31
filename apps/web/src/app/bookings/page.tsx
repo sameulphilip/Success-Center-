@@ -13,7 +13,6 @@ import {
 import { AppDialog, type DialogTone } from '@/components/AppDialog';
 import { TablePager, usePaged } from '@/components/TablePager';
 import { api, getStoredUser, openFileInTab } from '@/lib/api';
-import { openStudentPaymentWhatsApp } from '@/lib/whatsapp';
 
 type DialogState = {
   title?: string;
@@ -53,6 +52,7 @@ type FormRow = {
   onlinePayEnabled?: boolean;
   vodafoneWallet?: string | null;
   instapayHandle?: string | null;
+  whatsappGroupLink?: string | null;
   _count?: { offerings: number; submissions: number };
   statusCounts?: {
     PAID: number;
@@ -224,6 +224,7 @@ export default function BookingsAdminPage() {
     vodafoneWallet: '',
     instapayHandle: '',
   });
+  const [whatsappGroupDraft, setWhatsappGroupDraft] = useState('');
   const [isAdmin, setIsAdmin] = useState(false);
   const [canManageOnlinePay, setCanManageOnlinePay] = useState(false);
 
@@ -310,6 +311,7 @@ export default function BookingsAdminPage() {
       vodafoneWallet: detail.vodafoneWallet || '',
       instapayHandle: detail.instapayHandle || '',
     });
+    setWhatsappGroupDraft(detail.whatsappGroupLink || '');
   }
 
   async function copyFullLink() {
@@ -331,6 +333,25 @@ export default function BookingsAdminPage() {
       setTimeout(() => setCopiedOnline(false), 2000);
     } catch {
       notify('تعذر نسخ الرابط');
+    }
+  }
+
+  async function saveWhatsappGroup() {
+    if (!formDetail) return;
+    setBusy('whatsapp-group');
+    try {
+      await api(`/booking/forms/${formDetail.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          whatsappGroupLink: whatsappGroupDraft.trim() || null,
+        }),
+      });
+      await refresh();
+      notify('تم حفظ لينك جروب الصف', 'success', 'تم الحفظ');
+    } catch (err: any) {
+      notify(err.message);
+    } finally {
+      setBusy('');
     }
   }
 
@@ -634,11 +655,6 @@ export default function BookingsAdminPage() {
     id: string,
     method: PayMethod,
     vodafoneTxn?: string,
-    ctx?: {
-      studentName?: string;
-      studentPhone?: string;
-      openWhatsApp?: boolean;
-    },
   ) {
     setBusy(`paid-${id}`);
     try {
@@ -672,16 +688,6 @@ export default function BookingsAdminPage() {
         );
       } else {
         notify(`تم تأكيد الدفع · ${methodAr}`, 'success', 'تم الدفع');
-      }
-      if (ctx?.openWhatsApp) {
-        const phone = res.portalAccount?.phone || ctx.studentPhone;
-        if (phone) {
-          openStudentPaymentWhatsApp({
-            studentName: ctx.studentName || '',
-            studentPhone: phone,
-            receiptNumber: res.receiptNumber,
-          });
-        }
       }
       await loadSubmissions(
         selectedFormId || undefined,
@@ -1215,6 +1221,33 @@ export default function BookingsAdminPage() {
                 ) : null}
               </div>
 
+              <div className="mb-5 rounded-2xl border border-emerald-200 bg-emerald-50/40 p-4 space-y-3">
+                <div>
+                  <p className="font-bold text-navy">جروب واتساب للصف</p>
+                  <p className="text-[12px] text-navy/55">
+                    لينك واحد لكل استمارة — الطالب اللي يدفع في «
+                    {formDetail.gradeLabel}» يستلم لينك جروب {formDetail.gradeLabel}{' '}
+                    مع رسالة تأكيد الدفع.
+                  </p>
+                </div>
+                <FieldLabel label={`لينك جروب ${formDetail.gradeLabel}`}>
+                  <input
+                    className="field"
+                    value={whatsappGroupDraft}
+                    onChange={(e) => setWhatsappGroupDraft(e.target.value)}
+                    placeholder="https://chat.whatsapp.com/…"
+                  />
+                </FieldLabel>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  disabled={busy === 'whatsapp-group'}
+                  onClick={() => void saveWhatsappGroup()}
+                >
+                  حفظ لينك الجروب
+                </button>
+              </div>
+
               <div className="mb-3">
                 <FieldLabel label="بحث باسم المدرس">
                   <input
@@ -1301,7 +1334,7 @@ export default function BookingsAdminPage() {
                 ) : (
                   <p className="mt-2 text-[11px] text-navy/45">
                     «اختاروه» = كل الحجوزات غير الملغاة · «مدفوع» = اللي اتأكد
-                    دفعهم. الجدول مرتّب من الأكثر اختيارًا.
+                    دفعهم. لينك جروب الصف يُضبط فوق (مرة واحدة لكل استمارة).
                     {teacherSearch.trim()
                       ? ` · ظاهر ${filteredOfferings.length} من ${rankedOfferings.length}`
                       : ''}
@@ -1747,11 +1780,6 @@ export default function BookingsAdminPage() {
                                     s.id,
                                     s.paymentMethod as PayMethod,
                                     s.vodafoneTxn || undefined,
-                                    {
-                                      studentName: s.studentName,
-                                      studentPhone: s.studentPhone,
-                                      openWhatsApp: true,
-                                    },
                                   );
                                 },
                                 'تأكيد التحويل',
@@ -2013,11 +2041,6 @@ export default function BookingsAdminPage() {
                                         s.id,
                                         s.paymentMethod as PayMethod,
                                         s.vodafoneTxn || undefined,
-                                        {
-                                          studentName: s.studentName,
-                                          studentPhone: s.studentPhone,
-                                          openWhatsApp: true,
-                                        },
                                       );
                                     },
                                     'تأكيد التحويل',

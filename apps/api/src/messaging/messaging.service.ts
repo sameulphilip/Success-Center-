@@ -40,9 +40,12 @@ export class MessagingService {
                 process.env.TWILIO_AUTH_TOKEN &&
                 process.env.TWILIO_WHATSAPP_FROM,
             )
-          : Boolean(
-              process.env.WHATSAPP_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID,
-            );
+          : mode === 'openwa'
+            ? Boolean(process.env.OPENWA_API_KEY)
+            : Boolean(
+                process.env.WHATSAPP_TOKEN &&
+                  process.env.WHATSAPP_PHONE_NUMBER_ID,
+              );
 
     return {
       whatsappProvider: mode,

@@ -20,6 +20,8 @@ export type OnlinePaymentWhatsAppParams = {
   studentName: string;
   studentPhone: string;
   receiptNumber?: string | null;
+  gradeLabel?: string | null;
+  groupLink?: string | null;
 };
 
 export function buildOnlinePaymentConfirmMessage(
@@ -27,6 +29,7 @@ export function buildOnlinePaymentConfirmMessage(
 ): string {
   const loginUrl = studentLoginUrlWithPhone(params.studentPhone);
   const name = params.studentName.trim() || 'الطالب';
+  const grade = params.gradeLabel?.trim();
   const lines = [
     `مرحباً ${name}،`,
     '',
@@ -42,6 +45,11 @@ export function buildOnlinePaymentConfirmMessage(
     '',
     'اختر «طالب» → أدخل رقم موبايلك → عيّن الرقم السري (أول مرة).',
   );
+  const link = params.groupLink?.trim();
+  if (link) {
+    const label = grade ? `جروب ${grade}` : 'جروب الصف';
+    lines.push('', `— ${label} —`, link);
+  }
   return lines.join('\n');
 }
 

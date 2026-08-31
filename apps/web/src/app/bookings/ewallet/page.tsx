@@ -8,7 +8,6 @@ import { AppDialog, type DialogTone } from '@/components/AppDialog';
 import { EmptyState, PageHero, SectionCard } from '@/components/ui';
 import { TablePager, usePaged } from '@/components/TablePager';
 import { api, getStoredUser, openFileInTab } from '@/lib/api';
-import { openStudentPaymentWhatsApp } from '@/lib/whatsapp';
 
 type Transfer = {
   id: string;
@@ -29,6 +28,7 @@ type Transfer = {
     title: string;
     gradeLabel: string;
     slug: string;
+    whatsappGroupLink?: string | null;
   } | null;
 };
 
@@ -118,17 +118,9 @@ export default function OnlineWalletPage() {
           vodafoneTxn: t.vodafoneTxn,
         }),
       });
-      const phone = res.portalAccount?.phone || t.studentPhone;
-      if (phone) {
-        openStudentPaymentWhatsApp({
-          studentName: t.studentName,
-          studentPhone: phone,
-          receiptNumber: res.receiptNumber,
-        });
-      }
       await load();
       setDialog({
-        message: `تم تأكيد تحويل ${t.studentName}`,
+        message: `تم تأكيد تحويل ${t.studentName} — هتتبعت رسالة واتساب للطالب تلقائياً`,
         tone: 'success',
         title: 'تم التأكيد',
         confirmLabel: 'حسناً',

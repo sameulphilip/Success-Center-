@@ -78,6 +78,8 @@ function teacherCutOf(s: {
 type Entry = {
   id: string;
   amount: string | number;
+  listedFee?: string | number | null;
+  discountReason?: string | null;
   method: 'CASH' | 'VODAFONE_CASH';
   payStatus: string;
   vodafoneTxn?: string | null;
@@ -86,6 +88,8 @@ type Entry = {
   refundedAmount?: string | number;
   student: Student;
 };
+
+type PayMode = 'full' | 'half' | 'free' | 'custom';
 
 type Block = {
   id: string;
@@ -116,6 +120,24 @@ function subjectsOf(t?: Teacher | null): { id: string; nameAr: string }[] {
 
 const OPS_SCANNER_ID = 'ops-desk-qr';
 const OTHER_TEACHER = '__other__';
+
+function sessionListedFee(detail?: { feeAmount?: string | number } | null) {
+  return Number(detail?.feeAmount || 0);
+}
+
+function resolvePayAmount(
+  listedFee: number,
+  payMode: PayMode,
+  customAmount: string,
+) {
+  if (payMode === 'free') return 0;
+  if (payMode === 'half') return Math.round((listedFee / 2) * 100) / 100;
+  if (payMode === 'custom') {
+    const n = Number(customAmount);
+    return Number.isFinite(n) ? n : listedFee;
+  }
+  return listedFee;
+}
 
 function cairoYmd(d = new Date()) {
   return new Intl.DateTimeFormat('en-CA', {
@@ -201,6 +223,9 @@ export default function OpsPage() {
     gradeLevelId: '',
     method: 'CASH' as 'CASH' | 'VODAFONE_CASH',
     vodafoneTxn: '',
+    payMode: 'full' as PayMode,
+    customAmount: '',
+    discountReason: '',
   });
   const [payMatch, setPayMatch] = useState<{
     status: 'idle' | 'loading' | 'found' | 'missing' | 'error';
@@ -562,7 +587,23 @@ export default function OpsPage() {
 
   async function collectPay(e: FormEvent) {
     e.preventDefault();
-    if (!selectedId) return;
+    if (!selectedId || !detail) return;
+    const listedFee = sessionListedFee(detail);
+    const amount = resolvePayAmount(
+      listedFee,
+      payForm.payMode,
+      payForm.customAmount,
+    );
+    const needsReason = amount < listedFee - 0.001;
+    const discountReason = payForm.discountReason.trim();
+    if (amount < 0 || amount > listedFee + 0.001) {
+      setError('المبلغ غير صالح');
+      return;
+    }
+    if (needsReason && !discountReason) {
+      setError('اكتب سبب الخصم');
+      return;
+    }
     setBusy('pay');
     setError('');
     try {
@@ -588,6 +629,8 @@ export default function OpsPage() {
             payForm.method === 'VODAFONE_CASH'
               ? payForm.vodafoneTxn
               : undefined,
+          amount,
+          discountReason: needsReason ? discountReason : undefined,
         }),
       });
       setPayForm({
@@ -597,6 +640,9 @@ export default function OpsPage() {
         gradeLevelId: '',
         method: 'CASH',
         vodafoneTxn: '',
+        payMode: 'full',
+        customAmount: '',
+        discountReason: '',
       });
       setScanned(null);
       await loadDetail(selectedId);
@@ -1425,6 +1471,113 @@ export default function OpsPage() {
                         {payMatch.message}
                       </p>
                     ) : null}
+                    {detail ? (
+                      <div className="rounded-xl border border-mist bg-sand/40 p-3 space-y-2">
+                        <p className="text-xs font-bold text-navy/55">
+                          سعر الجلسة:{' '}
+                          <span className="text-navy tabular-nums">
+                            {sessionListedFee(detail).toLocaleString('en-EG')} ج.م
+                          </span>
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {(
+                            [
+                              ['full', 'كامل'],
+                              ['half', 'نصف'],
+                              ['free', 'مجاني'],
+                              ['custom', 'مبلغ آخر'],
+                            ] as const
+                          ).map(([mode, label]) => (
+                            <button
+                              key={mode}
+                              type="button"
+                              className={`text-xs px-3 py-1.5 rounded-full font-semibold ${
+                                payForm.payMode === mode
+                                  ? 'bg-[#0B2545] text-white'
+                                  : 'bg-white border border-mist text-navy/70'
+                              }`}
+                              onClick={() =>
+                                setPayForm((f) => ({
+                                  ...f,
+                                  payMode: mode,
+                                  customAmount:
+                                    mode === 'custom'
+                                      ? String(
+                                          resolvePayAmount(
+                                            sessionListedFee(detail),
+                                            f.payMode,
+                                            f.customAmount,
+                                          ),
+                                        )
+                                      : f.customAmount,
+                                }))
+                              }
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                        {payForm.payMode === 'custom' ? (
+                          <FieldLabel label="المبلغ المدفوع">
+                            <input
+                              className="field"
+                              type="number"
+                              min={0}
+                              max={sessionListedFee(detail)}
+                              step="0.01"
+                              value={payForm.customAmount}
+                              onChange={(e) =>
+                                setPayForm({
+                                  ...payForm,
+                                  customAmount: e.target.value,
+                                })
+                              }
+                            />
+                          </FieldLabel>
+                        ) : null}
+                        <p className="text-sm font-bold text-navy tabular-nums">
+                          يُحصّل:{' '}
+                          {resolvePayAmount(
+                            sessionListedFee(detail),
+                            payForm.payMode,
+                            payForm.customAmount,
+                          ).toLocaleString('en-EG')}{' '}
+                          ج.م
+                          {resolvePayAmount(
+                            sessionListedFee(detail),
+                            payForm.payMode,
+                            payForm.customAmount,
+                          ) <
+                          sessionListedFee(detail) - 0.001 ? (
+                            <span className="text-amber-800 font-semibold text-xs mr-2">
+                              (خصم من{' '}
+                              {sessionListedFee(detail).toLocaleString('en-EG')})
+                            </span>
+                          ) : null}
+                        </p>
+                        {resolvePayAmount(
+                          sessionListedFee(detail),
+                          payForm.payMode,
+                          payForm.customAmount,
+                        ) <
+                        sessionListedFee(detail) - 0.001 ? (
+                          <FieldLabel label="سبب الخصم *">
+                            <input
+                              className="field"
+                              required
+                              value={payForm.discountReason}
+                              onChange={(e) =>
+                                setPayForm({
+                                  ...payForm,
+                                  discountReason: e.target.value,
+                                })
+                              }
+                              placeholder="مثال: قريب للمدرس · منحة · خصم إداري"
+                            />
+                          </FieldLabel>
+                        ) : null}
+                      </div>
+                    ) : null}
                     <FieldLabel label="طريقة الدفع">
                       <select
                         className="field"
@@ -1502,6 +1655,18 @@ export default function OpsPage() {
                               {Number(e.amount).toLocaleString('en-EG')} ·{' '}
                               {e.method === 'CASH' ? 'كاش' : 'فودافون'}
                             </div>
+                            {e.listedFee != null &&
+                            Number(e.listedFee) > Number(e.amount) + 0.001 ? (
+                              <div className="text-amber-800 font-semibold">
+                                من {Number(e.listedFee).toLocaleString('en-EG')}{' '}
+                                ج.م
+                                {e.discountReason ? (
+                                  <span className="block text-[11px] font-normal text-navy/60">
+                                    {e.discountReason}
+                                  </span>
+                                ) : null}
+                              </div>
+                            ) : null}
                             <div>{payStatusAr[e.payStatus] || e.payStatus}</div>
                             {e.vodafoneTxn ? (
                               <div className="font-mono text-navy/40">

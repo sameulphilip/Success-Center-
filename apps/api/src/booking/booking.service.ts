@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { BookingStatus, PaymentStatus, RoleCode } from '@prisma/client';
+import { BookingStatus, MessageChannel, PaymentStatus, RoleCode } from '@prisma/client';
 import * as QRCode from 'qrcode';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -24,10 +24,15 @@ import {
   readBookingProof,
   saveBookingProof,
 } from '../common/image-proof.util';
+import { MessagingService } from '../messaging/messaging.service';
+import { buildBookingPaymentConfirmMessage } from './booking-whatsapp.util';
 
 @Injectable()
 export class BookingService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly messaging: MessagingService,
+  ) {}
 
   /** Next Excel/paper serial «م» for a form (max + 1, or 1). */
   async nextFormSerial(formId: string, preferred?: number | null) {
@@ -534,6 +539,7 @@ export class BookingService {
       onlinePayEnabled: boolean;
       vodafoneWallet: string | null;
       instapayHandle: string | null;
+      whatsappGroupLink: string | null;
     }>,
     actorRole?: string,
   ) {
@@ -566,6 +572,9 @@ export class BookingService {
           'فعّل فودافون كاش أو InstaPay برقم المحفظة / الحساب قبل نشر لينك الأونلاين',
         );
       }
+    }
+    if (data.whatsappGroupLink !== undefined) {
+      data.whatsappGroupLink = data.whatsappGroupLink?.trim() || null;
     }
     return this.prisma.bookingForm.update({
       where: { id },
@@ -770,7 +779,7 @@ export class BookingService {
       this.prisma.bookingSubmission.findMany({
         where: { payChannel: 'online' },
         include: {
-          form: { select: { id: true, title: true, gradeLabel: true, slug: true } },
+          form: { select: { id: true, title: true, gradeLabel: true, slug: true, whatsappGroupLink: true } },
         },
         orderBy: [{ createdAt: 'desc' }],
         take: 2000,
@@ -1048,7 +1057,7 @@ export class BookingService {
 
     const receiptNumber = `BK-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`;
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       let parent = await tx.parent.findFirst({
         where: { phone: submission.parentPhone },
       });
@@ -1265,6 +1274,58 @@ export class BookingService {
       });
 
       return { ...updated, portalAccount };
+    });
+
+    void this.queuePaymentWhatsApp(result).catch((err) => {
+      console.error(
+        'Booking WhatsApp enqueue failed:',
+        err instanceof Error ? err.message : err,
+      );
+    });
+
+    return result;
+  }
+
+  /** Auto WhatsApp after payment confirmation (OpenWA / Meta / Twilio). */
+  private async queuePaymentWhatsApp(submission: {
+    studentName: string;
+    studentPhone: string;
+    receiptNumber?: string | null;
+    payChannel?: string;
+    paymentMethod?: string | null;
+    form?: {
+      gradeLabel?: string;
+      title?: string;
+      whatsappGroupLink?: string | null;
+    } | null;
+  }) {
+    if (process.env.BOOKING_WHATSAPP_AUTO === 'false') return;
+
+    const provider = (process.env.WHATSAPP_PROVIDER || 'console').toLowerCase();
+    if (provider === 'console') return;
+
+    const phone = normalizePhone(submission.studentPhone);
+    if (!isValidMobile(phone)) return;
+
+    const body = buildBookingPaymentConfirmMessage({
+      studentName: submission.studentName,
+      studentPhone: phone,
+      receiptNumber: submission.receiptNumber,
+      centerName: process.env.CENTER_NAME || 'Success Center',
+      gradeLabel: submission.form?.gradeLabel || submission.form?.title,
+      groupLink: submission.form?.whatsappGroupLink,
+    });
+
+    await this.messaging.enqueue({
+      channel: MessageChannel.WHATSAPP,
+      toPhone: phone,
+      title: 'تأكيد دفع الاستمارة',
+      body,
+      meta: {
+        kind: 'booking_payment_confirm',
+        payChannel: submission.payChannel,
+        paymentMethod: submission.paymentMethod,
+      },
     });
   }
 

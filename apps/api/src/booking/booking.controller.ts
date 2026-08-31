@@ -91,6 +91,7 @@ export class BookingController {
       onlinePayEnabled?: boolean;
       vodafoneWallet?: string | null;
       instapayHandle?: string | null;
+      whatsappGroupLink?: string | null;
     }>,
     @CurrentUser() user: { role?: string },
   ) {

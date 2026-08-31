@@ -36,6 +36,8 @@ services:
       dockerfile: apps/api/Dockerfile
     container_name: success-api
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -60,6 +62,12 @@ services:
       TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
       TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
       TWILIO_WHATSAPP_FROM: ${TWILIO_WHATSAPP_FROM:-}
+      OPENWA_BASE_URL: ${OPENWA_BASE_URL:-https://wa-admin.cowdlly.com}
+      OPENWA_API_KEY: ${OPENWA_API_KEY:-}
+      OPENWA_SESSION_ID: ${OPENWA_SESSION_ID:-}
+      OPENWA_SESSION_NAME: ${OPENWA_SESSION_NAME:-success}
+      BOOKING_WHATSAPP_AUTO: ${BOOKING_WHATSAPP_AUTO:-true}
+      PUBLIC_WEB_URL: ${PUBLIC_WEB_URL:-https://success.cowdlly.com}
       DEVICE_API_KEY: ${DEVICE_API_KEY:-success-device-key-change-me}
       DEFAULT_CHECKIN_GROUP_ID: ${DEFAULT_CHECKIN_GROUP_ID:-}
       OVERDUE_REMINDERS_ENABLED: ${OVERDUE_REMINDERS_ENABLED:-true}
@@ -67,6 +75,9 @@ services:
       - api_uploads:/app/apps/api/uploads
     ports:
       - "127.0.0.1:${API_PORT:-3201}:3001"
+    networks:
+      - default
+      - openwa
 
   web:
     build:
@@ -87,3 +98,8 @@ volumes:
   postgres_data:
   redis_data:
   api_uploads:
+
+networks:
+  openwa:
+    external: true
+    name: openwa-network

@@ -1,6 +1,7 @@
 import { ConsoleSmsProvider } from './console-sms.provider';
 import { ConsoleWhatsAppProvider } from './console-whatsapp.provider';
 import { MessagingProvider } from './messaging-provider';
+import { OpenWaWhatsAppProvider } from './openwa-whatsapp.provider';
 import { TwilioWhatsAppProvider } from './twilio-whatsapp.provider';
 import { WhatsAppCloudProvider } from './whatsapp-cloud.provider';
 
@@ -11,6 +12,9 @@ export function createWhatsAppProvider(): MessagingProvider {
   }
   if (mode === 'twilio') {
     return new TwilioWhatsAppProvider();
+  }
+  if (mode === 'openwa') {
+    return new OpenWaWhatsAppProvider();
   }
   return new ConsoleWhatsAppProvider();
 }

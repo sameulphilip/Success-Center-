@@ -501,6 +501,8 @@ model BookingForm {
   onlinePayEnabled Boolean           @default(false)
   vodafoneWallet   String?
   instapayHandle   String?
+  /** WhatsApp group invite for this grade/form — sent after payment confirmation */
+  whatsappGroupLink String?
   offerings    BookingOffering[]
   submissions  BookingSubmission[]
   createdAt    DateTime            @default(now())
@@ -610,6 +612,10 @@ model SessionEntry {
   studentId          String
   student            Student          @relation(fields: [studentId], references: [id])
   amount             Decimal          @db.Decimal(12, 2)
+  /** Session list price at collection (for discount display) */
+  listedFee          Decimal?         @db.Decimal(12, 2)
+  /** Required when amount is less than listedFee */
+  discountReason     String?
   method             SessionPayMethod
   payStatus          SessionPayStatus @default(PENDING_CONFIRM)
   vodafoneTxn        String?
