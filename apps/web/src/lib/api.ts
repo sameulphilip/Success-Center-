@@ -108,6 +108,28 @@ export async function phoneLogin(phone: string, password: string) {
   return persistAuth(data);
 }
 
+export async function phoneReset(
+  phone: string,
+  studentUid: string,
+  password: string,
+) {
+  const data = await api<LoginResult>('/auth/phone/reset', {
+    method: 'POST',
+    body: JSON.stringify({ phone, studentUid, password }),
+  });
+  return persistAuth(data);
+}
+
+export async function changePortalPin(
+  currentPassword: string,
+  newPassword: string,
+) {
+  return api<{ ok: boolean; message: string }>('/auth/portal/change-pin', {
+    method: 'POST',
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+}
+
 export function logout() {
   localStorage.removeItem('accessToken');
   localStorage.removeItem('refreshToken');

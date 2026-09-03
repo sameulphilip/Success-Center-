@@ -21,6 +21,11 @@ import {
   type ReportSection,
   type ReportTab,
 } from '@/lib/report-print';
+import {
+  exportFinanceExcel,
+  exportPnlExcel,
+  exportProfitExcel,
+} from '@/lib/report-excel';
 
 function monthStart() {
   const d = new Date();
@@ -43,15 +48,17 @@ export default function ReportsPage() {
   const [finance, setFinance] = useState<any>(null);
   const [teachers, setTeachers] = useState<any>(null);
   const [profit, setProfit] = useState<any>(null);
+  const [pnl, setPnl] = useState<any>(null);
   const [bookings, setBookings] = useState<any>(null);
-  const [tab, setTab] = useState<Tab>('profit');
+  const [tab, setTab] = useState<Tab>('pnl');
   const [error, setError] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [excelBusy, setExcelBusy] = useState(false);
   const [payoutBusy, setPayoutBusy] = useState<string>('');
   const [notice, setNotice] = useState('');
   const [openTeacherId, setOpenTeacherId] = useState('');
   const [printOpen, setPrintOpen] = useState(false);
-  const [printTab, setPrintTab] = useState<Tab>('profit');
+  const [printTab, setPrintTab] = useState<Tab>('pnl');
   const [printSections, setPrintSections] = useState<ReportSection[]>([]);
   const [printShowCollected, setPrintShowCollected] = useState(true);
 
@@ -111,16 +118,18 @@ export default function ReportsPage() {
   async function load() {
     setError('');
     try {
-      const [f, t, p, b] = await Promise.all([
+      const [f, t, p, b, n] = await Promise.all([
         api<any>(`/reports/finance?from=${from}&to=${to}`),
         api<any>(`/reports/teachers?from=${from}&to=${to}`),
         api<any>(`/reports/profit?from=${from}&to=${to}`),
         api<any>(`/reports/bookings?from=${from}&to=${to}`),
+        api<any>(`/reports/pnl?from=${from}&to=${to}`),
       ]);
       setFinance(f);
       setTeachers(t);
       setProfit(p);
       setBookings(b);
+      setPnl(n);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'فشل تحميل التقارير');
     }
@@ -137,7 +146,9 @@ export default function ReportsPage() {
             ? `/reports/teachers/pdf?from=${from}&to=${to}`
             : tab === 'bookings'
               ? `/reports/bookings/pdf?from=${from}&to=${to}`
-              : `/reports/profit/pdf?from=${from}&to=${to}`;
+              : tab === 'pnl'
+                ? `/reports/pnl/pdf?from=${from}&to=${to}`
+                : `/reports/profit/pdf?from=${from}&to=${to}`;
       const name =
         tab === 'finance'
           ? `finance-${from}-${to}.pdf`
@@ -145,12 +156,38 @@ export default function ReportsPage() {
             ? `teachers-${from}-${to}.pdf`
             : tab === 'bookings'
               ? `bookings-${from}-${to}.pdf`
-              : `profit-${from}-${to}.pdf`;
+              : tab === 'pnl'
+                ? `pnl-${from}-${to}.pdf`
+                : `profit-${from}-${to}.pdf`;
       await downloadFile(path, name);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'فشل تصدير PDF');
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function exportExcel() {
+    setError('');
+    setExcelBusy(true);
+    try {
+      if (tab === 'pnl') {
+        if (!pnl) throw new Error('حمّل التقرير أولاً');
+        await exportPnlExcel(pnl, from, to);
+      } else if (tab === 'profit') {
+        if (!profit) throw new Error('حمّل التقرير أولاً');
+        await exportProfitExcel(profit, from, to);
+      } else if (tab === 'finance') {
+        if (!finance) throw new Error('حمّل التقرير أولاً');
+        await exportFinanceExcel(finance, from, to);
+      } else {
+        throw new Error('Excel متاح لتبويب أرباح ومصروفات · ربحية · مالي');
+      }
+      setNotice('تم تنزيل ملف Excel');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'فشل تصدير Excel');
+    } finally {
+      setExcelBusy(false);
     }
   }
 
@@ -168,6 +205,8 @@ export default function ReportsPage() {
   );
   const pBookingForms = usePaged(bookings?.byForm || [], `bf:${from}:${to}`);
   const pBookingPaid = usePaged(bookings?.paid || [], `bp:${from}:${to}`);
+  const pExpenses = usePaged(pnl?.expenses || [], `ex:${from}:${to}`);
+  const pExpCats = usePaged(pnl?.byCategory || [], `exc:${from}:${to}`);
 
   const payMethodAr: Record<string, string> = {
     CASH: 'كاش',
@@ -184,7 +223,7 @@ export default function ReportsPage() {
     <AppShell>
       <PageHeader
         title="التقارير"
-        subtitle="ربحية · مالي · استمارات · مدرسين · طباعة وتصدير PDF"
+        subtitle="أرباح ومصروفات · ربحية · مالي · استمارات · مدرسين"
         action={
           <div className="flex flex-wrap gap-2 items-end">
             <label className="text-xs text-navy/50">
@@ -223,6 +262,26 @@ export default function ReportsPage() {
             >
               {exporting ? 'جاري التصدير...' : 'تحميل PDF'}
             </button>
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={
+                excelBusy ||
+                (tab === 'pnl' && !pnl) ||
+                (tab === 'profit' && !profit) ||
+                (tab === 'finance' && !finance) ||
+                tab === 'bookings' ||
+                tab === 'teachers'
+              }
+              onClick={() => void exportExcel()}
+              title={
+                tab === 'bookings' || tab === 'teachers'
+                  ? 'Excel متاح لأرباح ومصروفات · ربحية · مالي'
+                  : 'تحميل Excel'
+              }
+            >
+              {excelBusy ? 'جاري Excel...' : 'تحميل Excel'}
+            </button>
           </div>
         }
       />
@@ -233,28 +292,28 @@ export default function ReportsPage() {
         subtitle={`${from} → ${to}`}
         metrics={[
           {
-            label: 'إجمالي التحصيل',
-            value: profit
-              ? Math.round(profit.summary.totalGross).toLocaleString('en-EG')
+            label: 'صافي الفترة',
+            value: pnl
+              ? Math.round(pnl.summary.netProfit).toLocaleString('en-EG')
               : '—',
             highlight: true,
           },
           {
             label: 'حصة السنتر',
-            value: profit
-              ? Math.round(profit.summary.totalCenter).toLocaleString('en-EG')
+            value: pnl
+              ? Math.round(pnl.summary.centerShare).toLocaleString('en-EG')
               : '—',
           },
           {
-            label: 'حصة المدرسين',
-            value: profit
-              ? Math.round(profit.summary.totalTeacher).toLocaleString('en-EG')
+            label: 'المصروفات',
+            value: pnl
+              ? Math.round(pnl.summary.totalExpenses).toLocaleString('en-EG')
               : '—',
           },
           {
-            label: 'استمارات مدفوعة',
-            value: bookings
-              ? Math.round(bookings.summary.paidAmount).toLocaleString('en-EG')
+            label: 'إجمالي التحصيل',
+            value: pnl
+              ? Math.round(pnl.summary.gross).toLocaleString('en-EG')
               : '—',
           },
         ]}
@@ -265,6 +324,7 @@ export default function ReportsPage() {
       <div className="mb-4 flex flex-wrap gap-2">
         {(
           [
+            ['pnl', 'أرباح ومصروفات'],
             ['profit', 'ربحية'],
             ['finance', 'مالي'],
             ['bookings', 'استمارات'],
@@ -281,6 +341,229 @@ export default function ReportsPage() {
           </button>
         ))}
       </div>
+
+      {tab === 'pnl' && pnl ? (
+        <>
+          <div className="mb-2 flex justify-end gap-2">
+            <button
+              type="button"
+              className="btn-ghost text-xs"
+              onClick={() => openPrintPicker('pnl', ['summary'])}
+            >
+              طباعة الملخص
+            </button>
+            <button
+              type="button"
+              className="btn-ghost text-xs"
+              onClick={() => openPrintPicker('pnl')}
+            >
+              طباعة كامل
+            </button>
+            <button
+              type="button"
+              className="btn-primary text-xs"
+              disabled={excelBusy}
+              onClick={() => void exportExcel()}
+            >
+              {excelBusy ? '...' : 'Excel'}
+            </button>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <KpiCard
+              label="إجمالي التحصيل"
+              value={money(pnl.summary.gross)}
+              accent="gold"
+            />
+            <KpiCard
+              label="حصة السنتر"
+              value={money(pnl.summary.centerShare)}
+              accent="green"
+            />
+            <KpiCard
+              label="المصروفات"
+              value={money(pnl.summary.totalExpenses)}
+              accent="red"
+              hint={`${pnl.summary.expensesCount} حركة`}
+            />
+            <KpiCard
+              label="صافي الربح"
+              value={money(pnl.summary.netProfit)}
+              accent={Number(pnl.summary.netProfit) >= 0 ? 'green' : 'red'}
+              hint="حصة السنتر − المصروفات"
+            />
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <KpiCard
+              label="حصة المدرسين"
+              value={money(pnl.summary.teacherShare)}
+            />
+            <KpiCard
+              label="مصروف الدرج"
+              value={money(pnl.summary.drawerExpenses)}
+            />
+            <KpiCard
+              label="مصروف الخزنة"
+              value={money(pnl.summary.safeExpenses)}
+            />
+            <KpiCard
+              label="من صاحب السنتر"
+              value={money(pnl.summary.ownerExpenses)}
+            />
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {(pnl.profitStreams || []).map((stream: any) => (
+              <KpiCard
+                key={stream.key}
+                label={stream.label}
+                value={money(stream.gross)}
+                hint={`${stream.count || 0} · سنتر ${money(stream.centerShare)}`}
+              />
+            ))}
+          </div>
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <SectionCard
+              title="المصروفات حسب البند"
+              action={
+                <button
+                  type="button"
+                  className="btn-ghost text-xs"
+                  onClick={() => openPrintPicker('pnl', ['by-category'])}
+                >
+                  طباعة
+                </button>
+              }
+            >
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>البند</th>
+                      <th>المبلغ</th>
+                      <th>عدد</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pExpCats.slice.map((row: any) => (
+                      <tr key={row.key}>
+                        <td className="font-medium">{row.label}</td>
+                        <td className="tabular-nums font-bold">
+                          {money(row.amount)}
+                        </td>
+                        <td>{row.count}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!pnl.byCategory?.length ? (
+                  <EmptyState>لا مصروفات في الفترة</EmptyState>
+                ) : null}
+              </div>
+              <TablePager
+                page={pExpCats.page}
+                pages={pExpCats.pages}
+                total={pExpCats.total}
+                size={pExpCats.size}
+                from={pExpCats.from}
+                to={pExpCats.to}
+                onPage={pExpCats.setPage}
+              />
+            </SectionCard>
+
+            <SectionCard title="حسب مصدر الصرف">
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>المصدر</th>
+                      <th>المبلغ</th>
+                      <th>عدد</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(pnl.bySource || []).map((row: any) => (
+                      <tr key={row.key}>
+                        <td className="font-medium">{row.label}</td>
+                        <td className="tabular-nums font-bold">
+                          {money(row.amount)}
+                        </td>
+                        <td>{row.count}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!pnl.bySource?.length ? (
+                  <EmptyState>لا مصروفات في الفترة</EmptyState>
+                ) : null}
+              </div>
+            </SectionCard>
+          </div>
+
+          <div className="mt-4">
+            <SectionCard
+              title="قائمة المصروفات"
+              action={
+                <button
+                  type="button"
+                  className="btn-ghost text-xs"
+                  onClick={() => openPrintPicker('pnl', ['expense-list'])}
+                >
+                  طباعة
+                </button>
+              }
+            >
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>التاريخ</th>
+                      <th>البند</th>
+                      <th>المصدر</th>
+                      <th>المبلغ</th>
+                      <th>ملاحظة</th>
+                      <th>بواسطة</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pExpenses.slice.map((e: any) => (
+                      <tr key={e.id}>
+                        <td className="text-xs tabular-nums">
+                          {String(e.businessDate).slice(0, 10)}
+                        </td>
+                        <td className="font-medium">{e.category}</td>
+                        <td className="text-xs">{e.paidFromLabel}</td>
+                        <td className="tabular-nums font-bold">
+                          {money(e.amount)}
+                        </td>
+                        <td className="text-xs text-navy/55 max-w-[12rem] truncate">
+                          {e.note || '—'}
+                        </td>
+                        <td className="text-xs text-navy/45">
+                          {e.createdByName || '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!pnl.expenses?.length ? (
+                  <EmptyState>لا مصروفات في الفترة</EmptyState>
+                ) : null}
+              </div>
+              <TablePager
+                page={pExpenses.page}
+                pages={pExpenses.pages}
+                total={pExpenses.total}
+                size={pExpenses.size}
+                from={pExpenses.from}
+                to={pExpenses.to}
+                onPage={pExpenses.setPage}
+              />
+            </SectionCard>
+          </div>
+        </>
+      ) : null}
 
       {tab === 'profit' && profit ? (
         <>
@@ -858,7 +1141,7 @@ export default function ReportsPage() {
                                 </tr>
                               </thead>
                               <tbody>
-                                {t.sessions.map((s: any) => (
+                    {t.sessions.map((s: any) => (
                                   <tr key={s.id}>
                                     <td className="tabular-nums text-xs">
                                       {s.sessionDate}
@@ -871,6 +1154,17 @@ export default function ReportsPage() {
                                         <span className="block text-[11px] text-navy/40">
                                           {s.title}
                                         </span>
+                                      ) : null}
+                                      {(s.attendees || []).length ? (
+                                        <p className="mt-1 text-[11px] text-navy/55 leading-5">
+                                          {(s.attendees as any[])
+                                            .map((a) =>
+                                              a.discounted
+                                                ? `${a.name} (${Number(a.amount).toLocaleString('en-EG')} ج.م)`
+                                                : a.name,
+                                            )
+                                            .join(' · ')}
+                                        </p>
                                       ) : null}
                                     </td>
                                     <td className="text-xs">

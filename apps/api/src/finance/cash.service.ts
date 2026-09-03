@@ -1106,6 +1106,94 @@ export class CashService {
     );
   }
 
+  /**
+   * After a closed-session price change, keep the existing teacher payout
+   * expense in sync (even if that business day was already closed).
+   */
+  async syncTeacherSessionPayout(opts: {
+    sessionId: string;
+    note: string;
+    fallbackDate: string;
+    teacherName: string;
+    oldAmount: number;
+    newAmount: number;
+    userId?: string;
+  }) {
+    const oldAmount = Math.round((Number(opts.oldAmount) || 0) * 100) / 100;
+    const newAmount = Math.round((Number(opts.newAmount) || 0) * 100) / 100;
+    if (Math.abs(newAmount - oldAmount) < 0.02) return;
+
+    const bySid = await this.prisma.cashExpense.findMany({
+      where: {
+        category: 'حصة مدرس',
+        paidFrom: CashExpenseFrom.DRAWER,
+        note: { contains: `sid:${opts.sessionId}` },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    let expense: (typeof bySid)[number] | null = bySid[0] ?? null;
+
+    if (!expense) {
+      const ymd = /^\d{4}-\d{2}-\d{2}$/.test(opts.fallbackDate)
+        ? opts.fallbackDate
+        : null;
+      const candidates = await this.prisma.cashExpense.findMany({
+        where: {
+          category: 'حصة مدرس',
+          paidFrom: CashExpenseFrom.DRAWER,
+          ...(ymd ? { businessDate: dateOnly(ymd) } : {}),
+          OR: [
+            { note: { contains: opts.teacherName } },
+            ...(ymd
+              ? [
+                  { note: { contains: `حصة ${ymd}` } },
+                  // legacy notes used String(date).slice → "Wed Sep 02"
+                ]
+              : []),
+          ],
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      expense =
+        candidates.find(
+          (e) =>
+            (e.note || '').includes(opts.teacherName) &&
+            Math.abs(Number(e.amount) - oldAmount) < 0.05,
+        ) ||
+        candidates.find((e) => (e.note || '').includes(opts.teacherName)) ||
+        candidates.find((e) => Math.abs(Number(e.amount) - oldAmount) < 0.05) ||
+        null;
+    }
+
+    if (expense) {
+      if (newAmount < 0.01) {
+        await this.prisma.cashExpense.delete({ where: { id: expense.id } });
+        return;
+      }
+      await this.prisma.cashExpense.update({
+        where: { id: expense.id },
+        data: { amount: newAmount, note: opts.note },
+      });
+      return;
+    }
+
+    if (newAmount < 0.01) return;
+
+    const ymd = /^\d{4}-\d{2}-\d{2}$/.test(opts.fallbackDate)
+      ? opts.fallbackDate
+      : cairoYmd();
+    await this.prisma.cashExpense.create({
+      data: {
+        amount: newAmount,
+        category: 'حصة مدرس',
+        paidFrom: CashExpenseFrom.DRAWER,
+        note: `${opts.note} · تعديل سعر`,
+        businessDate: dateOnly(ymd),
+        createdByUserId: opts.userId || null,
+      },
+    });
+  }
+
   async deleteExpense(id: string) {
     const expense = await this.prisma.cashExpense.findUnique({ where: { id } });
     if (!expense) throw new NotFoundException('المصروف غير موجود');

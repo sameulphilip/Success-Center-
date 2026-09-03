@@ -1,4 +1,9 @@
-export type ReportTab = 'profit' | 'finance' | 'bookings' | 'teachers';
+export type ReportTab =
+  | 'pnl'
+  | 'profit'
+  | 'finance'
+  | 'bookings'
+  | 'teachers';
 
 export type ReportSection =
   | 'summary'
@@ -9,9 +14,13 @@ export type ReportSection =
   | 'payments'
   | 'by-form'
   | 'paid'
-  | 'teachers-sessions';
+  | 'teachers-sessions'
+  | 'expense-list'
+  | 'by-category'
+  | 'streams';
 
 export const TAB_LABELS: Record<ReportTab, string> = {
+  pnl: 'أرباح ومصروفات',
   profit: 'تقرير الربحية',
   finance: 'التقرير المالي',
   bookings: 'تقرير الاستمارات',
@@ -28,10 +37,14 @@ export const SECTION_LABELS: Record<ReportSection, string> = {
   'by-form': 'حسب الاستمارة',
   paid: 'الاستمارات المدفوعة',
   'teachers-sessions': 'المدرسين والجلسات',
+  'expense-list': 'قائمة المصروفات',
+  'by-category': 'المصروفات حسب البند',
+  streams: 'مصادر الإيراد',
 };
 
 /** أقسام كل تبويب — للتحكم في الطباعة */
 export const TAB_SECTIONS: Record<ReportTab, ReportSection[]> = {
+  pnl: ['summary', 'streams', 'by-category', 'expense-list'],
   profit: [
     'summary',
     'by-teacher',
@@ -63,6 +76,7 @@ export function reportPrintHref(
 
 export function parseReportTab(value: string | null): ReportTab | null {
   if (
+    value === 'pnl' ||
     value === 'profit' ||
     value === 'finance' ||
     value === 'bookings' ||

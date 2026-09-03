@@ -1189,8 +1189,8 @@ export default function OpsPage() {
                     {detail.status === 'CLOSED' ? (
                       <p className="text-xs text-amber-800 bg-amber-50 rounded-lg px-2 py-1.5">
                         {detail.teacherPaidAt
-                          ? 'الجلسة مقفولة والمدرس اتدفع — التعديل للعنوان والمادة فقط.'
-                          : 'الجلسة مقفولة — التعديل يحدّث التسوية تلقائيًا قبل دفع المدرس.'}
+                          ? 'الجلسة مقفولة والمدرس اتدفع — تعديل السعر يحدّث تحصيل الطلاب والتسوية ومصروف الدرج. تغيير المدرس مقفول.'
+                          : 'الجلسة مقفولة — تعديل السعر يحدّث تحصيل الطلاب وتسوية المدرس/السنتر.'}
                       </p>
                     ) : null}
                     <FieldLabel label="المدرس">
@@ -1283,7 +1283,6 @@ export default function OpsPage() {
                           type="number"
                           min={0}
                           required
-                          disabled={editLocked}
                           value={editForm.feeAmount}
                           onChange={(e) =>
                             setEditForm({
@@ -1299,7 +1298,6 @@ export default function OpsPage() {
                           type="number"
                           min={0}
                           required
-                          disabled={editLocked}
                           value={editForm.centerAmount}
                           onChange={(e) =>
                             setEditForm({
@@ -1318,10 +1316,10 @@ export default function OpsPage() {
                             Number(editForm.feeAmount || 0) -
                             Number(editForm.centerAmount || 0)
                           ).toLocaleString('en-EG')} ج.م للطالب${
-                            detail?.status === 'CLOSED' && !detail?.teacherPaidAt
-                              ? ' · تحديث السعر يعدّل تحصيل الطلاب قبل تسوية المدرس'
+                            detail?.status === 'CLOSED'
+                              ? ' · تحديث السعر يعدّل تحصيل الطلاب (السعر الكامل) ويعيد حساب التسوية والحسابات'
                               : detail?.status === 'OPEN'
-                                ? ' · تحديث السعر يعدّل تحصيل الطلاب اللي اتسجّلوا'
+                                ? ' · تحديث السعر يعدّل تحصيل الطلاب اللي اتسجّلوا بالسعر الكامل'
                                 : ''
                           }`}
                     </p>

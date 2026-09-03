@@ -200,6 +200,14 @@ export class ReportsPdfService {
         doc.text(
           `  ${sess.sessionDate}  ${sess.subject}${sess.title ? ` (${sess.title})` : ''}  ${sess.status}  present ${sess.present}/${sess.registered}`,
         );
+        const names = (sess.attendees || [])
+          .map((a: { name: string; discounted?: boolean; amount?: number }) =>
+            a.discounted
+              ? `${a.name} (${Number(a.amount).toLocaleString('en-EG')})`
+              : a.name,
+          )
+          .join(', ');
+        if (names) doc.text(`    ${names}`);
       }
     }
 
@@ -278,6 +286,77 @@ export class ReportsPdfService {
     for (const row of data.byRoom.slice(0, 40)) {
       doc.text(
         `${row.label}  center=${money(row.centerShare)}  n=${row.count}`,
+      );
+    }
+
+    doc.end();
+    return done;
+  }
+
+  async pnlPdf(from?: string, to?: string): Promise<Buffer> {
+    const data = await this.reports.pnl(from, to);
+    const doc = new PDFDocument({ margin: 48, size: 'A4' });
+    const chunks: Buffer[] = [];
+    doc.on('data', (c: Buffer) => chunks.push(c));
+
+    const done = new Promise<Buffer>((resolve, reject) => {
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+    });
+
+    const money = (n: number) => `${Number(n).toLocaleString('en-EG')} EGP`;
+    const s = data.summary;
+
+    doc
+      .fillColor('#0B2545')
+      .fontSize(20)
+      .text(this.centerName(), { align: 'left' });
+    doc
+      .fillColor('#C99612')
+      .fontSize(11)
+      .text('PROFIT & EXPENSES REPORT', { align: 'left' });
+    doc.moveDown(0.5);
+    doc
+      .fillColor('#334155')
+      .fontSize(10)
+      .text(
+        `Period: ${new Date(data.from).toISOString().slice(0, 10)} → ${new Date(data.to).toISOString().slice(0, 10)}`,
+      )
+      .text(`Generated: ${new Date().toLocaleString('en-GB')}`)
+      .moveDown();
+
+    doc.fillColor('#0B2545').fontSize(13).text('Summary').moveDown(0.4);
+    for (const [label, value] of [
+      ['Gross collected', money(s.gross)],
+      ['Teacher share', money(s.teacherShare)],
+      ['Center share', money(s.centerShare)],
+      ['Total expenses', money(s.totalExpenses)],
+      ['Net profit (center - expenses)', money(s.netProfit)],
+    ] as const) {
+      doc
+        .fillColor('#475569')
+        .fontSize(10)
+        .text(`${label}: `, { continued: true })
+        .fillColor('#0B2545')
+        .text(value);
+    }
+
+    doc.moveDown();
+    doc.fillColor('#0B2545').fontSize(13).text('Expenses by category').moveDown(0.4);
+    doc.fillColor('#64748B').fontSize(9);
+    for (const row of data.byCategory.slice(0, 40)) {
+      doc.text(
+        `${row.label}  ${money(row.amount)}  n=${row.count}`,
+      );
+    }
+
+    doc.moveDown();
+    doc.fillColor('#0B2545').fontSize(13).text('Expense list').moveDown(0.4);
+    doc.fillColor('#64748B').fontSize(9);
+    for (const e of data.expenses.slice(0, 80)) {
+      const ymd = new Date(e.businessDate).toISOString().slice(0, 10);
+      doc.text(
+        `${ymd}  ${e.category}  ${e.paidFromLabel}  ${money(e.amount)}${e.note ? `  · ${e.note}` : ''}`,
       );
     }
 

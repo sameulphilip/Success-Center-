@@ -104,11 +104,13 @@ function ReportsPrintContent() {
     const path =
       tab === 'profit'
         ? `/reports/profit?from=${from}&to=${to}`
-        : tab === 'finance'
-          ? `/reports/finance?from=${from}&to=${to}`
-          : tab === 'bookings'
-            ? `/reports/bookings?from=${from}&to=${to}`
-            : `/reports/teachers?from=${from}&to=${to}`;
+        : tab === 'pnl'
+          ? `/reports/pnl?from=${from}&to=${to}`
+          : tab === 'finance'
+            ? `/reports/finance?from=${from}&to=${to}`
+            : tab === 'bookings'
+              ? `/reports/bookings?from=${from}&to=${to}`
+              : `/reports/teachers?from=${from}&to=${to}`;
     api<any>(path)
       .then(setData)
       .catch((e) =>
@@ -164,6 +166,9 @@ function ReportsPrintContent() {
         />
         <ReportPeriodBanner from={from} to={to} />
 
+        {tab === 'pnl' ? (
+          <PnlReport data={data} selected={selected} />
+        ) : null}
         {tab === 'profit' ? (
           <ProfitReport data={data} selected={selected} />
         ) : null}
@@ -184,6 +189,84 @@ function ReportsPrintContent() {
         <ReportPrintFooter docNo={number} printedAt={printedAt} />
       </ReportPrintArticle>
     </ReportPrintShell>
+  );
+}
+
+function PnlReport({
+  data,
+  selected,
+}: {
+  data: any;
+  selected: ReportSection[] | null;
+}) {
+  const s = data.summary;
+  return (
+    <>
+      {showSection(selected, 'summary') ? (
+        <ReportPrintBlock title="ملخص الأرباح والمصروفات">
+          <ReportStatsGrid>
+            <ReportStat label="إجمالي التحصيل" value={money(s.gross)} tone="gold" />
+            <ReportStat label="حصة المدرسين" value={money(s.teacherShare)} />
+            <ReportStat label="حصة السنتر" value={money(s.centerShare)} tone="emerald" />
+            <ReportStat label="المصروفات" value={money(s.totalExpenses)} tone="rose" />
+            <ReportStat label="صافي الربح" value={money(s.netProfit)} tone="emerald" />
+            <ReportStat label="مصروف الدرج" value={money(s.drawerExpenses)} />
+            <ReportStat label="مصروف الخزنة" value={money(s.safeExpenses)} />
+            <ReportStat
+              label="من صاحب السنتر"
+              value={money(s.ownerExpenses)}
+            />
+          </ReportStatsGrid>
+        </ReportPrintBlock>
+      ) : null}
+
+      {showSection(selected, 'streams') ? (
+        <ReportPrintBlock title="مصادر الإيراد">
+          <ReportTable
+            headers={['المصدر', 'إجمالي', 'حصة المدرس', 'حصة السنتر', 'عدد']}
+            rows={(data.profitStreams || []).map((row: any) => [
+              row.label,
+              money(row.gross),
+              money(row.teacherShare),
+              money(row.centerShare),
+              String(row.count || 0),
+            ])}
+            empty="لا إيراد"
+          />
+        </ReportPrintBlock>
+      ) : null}
+
+      {showSection(selected, 'by-category') ? (
+        <ReportPrintBlock title="المصروفات حسب البند">
+          <ReportTable
+            headers={['البند', 'المبلغ', 'عدد']}
+            rows={(data.byCategory || []).map((row: any) => [
+              row.label,
+              money(row.amount),
+              String(row.count),
+            ])}
+            empty="لا مصروفات"
+          />
+        </ReportPrintBlock>
+      ) : null}
+
+      {showSection(selected, 'expense-list') ? (
+        <ReportPrintBlock title={`قائمة المصروفات · ${(data.expenses || []).length}`}>
+          <ReportTable
+            headers={['التاريخ', 'البند', 'المصدر', 'المبلغ', 'ملاحظة', 'بواسطة']}
+            rows={(data.expenses || []).map((e: any) => [
+              String(e.businessDate).slice(0, 10),
+              e.category,
+              e.paidFromLabel,
+              money(e.amount),
+              e.note || '—',
+              e.createdByName || '—',
+            ])}
+            empty="لا مصروفات في الفترة"
+          />
+        </ReportPrintBlock>
+      ) : null}
+    </>
   );
 }
 
@@ -501,17 +584,25 @@ function TeachersReport({
               <ReportTable
                 headers={
                   hideCollected
-                    ? ['التاريخ', 'المادة', 'الحالة', 'حضور', 'مسجّل']
+                    ? ['التاريخ', 'المادة', 'الحالة', 'حضور', 'مسجّل', 'الطلاب']
                     : [
                         'التاريخ',
                         'المادة',
                         'الحالة',
                         'حضور',
                         'مسجّل',
+                        'الطلاب',
                         'التحصيل',
                       ]
                 }
                 rows={(t.sessions || []).map((sess: any) => {
+                  const attendees = (sess.attendees || [])
+                    .map((a: any) =>
+                      a.discounted
+                        ? `${a.name} (${Number(a.amount).toLocaleString('en-EG')})`
+                        : a.name,
+                    )
+                    .join(' · ');
                   const base = [
                     sess.sessionDate,
                     sess.title
@@ -521,9 +612,12 @@ function TeachersReport({
                     String(sess.present),
                     String(sess.registered),
                   ];
+                  const withNames = attendees
+                    ? [...base, attendees]
+                    : [...base, '—'];
                   return hideCollected
-                    ? base
-                    : [...base, money(sess.collected)];
+                    ? withNames
+                    : [...withNames, money(sess.collected)];
                 })}
                 empty="لا جلسات"
               />

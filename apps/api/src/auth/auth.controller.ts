@@ -27,6 +27,31 @@ export class AuthController {
     return this.auth.phoneLogin(body.phone, body.password);
   }
 
+  @Post('phone/reset')
+  phoneReset(
+    @Body()
+    body: { phone: string; studentUid: string; password: string },
+  ) {
+    return this.auth.phoneResetPassword(
+      body.phone,
+      body.studentUid,
+      body.password,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('portal/change-pin')
+  changePortalPin(
+    @CurrentUser() user: { userId: string },
+    @Body() body: { currentPassword: string; newPassword: string },
+  ) {
+    return this.auth.changePortalPassword(
+      user.userId,
+      body.currentPassword,
+      body.newPassword,
+    );
+  }
+
   @Post('refresh')
   refresh(@Body() body: { refreshToken: string }) {
     return this.auth.refresh(body.refreshToken);

@@ -196,7 +196,10 @@ export class ReportsService {
             payStatus: true,
             checkedInAt: true,
             amount: true,
+            listedFee: true,
             refundedAmount: true,
+            discountReason: true,
+            student: { select: { firstName: true, lastName: true } },
           },
         },
       },
@@ -216,6 +219,13 @@ export class ReportsService {
       registered: number;
       present: number;
       collected: number;
+      attendees: Array<{
+        name: string;
+        amount: number;
+        discounted: boolean;
+        present: boolean;
+        reason?: string | null;
+      }>;
     };
 
     type TeacherRow = {
@@ -241,6 +251,20 @@ export class ReportsService {
         (sum, e) => sum + Number(e.amount) - Number(e.refundedAmount || 0),
         0,
       );
+      const attendees = active.map((e) => {
+        const name =
+          `${e.student.firstName} ${e.student.lastName === '-' ? '' : e.student.lastName}`.trim();
+        const amount = Number(e.amount);
+        const listed =
+          e.listedFee != null ? Number(e.listedFee) : Number(s.feeAmount);
+        return {
+          name,
+          amount,
+          discounted: listed > amount + 0.001,
+          present: Boolean(e.checkedInAt),
+          reason: e.discountReason || null,
+        };
+      });
       totalPresent += present;
       totalRegistered += registered;
       totalCollected += collected;
@@ -270,6 +294,7 @@ export class ReportsService {
         registered,
         present,
         collected,
+        attendees,
       });
       byTeacher.set(teacherId, row);
     }
@@ -604,6 +629,162 @@ export class ReportsService {
         settledCenterAmount: s.settledCenterAmount,
         entriesCount: s.entries.length,
       })),
+    };
+  }
+
+  /** Center P&L: profit streams + cash expenses for a date range */
+  async pnl(from?: string, to?: string) {
+    const profit = await this.profit(from, to);
+    const fromYmd = (from || new Date(profit.from).toISOString().slice(0, 10)).slice(
+      0,
+      10,
+    );
+    const toYmd = (to || new Date(profit.to).toISOString().slice(0, 10)).slice(
+      0,
+      10,
+    );
+    const dateOnly = (ymd: string) => {
+      const [y, m, d] = ymd.split('-').map(Number);
+      return new Date(Date.UTC(y, m - 1, d));
+    };
+
+    const expenses = await this.prisma.cashExpense.findMany({
+      where: {
+        businessDate: {
+          gte: dateOnly(fromYmd),
+          lte: dateOnly(toYmd),
+        },
+      },
+      orderBy: [{ businessDate: 'desc' }, { createdAt: 'desc' }],
+    });
+
+    const creatorIds = [
+      ...new Set(
+        expenses
+          .map((e) => e.createdByUserId)
+          .filter((id): id is string => !!id),
+      ),
+    ];
+    const creators = creatorIds.length
+      ? await this.prisma.user.findMany({
+          where: { id: { in: creatorIds } },
+          select: { id: true, fullName: true },
+        })
+      : [];
+    const creatorName = new Map(creators.map((u) => [u.id, u.fullName]));
+
+    type ExpAgg = {
+      key: string;
+      label: string;
+      amount: number;
+      count: number;
+    };
+    const byCategory = new Map<string, ExpAgg>();
+    const bySource = new Map<string, ExpAgg>();
+    const sourceLabel: Record<string, string> = {
+      DRAWER: 'الدرج',
+      SAFE: 'الخزنة',
+      OWNER: 'صاحب السنتر',
+    };
+
+    let totalExpenses = 0;
+    let drawerExpenses = 0;
+    let safeExpenses = 0;
+    let ownerExpenses = 0;
+
+    for (const e of expenses) {
+      const amount = Number(e.amount);
+      totalExpenses += amount;
+      if (e.paidFrom === 'DRAWER') drawerExpenses += amount;
+      else if (e.paidFrom === 'SAFE') safeExpenses += amount;
+      else if (e.paidFrom === 'OWNER') ownerExpenses += amount;
+
+      const catKey = (e.category || 'أخرى').trim() || 'أخرى';
+      const cat = byCategory.get(catKey) || {
+        key: catKey,
+        label: catKey,
+        amount: 0,
+        count: 0,
+      };
+      cat.amount += amount;
+      cat.count += 1;
+      byCategory.set(catKey, cat);
+
+      const srcKey = e.paidFrom;
+      const src = bySource.get(srcKey) || {
+        key: srcKey,
+        label: sourceLabel[srcKey] || srcKey,
+        amount: 0,
+        count: 0,
+      };
+      src.amount += amount;
+      src.count += 1;
+      bySource.set(srcKey, src);
+    }
+
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    totalExpenses = round2(totalExpenses);
+    drawerExpenses = round2(drawerExpenses);
+    safeExpenses = round2(safeExpenses);
+    ownerExpenses = round2(ownerExpenses);
+
+    const centerShare = round2(Number(profit.summary.totalCenter || 0));
+    const teacherShare = round2(Number(profit.summary.totalTeacher || 0));
+    const gross = round2(Number(profit.summary.totalGross || 0));
+    const netProfit = round2(centerShare - totalExpenses);
+
+    return {
+      from: profit.from,
+      to: profit.to,
+      summary: {
+        gross,
+        teacherShare,
+        centerShare,
+        totalExpenses,
+        drawerExpenses,
+        safeExpenses,
+        ownerExpenses,
+        netProfit,
+        expensesCount: expenses.length,
+        streams: profit.summary.streams,
+      },
+      byCategory: [...byCategory.values()].sort((a, b) => b.amount - a.amount),
+      bySource: [...bySource.values()].sort((a, b) => b.amount - a.amount),
+      expenses: expenses.map((e) => ({
+        id: e.id,
+        amount: Number(e.amount),
+        category: e.category,
+        paidFrom: e.paidFrom,
+        paidFromLabel: sourceLabel[e.paidFrom] || e.paidFrom,
+        note: e.note,
+        businessDate: e.businessDate,
+        createdAt: e.createdAt,
+        createdByName: e.createdByUserId
+          ? creatorName.get(e.createdByUserId) || null
+          : null,
+      })),
+      profitStreams: [
+        {
+          key: 'sessions',
+          label: 'حصص',
+          ...profit.summary.streams.sessions,
+        },
+        {
+          key: 'online',
+          label: 'أونلاين',
+          ...profit.summary.streams.online,
+        },
+        {
+          key: 'handouts',
+          label: 'ملازم',
+          ...profit.summary.streams.handouts,
+        },
+        {
+          key: 'rentals',
+          label: 'قاعات',
+          ...profit.summary.streams.rentals,
+        },
+      ],
     };
   }
 }

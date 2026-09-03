@@ -191,6 +191,133 @@ export class AuthService {
     return this.finishLogin(user);
   }
 
+  /**
+   * Forgot PIN: phone + student card UID → set a new PIN and login.
+   * Parents can use any linked child's UID.
+   */
+  async phoneResetPassword(
+    phoneRaw: string,
+    studentUidRaw: string,
+    password: string,
+  ) {
+    const phone = normalizePhone(phoneRaw);
+    if (!isValidMobile(phone)) {
+      throw new BadRequestException('رقم الموبايل غير صالح');
+    }
+    const studentUid = String(studentUidRaw || '').trim();
+    if (!studentUid) {
+      throw new BadRequestException('اكتب كود الطالب المكتوب على الكارت');
+    }
+    if (!password || password.length < 6) {
+      throw new BadRequestException(
+        'الرقم السري لازم 6 حروف أو أرقام على الأقل',
+      );
+    }
+
+    const user = await this.findPortalUser(phoneRaw);
+    if (!user || !user.isActive) {
+      throw new BadRequestException(
+        'الحساب غير متاح. تأكد من رقم الموبايل أو راجع الاستقبال.',
+      );
+    }
+
+    const matched = await this.verifyPortalUid(user, studentUid);
+    if (!matched) {
+      throw new UnauthorizedException(
+        'كود الطالب غير مطابق لهذا الموبايل — راجع الكارت أو الاستقبال',
+      );
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const updated = await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        passwordHash,
+        mustSetPassword: false,
+        portalPin: password,
+      },
+      include: {
+        role: true,
+        teacher: true,
+        parent: true,
+        student: true,
+      },
+    });
+
+    return this.finishLogin(updated);
+  }
+
+  /** Logged-in student/parent changes PIN with the current one. */
+  async changePortalPassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+  ) {
+    if (!newPassword || newPassword.length < 6) {
+      throw new BadRequestException(
+        'الرقم السري الجديد لازم 6 حروف أو أرقام على الأقل',
+      );
+    }
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        role: true,
+        teacher: true,
+        parent: true,
+        student: true,
+      },
+    });
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException();
+    }
+    const role = user.role.code;
+    if (role !== 'STUDENT' && role !== 'PARENT') {
+      throw new ForbiddenException('تغيير الرقم السري للبوابة فقط');
+    }
+    if (user.mustSetPassword) {
+      throw new BadRequestException('لازم تعيّن الرقم السري أول مرة من صفحة الدخول');
+    }
+    const ok = await bcrypt.compare(String(currentPassword || ''), user.passwordHash);
+    if (!ok) {
+      throw new UnauthorizedException('الرقم السري الحالي غير صحيح');
+    }
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        passwordHash,
+        mustSetPassword: false,
+        portalPin: newPassword,
+      },
+    });
+    return { ok: true, message: 'تم تغيير الرقم السري' };
+  }
+
+  private async verifyPortalUid(
+    user: {
+      student?: { studentUid?: string | null } | null;
+      parent?: { id: string } | null;
+    },
+    studentUid: string,
+  ) {
+    const want = studentUid.toLowerCase();
+    if (user.student?.studentUid?.toLowerCase() === want) return true;
+    if (!user.parent?.id) return false;
+    const link = await this.prisma.studentParent.findFirst({
+      where: {
+        parentId: user.parent.id,
+        student: {
+          OR: [
+            { studentUid: { equals: studentUid, mode: 'insensitive' } },
+            { studentUid: studentUid },
+          ],
+        },
+      },
+      select: { studentId: true },
+    });
+    return Boolean(link);
+  }
+
   async me(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },

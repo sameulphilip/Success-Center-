@@ -64,6 +64,41 @@ function teacherLabel(teacher?: {
   return `${teacher.firstName || ''} ${teacher.lastName || ''}`.trim() || 'المدرس';
 }
 
+function nearlyMoney(a: unknown, b: unknown) {
+  return Math.abs(Number(a || 0) - Number(b || 0)) < 0.02;
+}
+
+function sessionDayYmd(sessionDate: Date | string) {
+  if (sessionDate instanceof Date && !Number.isNaN(sessionDate.getTime())) {
+    const y = sessionDate.getUTCFullYear();
+    const m = String(sessionDate.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(sessionDate.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  const raw = String(sessionDate || '').trim();
+  const iso = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (iso) return iso[1];
+  const parsed = new Date(raw);
+  if (!Number.isNaN(parsed.getTime())) {
+    const y = parsed.getUTCFullYear();
+    const m = String(parsed.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return raw.slice(0, 10);
+}
+
+function teacherPayoutNote(session: {
+  id: string;
+  sessionDate: Date | string;
+  teacher?: { firstName?: string | null; lastName?: string | null } | null;
+  subject?: { nameAr?: string | null } | null;
+}) {
+  const teacherName = teacherLabel(session.teacher);
+  const subject = session.subject?.nameAr ? ` · ${session.subject.nameAr}` : '';
+  return `تسوية ${teacherName}${subject} · حصة ${sessionDayYmd(session.sessionDate)} · sid:${session.id}`;
+}
+
 @Injectable()
 export class OpsService {
   constructor(
@@ -278,26 +313,9 @@ export class OpsService {
         : session.teacherId;
 
     if (isClosed && session.teacherPaidAt) {
-      const feeAmount =
-        data.feeAmount != null && !Number.isNaN(Number(data.feeAmount))
-          ? Number(data.feeAmount)
-          : Number(session.feeAmount);
-      const centerInput =
-        data.centerAmount != null && !Number.isNaN(Number(data.centerAmount))
-          ? Number(data.centerAmount)
-          : session.centerAmount != null
-            ? Number(session.centerAmount)
-            : undefined;
-      const changingMoney =
-        Math.abs(feeAmount - Number(session.feeAmount)) > 0.009 ||
-        (centerInput != null &&
-          session.centerAmount != null &&
-          Math.abs(centerInput - Number(session.centerAmount)) > 0.009) ||
-        (centerInput != null && session.centerAmount == null) ||
-        teacherId !== session.teacherId;
-      if (changingMoney) {
+      if (teacherId !== session.teacherId) {
         throw new BadRequestException(
-          'المدرس اتدفع — مفيش تعديل سعر أو مدرس بعد التسوية',
+          'المدرس اتدفع — مفيش تغيير المدرس بعد التسوية',
         );
       }
     }
@@ -332,8 +350,34 @@ export class OpsService {
 
     const feeChanged =
       Math.abs(feeAmount - Number(session.feeAmount)) > 0.009;
+    const centerChanged =
+      (centerAmount == null && session.centerAmount != null) ||
+      (centerAmount != null && session.centerAmount == null) ||
+      (centerAmount != null &&
+        session.centerAmount != null &&
+        Math.abs(centerAmount - Number(session.centerAmount)) > 0.009);
+    const moneyChanged = feeChanged || centerChanged;
+    let oldTeacherShare = Number(session.settledTeacherAmount || 0);
+    if (session.teacherPaidAt && oldTeacherShare < 0.01) {
+      const oldNet = session.entries
+        .filter(
+          (e) =>
+            e.payStatus === SessionPayStatus.CONFIRMED ||
+            e.payStatus === SessionPayStatus.PARTIALLY_REFUNDED,
+        )
+        .reduce(
+          (n, e) => n + Number(e.amount) - Number(e.refundedAmount || 0),
+          0,
+        );
+      oldTeacherShare = splitSessionNet({
+        net: oldNet,
+        feeAmount: Number(session.feeAmount),
+        teacherPercent: session.teacherPercent,
+        centerAmount: session.centerAmount,
+      }).teacherShare;
+    }
 
-    const updated = await this.prisma.classSession.update({
+    await this.prisma.classSession.update({
       where: { id: sessionId },
       data: {
         teacherId,
@@ -347,30 +391,66 @@ export class OpsService {
         teacherPercent,
         notes: data.notes === undefined ? session.notes : data.notes,
       },
-      include: {
-        teacher: true,
-        subject: true,
-        entries: { include: { student: true, refunds: true } },
-      },
     });
 
-    if (!session.teacherPaidAt && feeChanged) {
-      await this.prisma.sessionEntry.updateMany({
-        where: {
-          sessionId,
-          payStatus: SessionPayStatus.CONFIRMED,
-        },
-        data: { amount: feeAmount },
-      });
+    if (feeChanged) {
+      await this.syncFullPriceEntries(
+        sessionId,
+        Number(session.feeAmount),
+        feeAmount,
+      );
     }
 
-    if (isClosed && !session.teacherPaidAt) {
-      return this.applyClosedSessionSettlement(sessionId);
-    }
-    if (!session.teacherPaidAt && feeChanged) {
+    if (isClosed && moneyChanged) {
+      const settled = await this.applyClosedSessionSettlement(sessionId);
+      if (session.teacherPaidAt) {
+        await this.cash.syncTeacherSessionPayout({
+          sessionId,
+          note: teacherPayoutNote(settled),
+          fallbackDate: sessionDayYmd(session.sessionDate),
+          teacherName: teacherLabel(settled.teacher),
+          oldAmount: oldTeacherShare,
+          newAmount: Number(settled.settledTeacherAmount || 0),
+          userId: session.teacherPaidByUserId || undefined,
+        });
+      }
       return this.getSession(sessionId);
     }
-    return updated;
+    if (feeChanged) {
+      return this.getSession(sessionId);
+    }
+    return this.getSession(sessionId);
+  }
+
+  /** Full-price students follow the new session fee; discounted amounts stay. */
+  private async syncFullPriceEntries(
+    sessionId: string,
+    oldFee: number,
+    newFee: number,
+  ) {
+    if (nearlyMoney(oldFee, newFee)) return;
+    const entries = await this.prisma.sessionEntry.findMany({
+      where: { sessionId },
+    });
+    for (const entry of entries) {
+      const amount = Number(entry.amount);
+      const listed = Number(entry.listedFee ?? oldFee);
+      const refunded = Number(entry.refundedAmount || 0);
+      const hasDiscountNote = Boolean((entry.discountReason || '').trim());
+      const paidFullListed =
+        nearlyMoney(amount, listed) && !hasDiscountNote;
+      const matchedOldFee =
+        nearlyMoney(amount, oldFee) ||
+        (nearlyMoney(listed, oldFee) && nearlyMoney(amount, listed));
+      // Follow session fee if they paid the listed full price (incl. when
+      // session header was already changed but entries lagged behind).
+      if ((!matchedOldFee && !paidFullListed) || refunded > 0.009) continue;
+      if (nearlyMoney(amount, newFee) && nearlyMoney(listed, newFee)) continue;
+      await this.prisma.sessionEntry.update({
+        where: { id: entry.id },
+        data: { amount: newFee, listedFee: newFee },
+      });
+    }
   }
 
   private async applyClosedSessionSettlement(sessionId: string) {
@@ -946,12 +1026,11 @@ export class OpsService {
       throw new BadRequestException('اتدفع للمدرس بالفعل على الجلسة دي');
     }
     const teacherShare = Number(session.settledTeacherAmount || 0);
-    const teacherName = teacherLabel(session.teacher);
     if (teacherShare > 0.009) {
       await this.cash.payFromDrawer(userId || 'system', {
         amount: teacherShare,
         category: 'حصة مدرس',
-        note: `تسوية ${teacherName}${session.subject?.nameAr ? ` · ${session.subject.nameAr}` : ''} · حصة ${String(session.sessionDate).slice(0, 10)}`,
+        note: teacherPayoutNote(session),
       });
     }
     return this.prisma.classSession.update({

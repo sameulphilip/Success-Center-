@@ -57,6 +57,11 @@ export class ReportsController {
     return this.reports.profit(from, to);
   }
 
+  @Get('pnl')
+  pnl(@Query('from') from?: string, @Query('to') to?: string) {
+    return this.reports.pnl(from, to);
+  }
+
   @Get('finance/pdf')
   async financePdf(
     @Res() res: Response,
@@ -117,6 +122,19 @@ export class ReportsController {
   ) {
     const buffer = await this.pdf.profitPdf(from, to);
     const filename = `profit-${from || 'from'}-${to || 'to'}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
+  }
+
+  @Get('pnl/pdf')
+  async pnlPdf(
+    @Res() res: Response,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    const buffer = await this.pdf.pnlPdf(from, to);
+    const filename = `pnl-${from || 'from'}-${to || 'to'}.pdf`;
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(buffer);

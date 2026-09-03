@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { AppShell } from '@/components/AppShell';
 import { PageHeader } from '@/components/PageHeader';
@@ -18,7 +18,12 @@ const STATUS_AR: Record<string, string> = {
   ABSENT: 'غائب',
   LATE: 'متأخر',
   EXCUSED: 'بعذر',
+  PAID: 'مدفوع',
 };
+
+function personName(first?: string, last?: string) {
+  return `${first || ''} ${last === '-' ? '' : last || ''}`.trim();
+}
 
 export default function StudentDetailPage() {
   const params = useParams<{ id: string }>();
@@ -41,7 +46,50 @@ export default function StudentDetailPage() {
   const role = getStoredUser()?.role;
   const canManagePin =
     role === 'SUPER_ADMIN' || role === 'CENTER_MANAGER';
-  const pAtt = usePaged(student?.attendance || [], student?.id || '');
+  const attendanceRows = useMemo(() => {
+    const group = (student?.attendance || []).map((a: any) => ({
+      id: `g-${a.id}`,
+      date: String(a.session?.sessionDate || a.markedAt || '').slice(0, 10),
+      sort: new Date(a.session?.sessionDate || a.markedAt || 0).getTime(),
+      label: a.session?.group?.name || 'مجموعة',
+      status: a.status,
+      amount: null as number | null,
+      discounted: false,
+      reason: null as string | null,
+    }));
+    const sessions = (student?.sessionEntries || [])
+      .filter(
+        (e: any) =>
+          e.checkedInAt ||
+          e.payStatus === 'CONFIRMED' ||
+          e.payStatus === 'PARTIALLY_REFUNDED',
+      )
+      .map((e: any) => {
+        const teacher = personName(
+          e.session?.teacher?.firstName,
+          e.session?.teacher?.lastName,
+        );
+        const subject =
+          e.session?.subject?.nameAr || e.session?.title || 'حصة';
+        const amount = Number(e.amount || 0);
+        const listed =
+          e.listedFee != null ? Number(e.listedFee) : null;
+        return {
+          id: `s-${e.id}`,
+          date: String(e.session?.sessionDate || e.createdAt || '').slice(0, 10),
+          sort: new Date(
+            e.checkedInAt || e.session?.sessionDate || e.createdAt || 0,
+          ).getTime(),
+          label: [teacher, subject].filter(Boolean).join(' · '),
+          status: e.checkedInAt ? 'PRESENT' : 'PAID',
+          amount,
+          discounted: listed != null && listed > amount + 0.001,
+          reason: e.discountReason || null,
+        };
+      });
+    return [...group, ...sessions].sort((a, b) => b.sort - a.sort);
+  }, [student]);
+  const pAtt = usePaged(attendanceRows, student?.id || '');
   const pPay = usePaged(student?.payments || [], student?.id || 'pay');
 
   useEffect(() => {
@@ -100,11 +148,11 @@ export default function StudentDetailPage() {
   }
 
   const present =
-    student?.attendance?.filter(
-      (a: any) => a.status === 'PRESENT' || a.status === 'LATE',
-    ).length || 0;
+    attendanceRows.filter(
+      (a) => a.status === 'PRESENT' || a.status === 'LATE' || a.status === 'PAID',
+    ).length;
   const absent =
-    student?.attendance?.filter((a: any) => a.status === 'ABSENT').length || 0;
+    attendanceRows.filter((a) => a.status === 'ABSENT').length;
 
   return (
     <AppShell>
@@ -343,17 +391,24 @@ export default function StudentDetailPage() {
                     <thead>
                       <tr>
                         <th>التاريخ</th>
-                        <th>المجموعة</th>
+                        <th>الحصة</th>
                         <th>الحالة</th>
                       </tr>
                     </thead>
                     <tbody>
                       {pAtt.slice.map((a: any) => (
                         <tr key={a.id}>
+                          <td>{a.date || '—'}</td>
                           <td>
-                            {String(a.session?.sessionDate || '').slice(0, 10)}
+                            <p>{a.label}</p>
+                            {a.amount != null ? (
+                              <p className="text-[11px] text-navy/45">
+                                {Number(a.amount).toLocaleString('en-EG')} ج.م
+                                {a.discounted ? ' · مبلغ مختلف' : ''}
+                                {a.reason ? ` · ${a.reason}` : ''}
+                              </p>
+                            ) : null}
                           </td>
-                          <td>{a.session?.group?.name}</td>
                           <td>
                             <span
                               className={
@@ -369,7 +424,7 @@ export default function StudentDetailPage() {
                       ))}
                     </tbody>
                   </table>
-                  {!student.attendance?.length ? (
+                  {!attendanceRows.length ? (
                     <EmptyState>لا يوجد حضور</EmptyState>
                   ) : null}
                 </div>

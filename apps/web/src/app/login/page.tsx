@@ -4,7 +4,7 @@ import { FormEvent, Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { BrandMark } from '@/components/BrandMark';
 import { Eye, EyeOff } from 'lucide-react';
-import { login, phoneLogin, phoneSetup, phoneStatus } from '@/lib/api';
+import { login, phoneLogin, phoneReset, phoneSetup, phoneStatus } from '@/lib/api';
 import { PoweredByCowdlly } from '@/components/PoweredByCowdlly';
 import { CENTER_NAME, FOUNDER_NAME } from '@/lib/brand';
 
@@ -60,8 +60,9 @@ function LoginForm() {
   const [password, setPassword] = useState('');
   const [phone, setPhone] = useState(initialPhone);
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [studentUid, setStudentUid] = useState('');
   const [studentStep, setStudentStep] = useState<
-    'phone' | 'setup' | 'login' | 'waiting'
+    'phone' | 'setup' | 'login' | 'waiting' | 'reset'
   >('phone');
   const [hint, setHint] = useState('');
   const [studentName, setStudentName] = useState('');
@@ -163,6 +164,24 @@ function LoginForm() {
       redirectByRole(data.user.role);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'فشل تسجيل الدخول');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function onResetPassword(e: FormEvent) {
+    e.preventDefault();
+    if (password !== confirmPassword) {
+      setError('الرقمان السريان غير متطابقين');
+      return;
+    }
+    setLoading(true);
+    setError('');
+    try {
+      const data = await phoneReset(phone, studentUid, password);
+      redirectByRole(data.user.role);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'فشل إعادة التعيين');
     } finally {
       setLoading(false);
     }
@@ -381,9 +400,94 @@ function LoginForm() {
                   <button
                     type="button"
                     className="btn-ghost mt-2 w-full"
+                    onClick={() => {
+                      setError('');
+                      setPassword('');
+                      setConfirmPassword('');
+                      setStudentUid('');
+                      setStudentStep('reset');
+                    }}
+                  >
+                    نسيت الرقم السري؟
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-ghost mt-1 w-full"
                     onClick={() => setStudentStep('phone')}
                   >
                     رقم آخر
+                  </button>
+                </form>
+              ) : null}
+
+              {studentStep === 'reset' ? (
+                <form onSubmit={onResetPassword}>
+                  <p className="text-sm text-navy/55 mb-3">
+                    عشان تعيّن رقم سري جديد: اكتب كود الطالب من الكارت (UID) والرقم السري الجديد.
+                  </p>
+                  {studentName ? (
+                    <p className="text-sm font-bold text-navy mb-3">
+                      {studentName}
+                    </p>
+                  ) : null}
+                  <label className="block text-sm font-medium text-navy/80">
+                    رقم الموبايل
+                    <input className="field" value={phone} readOnly />
+                  </label>
+                  <label className="mt-4 block text-sm font-medium text-navy/80">
+                    كود الطالب من الكارت
+                    <input
+                      className="field font-mono"
+                      value={studentUid}
+                      onChange={(e) => setStudentUid(e.target.value)}
+                      placeholder="مكتوب على كارت الحضور"
+                      required
+                      autoComplete="off"
+                    />
+                  </label>
+                  <label className="mt-4 block text-sm font-medium text-navy/80">
+                    الرقم السري الجديد
+                    <PasswordField
+                      value={password}
+                      onChange={setPassword}
+                      minLength={6}
+                      required
+                      autoComplete="new-password"
+                    />
+                  </label>
+                  <label className="mt-4 block text-sm font-medium text-navy/80">
+                    تأكيد الرقم السري
+                    <PasswordField
+                      value={confirmPassword}
+                      onChange={setConfirmPassword}
+                      minLength={6}
+                      required
+                      autoComplete="new-password"
+                    />
+                  </label>
+                  {error ? (
+                    <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+                      {error}
+                    </p>
+                  ) : null}
+                  <button
+                    disabled={loading}
+                    className="btn-accent mt-6 w-full py-3"
+                  >
+                    {loading ? 'جاري الحفظ...' : 'تعيين رقم سري جديد ودخول'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-ghost mt-2 w-full"
+                    onClick={() => {
+                      setError('');
+                      setPassword('');
+                      setConfirmPassword('');
+                      setStudentUid('');
+                      setStudentStep('login');
+                    }}
+                  >
+                    رجوع لتسجيل الدخول
                   </button>
                 </form>
               ) : null}

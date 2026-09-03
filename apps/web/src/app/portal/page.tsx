@@ -11,7 +11,7 @@ import {
   SectionCard,
 } from '@/components/ui';
 import { TablePager, usePaged } from '@/components/TablePager';
-import { api, getStoredUser } from '@/lib/api';
+import { api, changePortalPin, getStoredUser } from '@/lib/api';
 import { CENTER_NAME } from '@/lib/brand';
 
 const DAY_AR = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
@@ -131,6 +131,15 @@ export default function StudentPortalPage() {
   const [qr, setQr] = useState<any>(null);
   const [error, setError] = useState('');
   const [role, setRole] = useState('');
+  const [pinForm, setPinForm] = useState({
+    current: '',
+    next: '',
+    confirm: '',
+  });
+  const [pinBusy, setPinBusy] = useState(false);
+  const [pinMsg, setPinMsg] = useState<{ ok: boolean; text: string } | null>(
+    null,
+  );
 
   useEffect(() => {
     const user = getStoredUser();
@@ -214,6 +223,32 @@ export default function StudentPortalPage() {
       .then(setQr)
       .catch(() => setQr(null));
   }, [student?.id, role]);
+
+  async function saveNewPin(e: React.FormEvent) {
+    e.preventDefault();
+    setPinMsg(null);
+    if (pinForm.next.length < 6) {
+      setPinMsg({ ok: false, text: 'الرقم السري الجديد لازم 6 على الأقل' });
+      return;
+    }
+    if (pinForm.next !== pinForm.confirm) {
+      setPinMsg({ ok: false, text: 'تأكيد الرقم السري غير متطابق' });
+      return;
+    }
+    setPinBusy(true);
+    try {
+      const res = await changePortalPin(pinForm.current, pinForm.next);
+      setPinForm({ current: '', next: '', confirm: '' });
+      setPinMsg({ ok: true, text: res.message || 'تم تغيير الرقم السري' });
+    } catch (err) {
+      setPinMsg({
+        ok: false,
+        text: err instanceof Error ? err.message : 'فشل التغيير',
+      });
+    } finally {
+      setPinBusy(false);
+    }
+  }
 
   const attendanceStats = useMemo(() => childStats(student), [student]);
 
@@ -571,6 +606,78 @@ export default function StudentPortalPage() {
                 </ul>
               </div>
             ) : null}
+          </SectionCard>
+
+          <SectionCard
+            title="الرقم السري"
+            subtitle="غيّر الرقم السري وأنت داخل البوابة"
+          >
+            <form onSubmit={saveNewPin} className="space-y-3 max-w-md">
+              <label className="block text-sm font-medium text-navy/80">
+                الرقم السري الحالي
+                <input
+                  className="field"
+                  type="password"
+                  value={pinForm.current}
+                  onChange={(e) =>
+                    setPinForm((f) => ({ ...f, current: e.target.value }))
+                  }
+                  required
+                  autoComplete="current-password"
+                />
+              </label>
+              <label className="block text-sm font-medium text-navy/80">
+                الرقم السري الجديد
+                <input
+                  className="field"
+                  type="password"
+                  minLength={6}
+                  value={pinForm.next}
+                  onChange={(e) =>
+                    setPinForm((f) => ({ ...f, next: e.target.value }))
+                  }
+                  required
+                  autoComplete="new-password"
+                />
+              </label>
+              <label className="block text-sm font-medium text-navy/80">
+                تأكيد الرقم السري الجديد
+                <input
+                  className="field"
+                  type="password"
+                  minLength={6}
+                  value={pinForm.confirm}
+                  onChange={(e) =>
+                    setPinForm((f) => ({ ...f, confirm: e.target.value }))
+                  }
+                  required
+                  autoComplete="new-password"
+                />
+              </label>
+              {pinMsg ? (
+                <p
+                  className={`rounded-lg px-3 py-2 text-sm ${
+                    pinMsg.ok
+                      ? 'bg-emerald-50 text-emerald-800'
+                      : 'bg-red-50 text-red-700'
+                  }`}
+                >
+                  {pinMsg.text}
+                </p>
+              ) : (
+                <p className="text-[11px] text-navy/45">
+                  لو نسيت الرقم الحالي: من صفحة الدخول اختر «نسيت الرقم السري؟»
+                  واكتب كود الكارت.
+                </p>
+              )}
+              <button
+                type="submit"
+                className="btn-primary w-full"
+                disabled={pinBusy}
+              >
+                {pinBusy ? 'جاري الحفظ...' : 'حفظ الرقم السري الجديد'}
+              </button>
+            </form>
           </SectionCard>
 
           <SectionCard title="المجموعات والجدول">
