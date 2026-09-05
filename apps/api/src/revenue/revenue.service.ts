@@ -377,6 +377,56 @@ export class RevenueService {
     };
   }
 
+  /** Reception returns unsold codes to the teacher — AVAILABLE count decreases. */
+  async returnOnlineCodesToTeacher(
+    offerId: string,
+    data: { qty?: number; note?: string },
+  ) {
+    const offer = await this.prisma.onlineOffer.findUnique({
+      where: { id: offerId },
+      include: { teacher: true },
+    });
+    if (!offer) throw new NotFoundException('العرض غير موجود');
+
+    const qty = Math.min(
+      Math.max(Math.floor(Number(data.qty) || 1), 1),
+      MAX_OFFER_CODES,
+    );
+    const available = await this.prisma.onlineAccessCode.findMany({
+      where: { offerId, status: OnlineCodeStatus.AVAILABLE },
+      orderBy: { createdAt: 'asc' },
+      take: qty,
+    });
+    if (!available.length) {
+      throw new BadRequestException('مفيش أكواد متاحة للإرجاع');
+    }
+    if (available.length < qty) {
+      throw new BadRequestException(
+        `المتاح للإرجاع ${available.length} كود بس`,
+      );
+    }
+
+    await this.prisma.onlineAccessCode.updateMany({
+      where: { id: { in: available.map((c) => c.id) } },
+      data: { status: OnlineCodeStatus.REVOKED },
+    });
+
+    const remaining = await this.prisma.onlineAccessCode.count({
+      where: { offerId, status: OnlineCodeStatus.AVAILABLE },
+    });
+
+    return {
+      ok: true,
+      returned: available.length,
+      remaining,
+      offerId,
+      title: offer.title,
+      teacherName: personName(offer.teacher),
+      note: (data.note || '').trim() || null,
+      codes: available.map((c) => c.code),
+    };
+  }
+
   async confirmOnlineSale(id: string, userId?: string) {
     const sale = await this.prisma.onlineCodeSale.findUnique({
       where: { id },
@@ -893,6 +943,43 @@ export class RevenueService {
         include: { product: true, student: true, session: true },
       });
     });
+  }
+
+  /** Reception returns unsold handout copies to the teacher — stock decreases. */
+  async returnHandoutToTeacher(
+    productId: string,
+    data: { qty?: number; note?: string },
+  ) {
+    const product = await this.prisma.handoutProduct.findUnique({
+      where: { id: productId },
+      include: { teacher: true },
+    });
+    if (!product) throw new NotFoundException('الملزمة غير موجودة');
+
+    const qty = Math.max(Math.floor(Number(data.qty) || 1), 1);
+    if (product.stock < qty) {
+      throw new BadRequestException(
+        product.stock <= 0
+          ? 'مفيش مخزون متاح للإرجاع'
+          : `المخزون ${product.stock} بس — اختَر كمية أقل`,
+      );
+    }
+
+    const updated = await this.prisma.handoutProduct.update({
+      where: { id: productId },
+      data: { stock: { decrement: qty } },
+      include: { teacher: true },
+    });
+
+    return {
+      ok: true,
+      returned: qty,
+      remaining: updated.stock,
+      productId,
+      title: product.title,
+      teacherName: personName(product.teacher),
+      note: (data.note || '').trim() || null,
+    };
   }
 
   async confirmHandoutSale(id: string, userId?: string) {

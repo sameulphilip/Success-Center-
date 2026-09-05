@@ -123,6 +123,15 @@ export class RevenueController {
     return this.revenue.sellOnlineCode(id, body, user?.userId, user?.role);
   }
 
+  @Post('online/offers/:id/return')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER, RoleCode.RECEPTION)
+  returnOnline(
+    @Param('id') id: string,
+    @Body() body: { qty?: number; note?: string },
+  ) {
+    return this.revenue.returnOnlineCodesToTeacher(id, body);
+  }
+
   @Get('online/sales')
   onlineSales() {
     return this.revenue.listOnlineSales();
@@ -266,6 +275,15 @@ export class RevenueController {
     @CurrentUser() user: { userId: string; role?: string },
   ) {
     return this.revenue.sellHandout(id, body, user?.userId, user?.role);
+  }
+
+  @Post('handouts/:id/return')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER, RoleCode.RECEPTION)
+  returnHandout(
+    @Param('id') id: string,
+    @Body() body: { qty?: number; note?: string },
+  ) {
+    return this.revenue.returnHandoutToTeacher(id, body);
   }
 
   // Rooms

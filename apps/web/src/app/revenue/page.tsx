@@ -237,6 +237,16 @@ export default function RevenuePage() {
     vodafoneTxn: '',
     buyerPhone: '',
   });
+  const [returnOnline, setReturnOnline] = useState({
+    offerId: '',
+    qty: 1,
+    note: '',
+  });
+  const [returnHandout, setReturnHandout] = useState({
+    productId: '',
+    qty: 1,
+    note: '',
+  });
   const [rentalForm, setRentalForm] = useState({
     classroomId: '',
     renterName: '',
@@ -635,6 +645,67 @@ export default function RevenuePage() {
     }
   }
 
+  async function returnCodesSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!returnOnline.offerId) return;
+    setBusy('retOn');
+    setError('');
+    try {
+      const res = await api<{
+        returned: number;
+        remaining: number;
+        teacherName?: string;
+      }>(`/revenue/online/offers/${returnOnline.offerId}/return`, {
+        method: 'POST',
+        body: JSON.stringify({
+          qty: returnOnline.qty,
+          note: returnOnline.note.trim() || undefined,
+        }),
+      });
+      setMsg(
+        `اترجع ${res.returned} كود للمدرس${res.teacherName ? ` (${res.teacherName})` : ''} · فاضل ${res.remaining}`,
+      );
+      setReturnOnline((s) => ({ ...s, qty: 1, note: '' }));
+      await load();
+      if (selectedOffer === returnOnline.offerId) {
+        await loadCodes(returnOnline.offerId);
+      }
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function returnHandoutSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!returnHandout.productId) return;
+    setBusy('retHn');
+    setError('');
+    try {
+      const res = await api<{
+        returned: number;
+        remaining: number;
+        teacherName?: string;
+      }>(`/revenue/handouts/${returnHandout.productId}/return`, {
+        method: 'POST',
+        body: JSON.stringify({
+          qty: returnHandout.qty,
+          note: returnHandout.note.trim() || undefined,
+        }),
+      });
+      setMsg(
+        `اترجع ${res.returned} ملزمة للمدرس${res.teacherName ? ` (${res.teacherName})` : ''} · مخزون ${res.remaining}`,
+      );
+      setReturnHandout((s) => ({ ...s, qty: 1, note: '' }));
+      await load();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
   async function confirmHandout(id: string) {
     await api(`/revenue/handouts/sales/${id}/confirm`, { method: 'POST' });
     await load();
@@ -972,7 +1043,8 @@ export default function RevenuePage() {
                     <span className="text-[11px] text-navy/45">
                       {o.teacher.firstName} ·{' '}
                       {Number(o.price).toLocaleString('en-EG')} · سنتر{' '}
-                      {centerCutOf(o.price, o.teacherPercent, o.centerAmount)} ج.م · أكواد{' '}
+                      {centerCutOf(o.price, o.teacherPercent, o.centerAmount)} ج.م · فاضل{' '}
+                      {offerAvailable(o)} · أكواد{' '}
                       {o._count?.codes ?? 0}
                       {!o.isActive ? ' · متوقف' : ''}
                     </span>
@@ -1161,6 +1233,86 @@ export default function RevenuePage() {
                   }
                 >
                   بيع كود وإصدار إيصال
+                </button>
+              </form>
+            </SectionCard>
+
+            <SectionCard
+              title="إرجاع كود للمدرس"
+              subtitle="ينقص العدد المتاح — مش فك بيع"
+            >
+              <form onSubmit={returnCodesSubmit} className="space-y-2">
+                <FieldLabel label="العرض">
+                  <select
+                    className="field"
+                    required
+                    value={returnOnline.offerId}
+                    onChange={(e) =>
+                      setReturnOnline({
+                        ...returnOnline,
+                        offerId: e.target.value,
+                      })
+                    }
+                  >
+                    <option value="">اختر عرض…</option>
+                    {offers.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {o.title} · فاضل {offerAvailable(o)}
+                      </option>
+                    ))}
+                  </select>
+                </FieldLabel>
+                <div className="grid grid-cols-2 gap-2">
+                  <FieldLabel label="الكمية">
+                    <input
+                      className="field"
+                      type="number"
+                      min={1}
+                      max={Math.max(
+                        1,
+                        offerAvailable(
+                          offers.find((o) => o.id === returnOnline.offerId),
+                        ),
+                      )}
+                      required
+                      value={returnOnline.qty}
+                      onChange={(e) =>
+                        setReturnOnline({
+                          ...returnOnline,
+                          qty: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </FieldLabel>
+                  <FieldLabel label="السبب (اختياري)">
+                    <input
+                      className="field"
+                      value={returnOnline.note}
+                      onChange={(e) =>
+                        setReturnOnline({
+                          ...returnOnline,
+                          note: e.target.value,
+                        })
+                      }
+                      placeholder="مثال: رجع للمدرس"
+                    />
+                  </FieldLabel>
+                </div>
+                <p className="text-[11px] text-navy/45">
+                  الأكواد المتاحة هتتحول لـ «مرتجع» والعدد الفاضل ينقص.
+                </p>
+                <button
+                  type="submit"
+                  className="btn-primary w-full"
+                  disabled={
+                    busy === 'retOn' ||
+                    !returnOnline.offerId ||
+                    offerAvailable(
+                      offers.find((o) => o.id === returnOnline.offerId),
+                    ) <= 0
+                  }
+                >
+                  إرجاع للمدرس
                 </button>
               </form>
             </SectionCard>
@@ -1606,6 +1758,84 @@ export default function RevenuePage() {
                 بيع
               </button>
             </form>
+          </SectionCard>
+
+          <SectionCard
+            title="إرجاع ملزمة للمدرس"
+            subtitle="ينقص المخزون عند السنتر"
+          >
+            <form onSubmit={returnHandoutSubmit} className="space-y-2">
+              <FieldLabel label="الملزمة">
+                <select
+                  className="field"
+                  required
+                  value={returnHandout.productId}
+                  onChange={(e) =>
+                    setReturnHandout({
+                      ...returnHandout,
+                      productId: e.target.value,
+                    })
+                  }
+                >
+                  <option value="">اختر ملزمة…</option>
+                  {handouts.map((h) => (
+                    <option key={h.id} value={h.id}>
+                      {h.title} ({h.stock})
+                    </option>
+                  ))}
+                </select>
+              </FieldLabel>
+              <div className="grid grid-cols-2 gap-2">
+                <FieldLabel label="الكمية">
+                  <input
+                    className="field"
+                    type="number"
+                    min={1}
+                    max={Math.max(
+                      1,
+                      handouts.find((h) => h.id === returnHandout.productId)
+                        ?.stock || 1,
+                    )}
+                    required
+                    value={returnHandout.qty}
+                    onChange={(e) =>
+                      setReturnHandout({
+                        ...returnHandout,
+                        qty: Number(e.target.value),
+                      })
+                    }
+                  />
+                </FieldLabel>
+                <FieldLabel label="السبب (اختياري)">
+                  <input
+                    className="field"
+                    value={returnHandout.note}
+                    onChange={(e) =>
+                      setReturnHandout({
+                        ...returnHandout,
+                        note: e.target.value,
+                      })
+                    }
+                    placeholder="مثال: رجع للمدرس"
+                  />
+                </FieldLabel>
+              </div>
+              <button
+                type="submit"
+                className="btn-primary w-full"
+                disabled={
+                  busy === 'retHn' ||
+                  !returnHandout.productId ||
+                  (handouts.find((h) => h.id === returnHandout.productId)
+                    ?.stock || 0) <= 0
+                }
+              >
+                إرجاع للمدرس
+              </button>
+            </form>
+          </SectionCard>
+
+          <SectionCard title="مبيعات الملازم">
             {editingHandoutSaleId ? (
               <form
                 onSubmit={saveHandoutSale}
