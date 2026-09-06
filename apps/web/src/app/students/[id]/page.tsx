@@ -45,7 +45,9 @@ export default function StudentDetailPage() {
 
   const role = getStoredUser()?.role;
   const canManagePin =
-    role === 'SUPER_ADMIN' || role === 'CENTER_MANAGER';
+    role === 'SUPER_ADMIN' ||
+    role === 'CENTER_MANAGER' ||
+    role === 'RECEPTION';
   const attendanceRows = useMemo(() => {
     const group = (student?.attendance || []).map((a: any) => ({
       id: `g-${a.id}`,
