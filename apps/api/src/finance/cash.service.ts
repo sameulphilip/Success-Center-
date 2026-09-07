@@ -155,7 +155,16 @@ export class CashService {
     const range = { gte: start, lte: end };
     const confirmed = SessionPayStatus.CONFIRMED;
 
-    const drawerRev = {
+    /** Drawer extra sales: direct DRAWER by confirm day, or teacher-hold settled into drawer on settlement day. */
+    const drawerExtra = {
+      payStatus: confirmed,
+      cashTo: ExtraRevenueCashTo.DRAWER,
+      OR: [
+        { settlementId: null, confirmedAt: range },
+        { settlement: { createdAt: range } },
+      ],
+    };
+    const drawerRental = {
       payStatus: confirmed,
       confirmedAt: range,
       cashTo: ExtraRevenueCashTo.DRAWER,
@@ -176,15 +185,15 @@ export class CashService {
         select: { amount: true, method: true },
       }),
       this.prisma.onlineCodeSale.findMany({
-        where: drawerRev,
+        where: drawerExtra,
         select: { centerShare: true, method: true },
       }),
       this.prisma.handoutSale.findMany({
-        where: drawerRev,
+        where: drawerExtra,
         select: { centerShare: true, method: true },
       }),
       this.prisma.roomRental.findMany({
-        where: drawerRev,
+        where: drawerRental,
         select: { amount: true, method: true },
       }),
     ]);
@@ -321,7 +330,11 @@ export class CashService {
       payStatus: SessionPayStatus.CONFIRMED,
       cashTo: ExtraRevenueCashTo.OWNER,
     };
-    const [closes, safeExp, ownerExp, handovers, onlineOwner, handoutOwner, rentalOwner, settledCenter, walletClaims] =
+    const legacySafeExtra = {
+      payStatus: SessionPayStatus.CONFIRMED,
+      cashTo: ExtraRevenueCashTo.SAFE,
+    };
+    const [closes, safeExp, ownerExp, handovers, onlineOwner, handoutOwner, rentalOwner, onlineSafe, handoutSafe, walletClaims] =
       await Promise.all([
         this.prisma.cashDayClose.aggregate({ _sum: { transferredToSafe: true } }),
         this.prisma.cashExpense.aggregate({
@@ -345,13 +358,21 @@ export class CashService {
           where: ownerRev,
           _sum: { amount: true },
         }),
-        this.prisma.extraTeacherSettlement.aggregate({
-          _sum: { centerToSafe: true },
+        // Legacy settlements used to push center share straight into the safe.
+        this.prisma.onlineCodeSale.aggregate({
+          where: legacySafeExtra,
+          _sum: { centerShare: true },
+        }),
+        this.prisma.handoutSale.aggregate({
+          where: legacySafeExtra,
+          _sum: { centerShare: true },
         }),
         this.prisma.onlineWalletClaim.aggregate({ _sum: { amount: true } }),
       ]);
     const intoSafe =
-      money(closes._sum.transferredToSafe) + money(settledCenter._sum.centerToSafe);
+      money(closes._sum.transferredToSafe) +
+      money(onlineSafe._sum.centerShare) +
+      money(handoutSafe._sum.centerShare);
     const outSafeExp = money(safeExp._sum.amount);
     const handed = money(handovers._sum.amount);
     const ownerSpent = money(ownerExp._sum.amount);
@@ -681,6 +702,220 @@ export class CashService {
     }));
   }
 
+  /** Full history of teacher-hold settlements with online/handout share split. */
+  async teacherSettlementsReport(fromYmd?: string, toYmd?: string) {
+    const from = fromYmd && /^\d{4}-\d{2}-\d{2}$/.test(fromYmd) ? fromYmd : null;
+    const to = toYmd && /^\d{4}-\d{2}-\d{2}$/.test(toYmd) ? toYmd : null;
+    const createdAt =
+      from || to
+        ? {
+            ...(from ? { gte: cairoBounds(from).start } : {}),
+            ...(to ? { lte: cairoBounds(to).end } : {}),
+          }
+        : undefined;
+
+    const rows = await this.prisma.extraTeacherSettlement.findMany({
+      where: createdAt ? { createdAt } : undefined,
+      include: {
+        teacher: { select: { firstName: true, lastName: true } },
+        onlineSales: {
+          select: {
+            amount: true,
+            teacherShare: true,
+            centerShare: true,
+          },
+        },
+        handoutSales: {
+          select: {
+            amount: true,
+            teacherShare: true,
+            centerShare: true,
+            qty: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const userIds = rows.map((r) => r.settledByUserId).filter(Boolean) as string[];
+    const users = userIds.length
+      ? await this.prisma.user.findMany({
+          where: { id: { in: [...new Set(userIds)] } },
+          select: { id: true, fullName: true },
+        })
+      : [];
+    const names = new Map(users.map((u) => [u.id, u.fullName]));
+
+    const sumShares = (
+      sales: Array<{
+        amount: Prisma.Decimal;
+        teacherShare: Prisma.Decimal;
+        centerShare: Prisma.Decimal;
+        qty?: number;
+      }>,
+    ) => {
+      let teacherShare = 0;
+      let centerShare = 0;
+      let gross = 0;
+      let count = 0;
+      for (const s of sales) {
+        teacherShare += money(s.teacherShare);
+        centerShare += money(s.centerShare);
+        gross += money(s.amount);
+        count += s.qty != null ? s.qty : 1;
+      }
+      return {
+        count,
+        teacherShare: Math.round(teacherShare * 100) / 100,
+        centerShare: Math.round(centerShare * 100) / 100,
+        gross: Math.round(gross * 100) / 100,
+      };
+    };
+
+    const settlements = rows.map((r) => {
+      const online = sumShares(r.onlineSales);
+      const handout = sumShares(r.handoutSales);
+      // Prefer live sale totals; fall back to settlement header if links missing.
+      const fromSalesTeacher = online.teacherShare + handout.teacherShare;
+      const fromSalesCenter = online.centerShare + handout.centerShare;
+      const fromSalesGross = online.gross + handout.gross;
+      const teacherPaid =
+        fromSalesTeacher > 0.009 ? fromSalesTeacher : money(r.teacherPaid);
+      const centerShare =
+        fromSalesCenter > 0.009 ? fromSalesCenter : money(r.centerToSafe);
+      const grossAmount =
+        fromSalesGross > 0.009 ? fromSalesGross : money(r.grossAmount);
+      return {
+        id: r.id,
+        date: cairoYmd(r.createdAt),
+        createdAt: r.createdAt,
+        teacherId: r.teacherId,
+        teacherName: personName(r.teacher) || 'بدون مدرس',
+        online: {
+          count: online.count || r.onlineCount,
+          teacherShare: online.teacherShare,
+          centerShare: online.centerShare,
+          gross: online.gross,
+        },
+        handout: {
+          count: handout.count || r.handoutCount,
+          teacherShare: handout.teacherShare,
+          centerShare: handout.centerShare,
+          gross: handout.gross,
+        },
+        teacherPaid: Math.round(teacherPaid * 100) / 100,
+        centerShare: Math.round(centerShare * 100) / 100,
+        grossAmount: Math.round(grossAmount * 100) / 100,
+        settledByName: r.settledByUserId
+          ? names.get(r.settledByUserId) || null
+          : null,
+      };
+    });
+
+    const dayMap = new Map<
+      string,
+      {
+        date: string;
+        settlements: typeof settlements;
+        teacherPaid: number;
+        centerShare: number;
+        grossAmount: number;
+        onlineTeacher: number;
+        onlineCenter: number;
+        handoutTeacher: number;
+        handoutCenter: number;
+        onlineCount: number;
+        handoutCount: number;
+      }
+    >();
+
+    for (const s of settlements) {
+      const cur = dayMap.get(s.date) || {
+        date: s.date,
+        settlements: [] as typeof settlements,
+        teacherPaid: 0,
+        centerShare: 0,
+        grossAmount: 0,
+        onlineTeacher: 0,
+        onlineCenter: 0,
+        handoutTeacher: 0,
+        handoutCenter: 0,
+        onlineCount: 0,
+        handoutCount: 0,
+      };
+      cur.settlements.push(s);
+      cur.teacherPaid += s.teacherPaid;
+      cur.centerShare += s.centerShare;
+      cur.grossAmount += s.grossAmount;
+      cur.onlineTeacher += s.online.teacherShare;
+      cur.onlineCenter += s.online.centerShare;
+      cur.handoutTeacher += s.handout.teacherShare;
+      cur.handoutCenter += s.handout.centerShare;
+      cur.onlineCount += s.online.count;
+      cur.handoutCount += s.handout.count;
+      dayMap.set(s.date, cur);
+    }
+
+    const byDay = [...dayMap.values()]
+      .map((d) => ({
+        ...d,
+        teacherPaid: Math.round(d.teacherPaid * 100) / 100,
+        centerShare: Math.round(d.centerShare * 100) / 100,
+        grossAmount: Math.round(d.grossAmount * 100) / 100,
+        onlineTeacher: Math.round(d.onlineTeacher * 100) / 100,
+        onlineCenter: Math.round(d.onlineCenter * 100) / 100,
+        handoutTeacher: Math.round(d.handoutTeacher * 100) / 100,
+        handoutCenter: Math.round(d.handoutCenter * 100) / 100,
+      }))
+      .sort((a, b) => (a.date < b.date ? 1 : -1));
+
+    const totals = settlements.reduce(
+      (acc, s) => {
+        acc.teacherPaid += s.teacherPaid;
+        acc.centerShare += s.centerShare;
+        acc.grossAmount += s.grossAmount;
+        acc.onlineTeacher += s.online.teacherShare;
+        acc.onlineCenter += s.online.centerShare;
+        acc.handoutTeacher += s.handout.teacherShare;
+        acc.handoutCenter += s.handout.centerShare;
+        acc.onlineCount += s.online.count;
+        acc.handoutCount += s.handout.count;
+        acc.count += 1;
+        return acc;
+      },
+      {
+        count: 0,
+        teacherPaid: 0,
+        centerShare: 0,
+        grossAmount: 0,
+        onlineTeacher: 0,
+        onlineCenter: 0,
+        handoutTeacher: 0,
+        handoutCenter: 0,
+        onlineCount: 0,
+        handoutCount: 0,
+      },
+    );
+
+    return {
+      from: from || null,
+      to: to || null,
+      generatedAt: new Date().toISOString(),
+      settlements,
+      byDay,
+      totals: {
+        ...totals,
+        teacherPaid: Math.round(totals.teacherPaid * 100) / 100,
+        centerShare: Math.round(totals.centerShare * 100) / 100,
+        grossAmount: Math.round(totals.grossAmount * 100) / 100,
+        onlineTeacher: Math.round(totals.onlineTeacher * 100) / 100,
+        onlineCenter: Math.round(totals.onlineCenter * 100) / 100,
+        handoutTeacher: Math.round(totals.handoutTeacher * 100) / 100,
+        handoutCenter: Math.round(totals.handoutCenter * 100) / 100,
+      },
+    };
+  }
+
   async settleTeacherHold(userId: string, teacherIdRaw?: string | null) {
     const teacherId = this.holdTeacherId(teacherIdRaw);
     if (teacherId) {
@@ -689,6 +924,17 @@ export class CashService {
         select: { id: true },
       });
       if (!teacher) throw new NotFoundException('المدرس غير موجود');
+    }
+
+    const today = cairoYmd();
+    const closedToday = await this.prisma.cashDayClose.findUnique({
+      where: { businessDate: dateOnly(today) },
+      select: { id: true },
+    });
+    if (closedToday) {
+      throw new BadRequestException(
+        'اليوم مقفول — افتح اليوم تاني الأول عشان نصيب السنتر يدخل الدرج مع إيراد اليوم',
+      );
     }
 
     const holdWhere = {
@@ -733,7 +979,7 @@ export class CashService {
         (n, s) => n + money(s.teacherShare),
         0,
       );
-      const centerToSafe = [...online, ...handouts].reduce(
+      const centerToDrawer = [...online, ...handouts].reduce(
         (n, s) => n + money(s.centerShare),
         0,
       );
@@ -746,7 +992,8 @@ export class CashService {
         data: {
           teacherId,
           teacherPaid: Math.round(teacherPaid * 100) / 100,
-          centerToSafe: Math.round(centerToSafe * 100) / 100,
+          // Column name is historical; value is center share routed to today's drawer.
+          centerToSafe: Math.round(centerToDrawer * 100) / 100,
           grossAmount: Math.round(grossAmount * 100) / 100,
           onlineCount: online.length,
           handoutCount: handouts.length,
@@ -758,7 +1005,7 @@ export class CashService {
         await tx.onlineCodeSale.updateMany({
           where: { id: { in: online.map((s) => s.id) } },
           data: {
-            cashTo: ExtraRevenueCashTo.SAFE,
+            cashTo: ExtraRevenueCashTo.DRAWER,
             settlementId: settlement.id,
           },
         });
@@ -767,7 +1014,7 @@ export class CashService {
         await tx.handoutSale.updateMany({
           where: { id: { in: handouts.map((s) => s.id) } },
           data: {
-            cashTo: ExtraRevenueCashTo.SAFE,
+            cashTo: ExtraRevenueCashTo.DRAWER,
             settlementId: settlement.id,
           },
         });
@@ -779,7 +1026,7 @@ export class CashService {
         centerToSafe: money(settlement.centerToSafe),
         grossAmount: money(settlement.grossAmount),
       };
-    }    );
+    });
   }
 
   private async onlineFormWallet() {
@@ -1414,7 +1661,13 @@ export class CashService {
           orderBy: { confirmedAt: 'asc' },
         }),
         this.prisma.onlineCodeSale.findMany({
-          where: { payStatus: confirmed, confirmedAt: range },
+          where: {
+            payStatus: confirmed,
+            OR: [
+              { confirmedAt: range },
+              { settlement: { createdAt: range } },
+            ],
+          },
           include: {
             code: { select: { code: true } },
             offer: {
@@ -1428,7 +1681,13 @@ export class CashService {
           orderBy: { confirmedAt: 'asc' },
         }),
         this.prisma.handoutSale.findMany({
-          where: { payStatus: confirmed, confirmedAt: range },
+          where: {
+            payStatus: confirmed,
+            OR: [
+              { confirmedAt: range },
+              { settlement: { createdAt: range } },
+            ],
+          },
           include: {
             product: {
               select: {
@@ -1528,6 +1787,7 @@ export class CashService {
         amount: number;
         codes: string[];
         hold: boolean;
+        settledDrawer: boolean;
       }
     >();
     for (const s of online) {
@@ -1539,11 +1799,14 @@ export class CashService {
         amount: 0,
         codes: [] as string[],
         hold: false,
+        settledDrawer: false,
       };
       cur.count += 1;
       cur.amount += money(s.amount);
       if (s.code?.code) cur.codes.push(s.code.code);
       if (s.cashTo === ExtraRevenueCashTo.TEACHER_HOLD) cur.hold = true;
+      if (s.cashTo === ExtraRevenueCashTo.DRAWER && s.settlementId)
+        cur.settledDrawer = true;
       codeByOffer.set(s.offer.id, cur);
     }
 
@@ -1555,6 +1818,7 @@ export class CashService {
         amount: number;
         receipts: string[];
         hold: boolean;
+        settledDrawer: boolean;
       }
     >();
     for (const s of handouts) {
@@ -1566,11 +1830,14 @@ export class CashService {
         amount: 0,
         receipts: [] as string[],
         hold: false,
+        settledDrawer: false,
       };
       cur.count += s.qty;
       cur.amount += money(s.amount);
       if (s.receiptNumber) cur.receipts.push(s.receiptNumber);
       if (s.cashTo === ExtraRevenueCashTo.TEACHER_HOLD) cur.hold = true;
+      if (s.cashTo === ExtraRevenueCashTo.DRAWER && s.settlementId)
+        cur.settledDrawer = true;
       handByProduct.set(s.product.id, cur);
     }
 
@@ -1610,7 +1877,9 @@ export class CashService {
         serials: formatStrRange(r.codes),
         note: r.hold
           ? 'على حساب المدرس — مش في عدّ الدرج'
-          : undefined,
+          : r.settledDrawer
+            ? 'بعد تصفية المدرس — نصيب السنتر في الدرج'
+            : undefined,
       })),
       ...[...handByProduct.entries()].map(([id, r]) => ({
         key: `hn-${id}`,
@@ -1625,7 +1894,9 @@ export class CashService {
             : r.receipts[0] || '—',
         note: r.hold
           ? 'على حساب المدرس — مش في عدّ الدرج'
-          : undefined,
+          : r.settledDrawer
+            ? 'بعد تصفية المدرس — نصيب السنتر في الدرج'
+            : undefined,
       })),
     ];
 

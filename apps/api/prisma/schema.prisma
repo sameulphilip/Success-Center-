@@ -804,12 +804,13 @@ model RoomRental {
   @@index([status, startsAt])
 }
 
-/// Reception extra-revenue hold settled with a teacher; center share then enters the safe.
+/// Reception extra-revenue hold settled with a teacher; center share then enters today's drawer.
 model ExtraTeacherSettlement {
   id              String   @id @default(cuid())
   teacherId       String?
   teacher         Teacher? @relation(fields: [teacherId], references: [id])
   teacherPaid     Decimal  @db.Decimal(12, 2)
+  /// Center share after settle (historically named; now routes to drawer, not safe).
   centerToSafe    Decimal  @db.Decimal(12, 2)
   grossAmount     Decimal  @db.Decimal(12, 2)
   onlineCount     Int      @default(0)

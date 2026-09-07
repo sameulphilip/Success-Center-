@@ -1720,7 +1720,7 @@ export default function RevenuePage() {
               </div>
               {!toOwner ? (
                 <p className="text-[11px] text-navy/45">
-                  على حساب المدرس · متدخلش قفل اليوم · بعد التصفية نصيب السنتر يدخل الخزنة
+                  على حساب المدرس · متدخلش قفل اليوم · بعد التصفية نصيب السنتر يدخل درج اليوم
                 </p>
               ) : null}
               <FieldLabel label="الدفع">

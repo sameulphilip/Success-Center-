@@ -678,7 +678,7 @@ export default function FinancePage() {
       <PageHero
         eyebrow="CASH"
         title="الخزنة والدرج"
-        subtitle="فودافون كاش بتتحسب كاش مع قفل اليوم. قاعات الاستقبال في الدرج. أكواد وملازم الاستقبال على حساب المدرس لحد التصفية، وبعدين نصيب السنتر يدخل الخزنة."
+        subtitle="فودافون كاش بتتحسب كاش مع قفل اليوم. قاعات الاستقبال في الدرج. أكواد وملازم الاستقبال على حساب المدرس لحد التصفية، وبعدين نصيب السنتر يدخل درج اليوم."
         metrics={[
           {
             label: 'المفروض في الدرج',
@@ -746,11 +746,31 @@ export default function FinancePage() {
         </div>
       </Link>
 
+      <Link
+        href="/finance/settlements"
+        className="mb-4 block rounded-2xl border border-navy/10 bg-white p-4 hover:bg-sand/40"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="font-extrabold text-navy">تقرير تصفية المدرسين</p>
+            <p className="text-[12px] text-navy/50">
+              كل أيام التصفية · نصيب المدرس والسنتر في الأكواد والملازم
+            </p>
+          </div>
+          <span className="text-sm font-semibold text-brand">فتح التقرير</span>
+        </div>
+      </Link>
+
       {teacherHolds.length ? (
       <SectionCard
         className="mb-4"
         title="حسابات مدرسين مفتوحة"
-        subtitle="فلوس أكواد وملازم الاستقبال — تتصفى مع المدرس وبعدين نصيب السنتر يدخل الخزنة"
+        subtitle="فلوس أكواد وملازم الاستقبال — تتصفى مع المدرس وبعدين نصيب السنتر يدخل درج اليوم مع الإيراد"
+        action={
+          <Link href="/finance/settlements" className="btn-secondary text-sm">
+            تقرير التصفيات
+          </Link>
+        }
       >
         <div className="grid gap-3 md:grid-cols-2">
           {teacherHolds.map((h) => (
@@ -783,7 +803,7 @@ export default function FinancePage() {
                   </p>
                 </div>
                 <div className="rounded-lg bg-emerald-50 px-3 py-2">
-                  <p className="text-navy/45">يدخل الخزنة</p>
+                  <p className="text-navy/45">يدخل درج اليوم</p>
                   <p className="font-bold tabular-nums text-emerald-900">
                     {money(h.centerShare)}
                   </p>
@@ -937,8 +957,11 @@ export default function FinancePage() {
         )}
         {(cash?.extraSettlements || []).length ? (
           <div className="mt-4 max-h-40 overflow-auto">
-            <p className="mb-2 text-[11px] font-semibold text-navy/55">
-              تصفيات مدرسين سابقة
+            <p className="mb-2 flex items-center justify-between gap-2 text-[11px] font-semibold text-navy/55">
+              <span>تصفيات مدرسين سابقة</span>
+              <Link href="/finance/settlements" className="text-brand underline">
+                التقرير الكامل
+              </Link>
             </p>
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-white">
@@ -946,7 +969,7 @@ export default function FinancePage() {
                   <th className="px-3 py-2 text-right font-medium">التاريخ</th>
                   <th className="px-3 py-2 text-right font-medium">المدرس</th>
                   <th className="px-3 py-2 text-left font-medium">للمدرس</th>
-                  <th className="px-3 py-2 text-left font-medium">للخزنة</th>
+                  <th className="px-3 py-2 text-left font-medium">للدرج</th>
                 </tr>
               </thead>
               <tbody>
@@ -1932,7 +1955,7 @@ export default function FinancePage() {
         open={confirm?.kind === 'settle-hold'}
         tone="info"
         title={`تصفية مع ${confirm?.teacherName || 'المدرس'}`}
-        message={`هتدفع للمدرس ${money(Number(confirm?.teacherPaid || 0))} وهتحط نصيب السنتر ${money(Number(confirm?.centerToSafe || 0))} في الخزنة.`}
+        message={`هتدفع للمدرس ${money(Number(confirm?.teacherPaid || 0))} وهتحط نصيب السنتر ${money(Number(confirm?.centerToSafe || 0))} في درج اليوم مع الإيراد.`}
         confirmLabel={
           busy.startsWith('settle-') ? 'جاري التصفية...' : 'تأكيد التصفية'
         }

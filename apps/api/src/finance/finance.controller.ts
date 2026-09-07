@@ -193,6 +193,15 @@ export class FinanceController {
     return this.cash.settleTeacherHold(user.userId, body?.teacherId);
   }
 
+  @Get('cash/teacher-settlements')
+  @RequirePerms('finance.safe', 'finance.close')
+  teacherSettlements(
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.cash.teacherSettlementsReport(from, to);
+  }
+
   @Post('cash/close-day')
   @RequirePerms('finance.close')
   closeDay(
