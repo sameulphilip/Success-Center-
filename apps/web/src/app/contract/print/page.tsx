@@ -134,8 +134,8 @@ export default function ContractPrintPage() {
           <p className="mt-2">
             وحيث اتفق الطرفان على أن المقابل المالي يكون{' '}
             <strong>حسب عدد الطلاب المشتركين لكل ترم دراسي</strong> بواقع{' '}
-            <strong>35 جنيهًا مصريًا للطالب عن الترم الكامل</strong>، شاملًا
-            السيرفرات والدومين، على <strong>دفعتين</strong> (منتصف الترم / نهاية
+            <strong>30 جنيهًا مصريًا للطالب عن الترم الكامل</strong>، شاملًا
+            السيرفرات والدومين، على <strong>دفعتين</strong> (25/9 / نهاية
             الترم).
           </p>
           <p className="mt-2">
@@ -177,8 +177,8 @@ export default function ContractPrintPage() {
         <Section title="البند (2): تعريفات">
           <Ol>
             <li>
-              <strong>النظام:</strong> منصة Success Center ERP (ويب + API + تطبيق
-              جوال عند التفعيل) ووحداتها في الملحق (أ).
+              <strong>النظام:</strong> منصة Success Center ERP (ويب + API)
+              ووحداتها في الملحق (أ).
             </li>
             <li>
               <strong>الترم الدراسي:</strong> الفترة الدراسية المعتمدة لدى الطرف
@@ -232,7 +232,7 @@ export default function ContractPrintPage() {
           <SubTitle>5/1 أساس الاحتساب</SubTitle>
           <ul className="list-disc space-y-1 pr-5 text-[13px] leading-relaxed text-navy/80">
             <li>
-              سعر الترم الكامل = <strong>35 ج.م × عدد الطلاب المشتركين</strong>
+              سعر الترم الكامل = <strong>30 ج.م × عدد الطلاب المشتركين</strong>
             </li>
             <li>
               السعر <strong>شامل</strong> السيرفرات (الاستضافة) واسم النطاق
@@ -247,7 +247,7 @@ export default function ContractPrintPage() {
             المتفق عليه. يُستخرج كشف من النظام ويُراجع خلال 7 أيام من الإخطار.
           </p>
 
-          <SubTitle>5/3 جدول الدفع — دفعتان لكل ترم</SubTitle>
+          <SubTitle>5/3 مواعيد الدفع</SubTitle>
           <div className="screen-scroll overflow-x-auto print:overflow-visible">
             <table className="w-full overflow-hidden rounded-lg border border-navy/15 text-[12px]">
               <thead>
@@ -264,13 +264,13 @@ export default function ContractPrintPage() {
                     الأولى
                   </td>
                   <td className="border-t border-navy/10 px-2.5 py-2">
-                    منتصف الترم
+                    25/9
                   </td>
                   <td className="border-t border-navy/10 px-2.5 py-2 font-bold text-gold-deep">
                     50%
                   </td>
                   <td className="border-t border-navy/10 px-2.5 py-2">
-                    (عدد الطلاب × 35) × 50%
+                    (عدد الطلاب × 30) × 50%
                   </td>
                 </tr>
                 <tr className="bg-navy-mist/70">
@@ -284,17 +284,12 @@ export default function ContractPrintPage() {
                     50%
                   </td>
                   <td className="border-t border-navy/10 px-2.5 py-2">
-                    (عدد الطلاب × 35) × 50%
+                    (عدد الطلاب × 30) × 50%
                   </td>
                 </tr>
               </tbody>
             </table>
           </div>
-          <p className="mt-4 rounded-xl border border-gold/30 bg-gradient-to-l from-gold-soft/50 to-navy-mist/60 px-3.5 py-2.5 text-[12px] leading-relaxed text-navy/80">
-            <strong className="text-gold-deep">مثال:</strong> 200 طالب → إجمالي
-            الترم 7,000 ج.م → دفعة أولى 3,500 ج.م منتصف الترم + دفعة ثانية 3,500
-            ج.م نهاية الترم.
-          </p>
 
           <SubTitle>5/4 أحكام مالية</SubTitle>
           <Ol>
@@ -317,7 +312,8 @@ export default function ContractPrintPage() {
               بـ 15 يومًا على الأقل.
             </li>
             <li>
-              تُثبَّت تواريخ الترم ونصف الترم ونهايته في الملحق التنفيذي (ب).
+              تُثبَّت تواريخ الترم ونهاية الترم في الملحق التنفيذي (ب)، مع استحقاق
+              الدفعة الأولى في 25/9.
             </li>
           </Ol>
         </Section>
@@ -448,21 +444,19 @@ export default function ContractPrintPage() {
 
         <Section title="الملحق (أ): المزايا المشمولة في الاشتراك">
           <FeatureGroup title="المنصة والوصول">
-            نظام سحابي عربي · أدوار وصلاحيات · دخول طالب QR/موبايل · تطبيق جوال عند
-            التفعيل
+            نظام سحابي عربي · أدوار وصلاحيات · دخول طالب QR/موبايل
           </FeatureGroup>
           <FeatureGroup title="لوحة التحكم">
             تشغيل وتحليلات يومية للدخل والحصص والمصادر
           </FeatureGroup>
           <FeatureGroup title="الطلاب والمدرسون">
-            سجلات كاملة · كارت طالب QR/NFC · بوابة رقم سري · بيانات المدرسين وأسعار
-            الحصص
+            سجلات كاملة · بيانات المدرسين وأسعار الحصص
           </FeatureGroup>
           <FeatureGroup title="المجموعات والجدول">
             مجموعات مادة/صف/مدرس/قاعة · تسجيل طلاب · تقويم السنتر
           </FeatureGroup>
           <FeatureGroup title="الحضور وكشك الدخول">
-            حضور يدوي · مسح QR · check-in · NFC عند التفعيل · QR بوابة السنتر
+            حضور يدوي · مسح QR · check-in · QR بوابة السنتر
           </FeatureGroup>
           <FeatureGroup title="الحجز والاستمارات">
             استمارات سنتر/أونلاين · تأكيد دفع · إيصالات · كشوف وطباعة · استيراد عند
@@ -491,7 +485,7 @@ export default function ContractPrintPage() {
           <FeatureGroup title="المستخدمون والإعدادات">
             إدارة مستخدمين وصلاحيات · مواد وصفوف وقاعات · QR البوابة
           </FeatureGroup>
-          <FeatureGroup title="البنية ضمن السعر (35 ج.م / طالب / ترم)">
+          <FeatureGroup title="البنية ضمن السعر (30 ج.م / طالب / ترم)">
             استضافة السيرفرات · الدومين المعتمد · قاعدة البيانات وطوابير الرسائل
             اللازمة للتشغيل
           </FeatureGroup>
@@ -509,7 +503,7 @@ export default function ContractPrintPage() {
                   ['العام الدراسي', '____________________'],
                   ['اسم الترم', '□ أول  □ ثانٍ  □ صيفي  □ أخرى'],
                   ['بداية الترم', '____ / ____ / ______'],
-                  ['منتصف الترم (دفعة 1)', '____ / ____ / ______'],
+                  ['موعد الدفعة 1', '25/9'],
                   ['نهاية الترم (دفعة 2)', '____ / ____ / ______'],
                   ['عدد الطلاب — دفعة 1', '__________'],
                   ['مبلغ الدفعة 1 (50%)', '__________ ج.م'],

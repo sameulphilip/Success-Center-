@@ -1333,6 +1333,39 @@ export class CashService {
     });
   }
 
+  /** Undo an accidental day close — removes the close row (safe balance recalculates). */
+  async reopenDay(body: { businessDate?: string }) {
+    const today = cairoYmd();
+    const raw = (body.businessDate || '').trim();
+    const ymd = raw || today;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+      throw new BadRequestException('تاريخ غير صالح');
+    }
+    if (ymd > today) {
+      throw new BadRequestException('لا يمكن فتح يوم لسه مجاش');
+    }
+    const earliest = addDays(today, -OPEN_DAY_LOOKBACK);
+    if (ymd < earliest) {
+      throw new BadRequestException('اليوم ده قديم أوي على الفتح من هنا');
+    }
+
+    const businessDate = dateOnly(ymd);
+    const existing = await this.prisma.cashDayClose.findUnique({
+      where: { businessDate },
+    });
+    if (!existing) {
+      throw new BadRequestException('اليوم ده مش مقفول');
+    }
+
+    await this.prisma.cashDayClose.delete({ where: { businessDate } });
+    return {
+      ok: true,
+      businessDate: ymd,
+      removedCounted: Number(existing.countedAmount),
+      removedTransferred: Number(existing.transferredToSafe),
+    };
+  }
+
   /** Printable reception day sheet: drawer collections, expenses, close, teacher-hold sales. */
   async daySheet(rawDate?: string) {
     const today = cairoYmd();

@@ -256,6 +256,7 @@ export default function FinancePage() {
   const canOwnerExpense = !isReception;
   const canDelete =
     me?.role === 'SUPER_ADMIN' || me?.role === 'CENTER_MANAGER';
+  const canReopen = canDelete && canClose;
   const [payments, setPayments] = useState<ReceiptRow[]>([]);
   const [summary, setSummary] = useState<FinanceSummary | null>(null);
   const [cash, setCash] = useState<CashSnapshot | null>(null);
@@ -287,6 +288,7 @@ export default function FinancePage() {
   const [confirm, setConfirm] = useState<null | {
     kind:
       | 'close'
+      | 'reopen'
       | 'handover'
       | 'del-receipt'
       | 'del-expense'
@@ -474,6 +476,25 @@ export default function FinancePage() {
       window.open(daySheetHref(closedDate, true), '_blank', 'noopener,noreferrer');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'فشل قفل اليوم');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function doReopen() {
+    setBusy('reopen');
+    setError('');
+    try {
+      await api('/finance/cash/reopen-day', {
+        method: 'POST',
+        body: JSON.stringify({
+          businessDate: confirm?.date || cash?.businessDate || undefined,
+        }),
+      });
+      setConfirm(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'فشل فتح اليوم');
     } finally {
       setBusy('');
     }
@@ -1212,6 +1233,16 @@ export default function FinancePage() {
               >
                 طباعة ورقة اليوم
               </a>
+              {canReopen ? (
+                <button
+                  type="button"
+                  className="btn-ghost w-full"
+                  disabled={busy === 'reopen'}
+                  onClick={() => setConfirm({ kind: 'reopen' })}
+                >
+                  فتح اليوم تاني (قفل بالغلط)
+                </button>
+              ) : null}
             </div>
           ) : (
             <div className="space-y-3">
@@ -1843,6 +1874,18 @@ export default function FinancePage() {
         confirmLabel={busy === 'close' ? 'جاري القفل...' : 'تأكيد القفل'}
         cancelLabel="رجوع"
         onConfirm={doClose}
+        onClose={() => setConfirm(null)}
+      />
+      <AppDialog
+        open={confirm?.kind === 'reopen'}
+        tone="danger"
+        title="فتح اليوم تاني"
+        message={`هيتلغى قفل ${formatArDay(
+          confirm?.date || cash?.businessDate || cairoYmd(),
+        )} ويرجع الدرج يشتغل عادي (مصروفات الدرج والتحصيل).`}
+        confirmLabel={busy === 'reopen' ? 'جاري الفتح...' : 'تأكيد فتح اليوم'}
+        cancelLabel="رجوع"
+        onConfirm={doReopen}
         onClose={() => setConfirm(null)}
       />
       <AppDialog

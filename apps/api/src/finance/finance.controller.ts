@@ -202,6 +202,13 @@ export class FinanceController {
     return this.cash.closeDay(user.userId, body);
   }
 
+  @Post('cash/reopen-day')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  @RequirePerms('finance.close')
+  reopenDay(@Body() body: { businessDate?: string }) {
+    return this.cash.reopenDay(body || {});
+  }
+
   @Post('cash/handover')
   @RequirePerms('finance.safe')
   handover(
