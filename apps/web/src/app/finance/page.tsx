@@ -49,6 +49,17 @@ function formatArDay(ymd: string) {
   });
 }
 
+function diffTone(diff: number) {
+  if (diff === 0) return 'text-emerald-700';
+  if (diff < 0) return 'text-rose-700';
+  return 'text-amber-800';
+}
+
+function formatDiff(diff: number) {
+  if (diff === 0) return 'مطابق';
+  return `${diff > 0 ? '+' : ''}${Math.round(diff).toLocaleString('en-EG')} ج.م`;
+}
+
 type FinanceSummary = {
   collectedToday: number;
   drawerCollectedToday?: number;
@@ -275,6 +286,7 @@ export default function FinancePage() {
   const [counted, setCounted] = useState('');
   const [prevCounted, setPrevCounted] = useState<Record<string, string>>({});
   const [closeNote, setCloseNote] = useState('');
+  const [closeDetailsOpen, setCloseDetailsOpen] = useState(true);
   const [handAmount, setHandAmount] = useState('');
   const [handNote, setHandNote] = useState('');
   const [showExtraSales, setShowExtraSales] = useState(false);
@@ -1004,370 +1016,491 @@ export default function FinancePage() {
       <div className="grid gap-4 lg:grid-cols-2 mb-4">
         {tab === 'close' ? (
         <>
-        <SectionCard
-          title="قفل اليوم"
-          subtitle={
-            todayClosed
-              ? `اتقفل · العدّ ${money(Number(cash.close?.countedAmount || 0))}`
-              : 'في آخر اليوم: عدّ الفلوس وحطها في الخزنة'
-          }
-        >
+        <div className="lg:col-span-2 space-y-4">
           {prevDays.length ? (
-            <div className="mb-4 space-y-3">
-              <p className="text-[11px] font-semibold text-navy/55">
-                أيام سابقة — قفّل كل يوم لوحده
-              </p>
-              {prevDays.map((d) => {
-                const countedPrev = Number(prevCounted[d.date] ?? '');
-                const diff = Number.isFinite(countedPrev)
-                  ? countedPrev - d.expected
-                  : 0;
-                return (
-                  <div
-                    key={d.date}
-                    className="rounded-xl border border-amber-200 bg-amber-50/70 p-3"
-                  >
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <p className="font-bold text-amber-950">
-                        {formatArDay(d.date)}
-                      </p>
-                      <p className="text-[12px] tabular-nums text-amber-900/80">
-                        المفروض {money(d.expected)}
-                      </p>
-                    </div>
-                    <div className="mb-3 grid grid-cols-3 gap-2 text-[12px]">
-                      <div className="rounded-lg bg-white/80 px-2 py-1.5">
-                        <p className="text-[10px] text-navy/45">كاش</p>
-                        <p className="font-bold tabular-nums">
-                          {money(d.collectedCash)}
-                        </p>
-                      </div>
-                      <div className="rounded-lg bg-white/80 px-2 py-1.5">
-                        <p className="text-[10px] text-navy/45">فودافون</p>
-                        <p className="font-bold tabular-nums">
-                          {money(d.collectedVodafone)}
-                        </p>
-                      </div>
-                      <div className="rounded-lg bg-white/80 px-2 py-1.5">
-                        <p className="text-[10px] text-navy/45">مصروف</p>
-                        <p className="font-bold tabular-nums text-rose-700">
-                          − {money(d.drawerExpenses)}
-                        </p>
-                      </div>
-                    </div>
-                    <FieldLabel label="العدّ الفعلي">
-                      <input
-                        className="field"
-                        type="number"
-                        min={0}
-                        value={prevCounted[d.date] ?? ''}
-                        onChange={(e) =>
-                          setPrevCounted((curr) => ({
-                            ...curr,
-                            [d.date]: e.target.value,
-                          }))
-                        }
-                      />
-                    </FieldLabel>
-                    <p
-                      className={`mt-1 text-xs font-semibold ${
-                        diff === 0
-                          ? 'text-emerald-700'
-                          : diff < 0
-                            ? 'text-rose-700'
-                            : 'text-amber-800'
-                      }`}
-                    >
-                      الفرق:{' '}
-                      {diff === 0
-                        ? 'مطابق'
-                        : `${diff > 0 ? '+' : ''}${Math.round(diff).toLocaleString('en-EG')} ج.م`}
-                    </p>
-                    <button
-                      type="button"
-                      className="btn-primary mt-2 w-full"
-                      disabled={busy === 'close'}
-                      onClick={() => setConfirm({ kind: 'close', date: d.date })}
-                    >
-                      قفل {formatArDay(d.date)} وتحويل للخزنة
-                    </button>
-                    <a
-                      href={daySheetHref(d.date)}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="btn-ghost mt-2 w-full"
-                    >
-                      طباعة ورقة {formatArDay(d.date)}
-                    </a>
-                  </div>
-                );
-              })}
-            </div>
-          ) : null}
-
-          <div className="grid grid-cols-2 gap-2 text-sm mb-4">
-            <div className="rounded-xl bg-sand px-3 py-2">
-              <p className="text-[11px] text-navy/45">كاش</p>
-              <p className="font-extrabold tabular-nums">
-                {money(cash?.collectedCash ?? 0)}
-              </p>
-            </div>
-            <div className="rounded-xl bg-sand px-3 py-2">
-              <p className="text-[11px] text-navy/45">فودافون ← كاش</p>
-              <p className="font-extrabold tabular-nums">
-                {money(cash?.collectedVodafone ?? 0)}
-              </p>
-            </div>
-            <div className="rounded-xl bg-sand px-3 py-2">
-              <p className="text-[11px] text-navy/45">مصروف الدرج</p>
-              <p className="font-extrabold tabular-nums text-rose-700">
-                − {money(cash?.drawerExpenses ?? 0)}
-              </p>
-            </div>
-            <div className="rounded-xl bg-gold/10 px-3 py-2">
-              <p className="text-[11px] text-navy/45">المفروض يتعدّ النهاردة</p>
-              <p className="font-extrabold tabular-nums">
-                {money(todayExpected)}
-              </p>
-            </div>
-          </div>
-
-          {cash?.collectedBreakdown?.length ? (
-            <div className="mb-4 overflow-hidden rounded-xl border border-navy/10">
-              <p className="bg-sand px-3 py-2 text-[11px] font-semibold text-navy/55">
-                تفصيل تحصيل النهاردة
-              </p>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-[11px] text-navy/40">
-                    <th className="px-3 py-1.5 text-right font-medium">المصدر</th>
-                    <th className="px-3 py-1.5 text-left font-medium">كاش</th>
-                    <th className="px-3 py-1.5 text-left font-medium">فودافون</th>
-                    <th className="px-3 py-1.5 text-left font-medium">الإجمالي</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {cash.collectedBreakdown.map((row) => (
-                    <tr key={row.key} className="border-t border-navy/5">
-                      <td className="px-3 py-1.5">{row.label}</td>
-                      <td className="px-3 py-1.5 tabular-nums text-left">
-                        {money(row.cash)}
-                      </td>
-                      <td className="px-3 py-1.5 tabular-nums text-left">
-                        {money(row.vodafone)}
-                      </td>
-                      <td className="px-3 py-1.5 tabular-nums text-left font-semibold">
-                        {money(row.total)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
-
-          {cash?.onlineFormsToday?.count ? (
-            <div className="mb-4 overflow-hidden rounded-xl border border-sky-200/80">
-              <p className="bg-sky-50 px-3 py-2 text-[11px] font-semibold text-sky-900">
-                استمارات أونلاين النهاردة — مش في عدّ الدرج
-                <span className="text-sky-700/80 font-normal">
-                  {' '}
-                  · {cash.onlineFormsToday.count} استمارة ·{' '}
-                  {money(cash.onlineFormsToday.amount)}
+            <SectionCard
+              title="أيام سابقة لسه مقفولة"
+              subtitle="قفّل كل يوم لوحده قبل ما تقفل النهاردة"
+              badge={
+                <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-bold text-amber-900">
+                  {prevDays.length}
                 </span>
-              </p>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-[11px] text-navy/40">
-                    <th className="px-3 py-1.5 text-right font-medium">الاستمارة</th>
-                    <th className="px-3 py-1.5 text-right font-medium">التسلسل</th>
-                    <th className="px-3 py-1.5 text-right font-medium">الطالب</th>
-                    <th className="px-3 py-1.5 text-left font-medium">المبلغ</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {cash.onlineFormsToday.byForm.map((row) => (
-                    <tr key={row.formId} className="border-t border-sky-100">
-                      <td className="px-3 py-1.5 font-medium">{row.label}</td>
-                      <td className="px-3 py-1.5 font-mono text-[11px] text-navy/60">
-                        {row.serials.length
-                          ? row.serials
-                              .map((n) => `م ${n}`)
-                              .join(' · ')
-                          : '—'}
-                      </td>
-                      <td className="px-3 py-1.5 text-navy/55">
-                        {row.count} استمارة
-                      </td>
-                      <td className="px-3 py-1.5 tabular-nums text-left font-semibold">
-                        {money(row.amount)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <p className="px-3 py-2 text-[10px] text-sky-800/70 border-t border-sky-100">
-                المبلغ في محفظة الأونلاين — يُسحب للدرج من صفحة محفظة الأونلاين
-                عند الحاجة
-              </p>
-            </div>
+              }
+            >
+              <div className="grid gap-3 md:grid-cols-2">
+                {prevDays.map((d) => {
+                  const countedPrev = Number(prevCounted[d.date] ?? '');
+                  const diff = Number.isFinite(countedPrev)
+                    ? countedPrev - d.expected
+                    : 0;
+                  return (
+                    <div
+                      key={d.date}
+                      className="rounded-2xl border border-amber-200/90 bg-amber-50/60 p-4"
+                    >
+                      <div className="mb-3 flex items-start justify-between gap-2">
+                        <div>
+                          <p className="text-[11px] font-bold tracking-wide text-amber-800/70">
+                            يوم معلّق
+                          </p>
+                          <p className="font-extrabold text-amber-950">
+                            {formatArDay(d.date)}
+                          </p>
+                        </div>
+                        <div className="text-left">
+                          <p className="text-[10px] text-amber-900/55">المفروض</p>
+                          <p className="text-lg font-black tabular-nums text-amber-950">
+                            {money(d.expected)}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mb-3 grid grid-cols-3 gap-2 text-[12px]">
+                        <div className="rounded-xl bg-white/90 px-2.5 py-2">
+                          <p className="text-[10px] text-navy/45">كاش</p>
+                          <p className="font-bold tabular-nums">
+                            {money(d.collectedCash)}
+                          </p>
+                        </div>
+                        <div className="rounded-xl bg-white/90 px-2.5 py-2">
+                          <p className="text-[10px] text-navy/45">فودافون</p>
+                          <p className="font-bold tabular-nums">
+                            {money(d.collectedVodafone)}
+                          </p>
+                        </div>
+                        <div className="rounded-xl bg-white/90 px-2.5 py-2">
+                          <p className="text-[10px] text-navy/45">مصروف</p>
+                          <p className="font-bold tabular-nums text-rose-700">
+                            − {money(d.drawerExpenses)}
+                          </p>
+                        </div>
+                      </div>
+                      <FieldLabel label="العدّ الفعلي">
+                        <input
+                          className="field"
+                          type="number"
+                          min={0}
+                          value={prevCounted[d.date] ?? ''}
+                          onChange={(e) =>
+                            setPrevCounted((curr) => ({
+                              ...curr,
+                              [d.date]: e.target.value,
+                            }))
+                          }
+                        />
+                      </FieldLabel>
+                      <p
+                        className={`mt-1.5 text-xs font-semibold ${diffTone(diff)}`}
+                      >
+                        الفرق: {formatDiff(diff)}
+                      </p>
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        <button
+                          type="button"
+                          className="btn-primary w-full"
+                          disabled={busy === 'close'}
+                          onClick={() =>
+                            setConfirm({ kind: 'close', date: d.date })
+                          }
+                        >
+                          قفل وتحويل للخزنة
+                        </button>
+                        <a
+                          href={daySheetHref(d.date)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="btn-ghost w-full"
+                        >
+                          طباعة الورقة
+                        </a>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </SectionCard>
           ) : null}
 
-          {cash?.drawerExpenseLines?.length ? (
-            <div className="mb-4 overflow-hidden rounded-xl border border-rose-200/70">
-              <p className="bg-rose-50 px-3 py-2 text-[11px] font-semibold text-rose-800">
-                مصروف الدرج النهاردة
-              </p>
-              <ul className="divide-y divide-rose-100 text-sm">
-                {cash.drawerExpenseLines.map((e) => (
-                  <li
-                    key={e.id}
-                    className="flex items-center justify-between gap-3 px-3 py-1.5"
-                  >
-                    <span>
-                      {e.category}
-                      {e.note ? (
-                        <span className="text-navy/40"> · {e.note}</span>
-                      ) : null}
-                    </span>
-                    <span className="tabular-nums font-semibold text-rose-700">
-                      − {money(e.amount)}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-
-          {todayClosed ? (
-            <div className="space-y-3">
-              <p className="text-sm text-navy/70">
-                اتقفل بواسطة {cash.close?.closedByName || 'موظف'} · فرق العدّ{' '}
-                <strong className="tabular-nums">
-                  {money(Number(cash.close?.difference || 0))}
-                </strong>
-                {cash.close?.note ? ` · ${cash.close.note}` : ''}
-              </p>
-              <a
-                href={daySheetHref(cash.businessDate, true)}
-                target="_blank"
-                rel="noreferrer"
-                className="btn-primary w-full"
-              >
-                طباعة ورقة اليوم
-              </a>
-              {canReopen ? (
-                <button
-                  type="button"
-                  className="btn-ghost w-full"
-                  disabled={busy === 'reopen'}
-                  onClick={() => setConfirm({ kind: 'reopen' })}
+          <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+            <SectionCard
+              title="ملخص درج النهاردة"
+              subtitle={
+                todayClosed
+                  ? `اتقفل · العدّ ${money(Number(cash?.close?.countedAmount || 0))}`
+                  : 'راجع التحصيل والمصروف قبل العدّ'
+              }
+              badge={
+                <span
+                  className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold ${
+                    todayClosed
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : 'bg-sky-100 text-sky-900'
+                  }`}
                 >
-                  فتح اليوم تاني (قفل بالغلط)
-                </button>
-              ) : null}
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <FieldLabel label="العدّ الفعلي (بعد تحويل فودافون)">
-                <input
-                  className="field"
-                  type="number"
-                  min={0}
-                  value={counted}
-                  onChange={(e) => setCounted(e.target.value)}
-                />
-              </FieldLabel>
-              <p
-                className={`text-xs font-semibold ${
-                  closeDiff === 0
-                    ? 'text-emerald-700'
-                    : closeDiff < 0
-                      ? 'text-rose-700'
-                      : 'text-amber-800'
-                }`}
-              >
-                الفرق عن المفروض:{' '}
-                {closeDiff === 0
-                  ? 'مطابق'
-                  : `${closeDiff > 0 ? '+' : ''}${Math.round(closeDiff).toLocaleString('en-EG')} ج.م`}
-              </p>
-              <FieldLabel label="ملاحظة (اختياري)">
-                <input
-                  className="field"
-                  value={closeNote}
-                  onChange={(e) => setCloseNote(e.target.value)}
-                  placeholder="سبب أي فرق"
-                />
-              </FieldLabel>
+                  {todayClosed ? 'مقفل' : 'مفتوح'}
+                </span>
+              }
+              action={
+                <a
+                  href={daySheetHref(cash?.businessDate || cairoYmd())}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn-ghost text-sm"
+                >
+                  ورقة اليوم
+                </a>
+              }
+            >
+              <div className="mb-4 rounded-2xl border border-gold/25 bg-gold/10 px-4 py-3">
+                <p className="text-[11px] font-semibold text-navy/50">
+                  المفروض يتعدّ النهاردة
+                </p>
+                <p className="text-2xl font-black tabular-nums text-navy">
+                  {money(todayExpected)}
+                </p>
+                {prevDays.length ? (
+                  <p className="mt-1 text-[11px] text-amber-900/80">
+                    فيه أيام سابقة معلّقة فوق — اتقفلها الأول
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 text-sm">
+                <div className="rounded-xl bg-sand px-3 py-2.5">
+                  <p className="text-[11px] text-navy/45">كاش</p>
+                  <p className="font-extrabold tabular-nums">
+                    {money(cash?.collectedCash ?? 0)}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-sand px-3 py-2.5">
+                  <p className="text-[11px] text-navy/45">فودافون</p>
+                  <p className="font-extrabold tabular-nums">
+                    {money(cash?.collectedVodafone ?? 0)}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-sand px-3 py-2.5">
+                  <p className="text-[11px] text-navy/45">مصروف الدرج</p>
+                  <p className="font-extrabold tabular-nums text-rose-700">
+                    − {money(cash?.drawerExpenses ?? 0)}
+                  </p>
+                </div>
+              </div>
+
               <button
                 type="button"
-                className="btn-primary w-full"
-                disabled={busy === 'close'}
-                onClick={() => setConfirm({ kind: 'close' })}
+                className="mt-4 flex w-full items-center justify-between rounded-xl border border-navy/10 bg-white px-3 py-2.5 text-sm font-semibold text-navy/70 hover:bg-sand/50"
+                onClick={() => setCloseDetailsOpen((v) => !v)}
               >
-                قفل اليوم وتحويل للخزنة
+                <span>تفصيل التحصيل والمصروف</span>
+                <span className="text-navy/40">
+                  {closeDetailsOpen ? 'إخفاء' : 'عرض'}
+                </span>
               </button>
-              <a
-                href={daySheetHref(cash?.businessDate || cairoYmd())}
-                target="_blank"
-                rel="noreferrer"
-                className="btn-ghost w-full"
-              >
-                معاينة / طباعة الورقة
-              </a>
-            </div>
-          )}
-        </SectionCard>
-        <SectionCard
-          className="h-full"
-          title="آخر أيام اتقفلت"
-          badge={
-            cash?.closes?.length ? (
-              <span className="badge-navy">{cash.closes.length}</span>
-            ) : null
-          }
-        >
-          {cash?.closes?.length ? (
-            <ul className="max-h-52 space-y-1.5 overflow-auto overscroll-contain text-sm lg:max-h-[28rem]">
-              {cash.closes.map((c) => {
-                const ymd = String(c.businessDate).slice(0, 10);
-                return (
-                <li
-                  key={c.id}
-                  className="flex justify-between gap-2 rounded-lg border border-mist px-3 py-1.5"
-                >
-                  <div className="min-w-0">
-                    <p className="font-semibold">
-                      قفل {ymd}
+
+              {closeDetailsOpen ? (
+                <div className="mt-3 space-y-3">
+                  {cash?.collectedBreakdown?.length ? (
+                    <div className="overflow-hidden rounded-xl border border-navy/10">
+                      <p className="bg-sand px-3 py-2 text-[11px] font-semibold text-navy/55">
+                        مصادر التحصيل
+                      </p>
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-[11px] text-navy/40">
+                            <th className="px-3 py-1.5 text-right font-medium">
+                              المصدر
+                            </th>
+                            <th className="px-3 py-1.5 text-left font-medium">
+                              كاش
+                            </th>
+                            <th className="px-3 py-1.5 text-left font-medium">
+                              فودافون
+                            </th>
+                            <th className="px-3 py-1.5 text-left font-medium">
+                              الإجمالي
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {cash.collectedBreakdown.map((row) => (
+                            <tr key={row.key} className="border-t border-navy/5">
+                              <td className="px-3 py-1.5">{row.label}</td>
+                              <td className="px-3 py-1.5 tabular-nums text-left">
+                                {money(row.cash)}
+                              </td>
+                              <td className="px-3 py-1.5 tabular-nums text-left">
+                                {money(row.vodafone)}
+                              </td>
+                              <td className="px-3 py-1.5 tabular-nums text-left font-semibold">
+                                {money(row.total)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-navy/45">مفيش تحصيل درج النهاردة</p>
+                  )}
+
+                  {cash?.drawerExpenseLines?.length ? (
+                    <div className="overflow-hidden rounded-xl border border-rose-200/70">
+                      <p className="bg-rose-50 px-3 py-2 text-[11px] font-semibold text-rose-800">
+                        مصروف الدرج
+                      </p>
+                      <ul className="divide-y divide-rose-100 text-sm">
+                        {cash.drawerExpenseLines.map((e) => (
+                          <li
+                            key={e.id}
+                            className="flex items-center justify-between gap-3 px-3 py-1.5"
+                          >
+                            <span>
+                              {e.category}
+                              {e.note ? (
+                                <span className="text-navy/40"> · {e.note}</span>
+                              ) : null}
+                            </span>
+                            <span className="tabular-nums font-semibold text-rose-700">
+                              − {money(e.amount)}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+
+                  {cash?.onlineFormsToday?.count ? (
+                    <div className="overflow-hidden rounded-xl border border-sky-200/80">
+                      <p className="bg-sky-50 px-3 py-2 text-[11px] font-semibold text-sky-900">
+                        استمارات أونلاين — مش في عدّ الدرج
+                        <span className="font-normal text-sky-700/80">
+                          {' '}
+                          · {cash.onlineFormsToday.count} ·{' '}
+                          {money(cash.onlineFormsToday.amount)}
+                        </span>
+                      </p>
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-[11px] text-navy/40">
+                            <th className="px-3 py-1.5 text-right font-medium">
+                              الاستمارة
+                            </th>
+                            <th className="px-3 py-1.5 text-right font-medium">
+                              التسلسل
+                            </th>
+                            <th className="px-3 py-1.5 text-left font-medium">
+                              المبلغ
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {cash.onlineFormsToday.byForm.map((row) => (
+                            <tr
+                              key={row.formId}
+                              className="border-t border-sky-100"
+                            >
+                              <td className="px-3 py-1.5 font-medium">
+                                {row.label}
+                                <span className="block text-[11px] font-normal text-navy/45">
+                                  {row.count} استمارة
+                                </span>
+                              </td>
+                              <td className="px-3 py-1.5 font-mono text-[11px] text-navy/60">
+                                {row.serials.length
+                                  ? row.serials.map((n) => `م ${n}`).join(' · ')
+                                  : '—'}
+                              </td>
+                              <td className="px-3 py-1.5 tabular-nums text-left font-semibold">
+                                {money(row.amount)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </SectionCard>
+
+            <SectionCard
+              title={todayClosed ? 'حالة القفل' : 'عدّ وقفل'}
+              subtitle={
+                todayClosed
+                  ? 'اليوم اتقفل واتحوّل للخزنة'
+                  : 'بعد ما تعدّ الدرج سجّل العدّ الفعلي'
+              }
+            >
+              {todayClosed ? (
+                <div className="space-y-4">
+                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4">
+                    <p className="text-[11px] font-semibold text-emerald-800/70">
+                      اتقفل بواسطة
                     </p>
-                    <p className="truncate text-[11px] text-navy/45">
-                      فودافون {money(Number(c.vodafoneCollected))} · فرق{' '}
-                      {money(Number(c.difference))}
-                      {c.closedByName ? ` · ${c.closedByName}` : ''}
+                    <p className="font-extrabold text-emerald-950">
+                      {cash?.close?.closedByName || 'موظف'}
                     </p>
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                      <div className="rounded-xl bg-white/80 px-3 py-2">
+                        <p className="text-[10px] text-navy/45">العدّ</p>
+                        <p className="font-bold tabular-nums">
+                          {money(Number(cash?.close?.countedAmount || 0))}
+                        </p>
+                      </div>
+                      <div className="rounded-xl bg-white/80 px-3 py-2">
+                        <p className="text-[10px] text-navy/45">الفرق</p>
+                        <p className="font-bold tabular-nums">
+                          {money(Number(cash?.close?.difference || 0))}
+                        </p>
+                      </div>
+                    </div>
+                    {cash?.close?.note ? (
+                      <p className="mt-3 text-sm text-navy/65">
+                        ملاحظة: {cash.close.note}
+                      </p>
+                    ) : null}
                   </div>
-                  <div className="shrink-0 text-left">
-                    <p className="font-extrabold tabular-nums">
-                      {money(Number(c.countedAmount))}
-                    </p>
-                    <a
-                      href={daySheetHref(ymd)}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-xs font-bold text-sky-800 hover:underline"
+                  <a
+                    href={daySheetHref(cash!.businessDate, true)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn-primary w-full"
+                  >
+                    طباعة ورقة اليوم
+                  </a>
+                  {canReopen ? (
+                    <button
+                      type="button"
+                      className="btn-ghost w-full"
+                      disabled={busy === 'reopen'}
+                      onClick={() => setConfirm({ kind: 'reopen' })}
                     >
-                      طباعة
-                    </a>
+                      فتح اليوم تاني (قفل بالغلط)
+                    </button>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <ol className="space-y-2 text-[12px] text-navy/55">
+                    <li className="flex gap-2">
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-navy text-[10px] font-bold text-white">
+                        1
+                      </span>
+                      <span>حوّل فودافون لكاش وعدّ الدرج</span>
+                    </li>
+                    <li className="flex gap-2">
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-navy text-[10px] font-bold text-white">
+                        2
+                      </span>
+                      <span>سجّل العدّ الفعلي تحت</span>
+                    </li>
+                    <li className="flex gap-2">
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-navy text-[10px] font-bold text-white">
+                        3
+                      </span>
+                      <span>اقفل اليوم — الفلوس تدخل الخزنة</span>
+                    </li>
+                  </ol>
+
+                  <FieldLabel label="العدّ الفعلي (بعد تحويل فودافون)">
+                    <input
+                      className="field text-lg font-bold tabular-nums"
+                      type="number"
+                      min={0}
+                      value={counted}
+                      onChange={(e) => setCounted(e.target.value)}
+                      placeholder={String(Math.round(todayExpected) || '')}
+                    />
+                  </FieldLabel>
+
+                  <div
+                    className={`rounded-xl px-3 py-2 text-sm font-semibold ${
+                      closeDiff === 0
+                        ? 'bg-emerald-50 text-emerald-800'
+                        : closeDiff < 0
+                          ? 'bg-rose-50 text-rose-800'
+                          : 'bg-amber-50 text-amber-900'
+                    }`}
+                  >
+                    الفرق عن المفروض: {formatDiff(closeDiff)}
                   </div>
-                </li>
-                );
-              })}
-            </ul>
-          ) : (
-            <EmptyState>لا يوجد قفل يوم بعد</EmptyState>
-          )}
-        </SectionCard>
+
+                  <FieldLabel label="ملاحظة (اختياري)">
+                    <input
+                      className="field"
+                      value={closeNote}
+                      onChange={(e) => setCloseNote(e.target.value)}
+                      placeholder="سبب أي فرق"
+                    />
+                  </FieldLabel>
+
+                  <button
+                    type="button"
+                    className="btn-primary w-full"
+                    disabled={busy === 'close'}
+                    onClick={() => setConfirm({ kind: 'close' })}
+                  >
+                    قفل اليوم وتحويل للخزنة
+                  </button>
+                  <a
+                    href={daySheetHref(cash?.businessDate || cairoYmd())}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn-ghost w-full"
+                  >
+                    معاينة / طباعة الورقة
+                  </a>
+                </div>
+              )}
+            </SectionCard>
+          </div>
+
+          <SectionCard
+            title="آخر أيام اتقفلت"
+            badge={
+              cash?.closes?.length ? (
+                <span className="badge-navy">{cash.closes.length}</span>
+              ) : null
+            }
+          >
+            {cash?.closes?.length ? (
+              <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {cash.closes.map((c) => {
+                  const ymd = String(c.businessDate).slice(0, 10);
+                  return (
+                    <li
+                      key={c.id}
+                      className="flex items-center justify-between gap-3 rounded-xl border border-mist bg-white px-3 py-2.5"
+                    >
+                      <div className="min-w-0">
+                        <p className="font-semibold">{formatArDay(ymd)}</p>
+                        <p className="truncate text-[11px] text-navy/45">
+                          فودافون {money(Number(c.vodafoneCollected))} · فرق{' '}
+                          {money(Number(c.difference))}
+                          {c.closedByName ? ` · ${c.closedByName}` : ''}
+                        </p>
+                      </div>
+                      <div className="shrink-0 text-left">
+                        <p className="font-extrabold tabular-nums">
+                          {money(Number(c.countedAmount))}
+                        </p>
+                        <a
+                          href={daySheetHref(ymd)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-xs font-bold text-sky-800 hover:underline"
+                        >
+                          طباعة
+                        </a>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <EmptyState>لا يوجد قفل يوم بعد</EmptyState>
+            )}
+          </SectionCard>
+        </div>
         </>
         ) : null}
 
