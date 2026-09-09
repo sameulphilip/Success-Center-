@@ -17,7 +17,8 @@ export type ReportSection =
   | 'teachers-sessions'
   | 'expense-list'
   | 'by-category'
-  | 'streams';
+  | 'streams'
+  | 'revenue-list';
 
 export const TAB_LABELS: Record<ReportTab, string> = {
   pnl: 'أرباح ومصروفات',
@@ -40,11 +41,12 @@ export const SECTION_LABELS: Record<ReportSection, string> = {
   'expense-list': 'قائمة المصروفات',
   'by-category': 'المصروفات حسب البند',
   streams: 'مصادر الإيراد',
+  'revenue-list': 'قائمة الإيرادات',
 };
 
 /** أقسام كل تبويب — للتحكم في الطباعة */
 export const TAB_SECTIONS: Record<ReportTab, ReportSection[]> = {
-  pnl: ['summary', 'streams', 'by-category', 'expense-list'],
+  pnl: ['summary', 'streams', 'revenue-list', 'by-category', 'expense-list'],
   profit: [
     'summary',
     'by-teacher',

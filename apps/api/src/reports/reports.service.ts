@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { BookingStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { splitSessionNet } from '../ops/session-split';
 
@@ -327,7 +328,8 @@ export class ReportsService {
 
     const paid = { payStatus: 'CONFIRMED' as const };
 
-    const [sessions, onlineSales, handoutSales, rentals] = await Promise.all([
+    const [sessions, onlineSales, handoutSales, rentals, centerBookings, walletClaims] =
+      await Promise.all([
       this.prisma.classSession.findMany({
         where: {
           status: 'CLOSED',
@@ -394,7 +396,52 @@ export class ReportsService {
         include: { classroom: true },
         orderBy: { startsAt: 'desc' },
       }),
+      this.prisma.bookingSubmission.findMany({
+        where: {
+          status: BookingStatus.PAID,
+          payChannel: 'center',
+          OR: [
+            { paidAt: { gte: fromDate, lte: toDate } },
+            {
+              paidAt: null,
+              updatedAt: { gte: fromDate, lte: toDate },
+            },
+          ],
+        },
+        select: {
+          id: true,
+          totalAmount: true,
+          paidAt: true,
+          receiptNumber: true,
+          studentName: true,
+          form: { select: { title: true, gradeLabel: true } },
+        },
+      }),
+      this.prisma.onlineWalletClaim.findMany({
+        where: { createdAt: { gte: fromDate, lte: toDate } },
+        select: { id: true, amount: true, createdAt: true, note: true },
+      }),
     ]);
+
+    const ymdOf = (d?: Date | string | null) => {
+      if (!d) return '';
+      const dt = d instanceof Date ? d : new Date(d);
+      if (Number.isNaN(dt.getTime())) return '';
+      return dt.toISOString().slice(0, 10);
+    };
+
+    type RevenueLine = {
+      id: string;
+      date: string;
+      stream: string;
+      streamLabel: string;
+      label: string;
+      detail: string | null;
+      gross: number;
+      teacherShare: number;
+      centerShare: number;
+    };
+    const revenueLines: RevenueLine[] = [];
 
     type Agg = {
       key: string;
@@ -465,6 +512,23 @@ export class ReportsService {
       sessionsRefunds += refunds;
 
       const tLabel = `${s.teacher.firstName} ${s.teacher.lastName}`;
+      revenueLines.push({
+        id: `sess-${s.id}`,
+        date: ymdOf(s.closedAt || s.sessionDate),
+        stream: 'sessions',
+        streamLabel: 'حصص',
+        label: s.title || tLabel,
+        detail: [
+          tLabel,
+          s.subject?.nameAr || s.subject?.nameEn || null,
+          `${s.entries.length} طالب`,
+        ]
+          .filter(Boolean)
+          .join(' · '),
+        gross,
+        teacherShare,
+        centerShare,
+      });
       bump(byTeacher, s.teacherId, tLabel, {
         gross,
         teacherShare,
@@ -498,7 +562,21 @@ export class ReportsService {
       onlineTeacher += teacherShare;
       onlineCenter += centerShare;
       const t = sale.offer.teacher;
-      bump(byTeacher, sale.offer.teacherId, `${t.firstName} ${t.lastName}`, {
+      const tLabel = `${t.firstName} ${t.lastName}`;
+      revenueLines.push({
+        id: `on-${sale.id}`,
+        date: ymdOf(sale.confirmedAt || sale.createdAt),
+        stream: 'online',
+        streamLabel: 'أونلاين',
+        label: sale.offer.title,
+        detail: [tLabel, (sale as { receiptNumber?: string | null }).receiptNumber]
+          .filter(Boolean)
+          .join(' · '),
+        gross,
+        teacherShare,
+        centerShare,
+      });
+      bump(byTeacher, sale.offer.teacherId, tLabel, {
         gross,
         teacherShare,
         centerShare,
@@ -528,12 +606,32 @@ export class ReportsService {
       handoutGross += gross;
       handoutTeacher += teacherShare;
       handoutCenter += centerShare;
+      const tid = sale.product.teacherId;
+      const tLabel = sale.product.teacher
+        ? `${sale.product.teacher.firstName} ${sale.product.teacher.lastName}`
+        : 'السنتر (بدون مدرس)';
+      revenueLines.push({
+        id: `hn-${sale.id}`,
+        date: ymdOf(sale.confirmedAt || sale.createdAt),
+        stream: 'handouts',
+        streamLabel: 'ملازم',
+        label: sale.product.title,
+        detail: [
+          tLabel,
+          sale.qty > 1 ? `${sale.qty} نسخة` : null,
+          (sale as { receiptNumber?: string | null }).receiptNumber,
+        ]
+          .filter(Boolean)
+          .join(' · '),
+        gross,
+        teacherShare,
+        centerShare,
+      });
       bump(byStream, 'handouts', 'ملازم', {
         gross,
         teacherShare,
         centerShare,
       });
-      const tid = sale.product.teacherId;
       if (tid && sale.product.teacher) {
         const t = sale.product.teacher;
         bump(byTeacher, tid, `${t.firstName} ${t.lastName}`, {
@@ -554,6 +652,19 @@ export class ReportsService {
     for (const r of rentals) {
       const gross = Number(r.amount);
       rentalGross += gross;
+      revenueLines.push({
+        id: `rt-${r.id}`,
+        date: ymdOf(r.confirmedAt || r.startsAt),
+        stream: 'rentals',
+        streamLabel: 'قاعات',
+        label: r.classroom.name,
+        detail: [r.renterName, r.title, r.receiptNumber]
+          .filter(Boolean)
+          .join(' · '),
+        gross,
+        teacherShare: 0,
+        centerShare: gross,
+      });
       bump(byStream, 'rentals', 'تأجير قاعات', {
         gross,
         teacherShare: 0,
@@ -566,15 +677,75 @@ export class ReportsService {
       });
     }
 
+    let bookingFormsGross = 0;
+    for (const b of centerBookings) {
+      const gross = Number(b.totalAmount);
+      bookingFormsGross += gross;
+      revenueLines.push({
+        id: `bk-${b.id}`,
+        date: ymdOf(b.paidAt),
+        stream: 'bookingForms',
+        streamLabel: 'استمارات حجز',
+        label: b.form?.title || 'استمارة حجز',
+        detail: [
+          b.studentName,
+          b.form?.gradeLabel || null,
+          b.receiptNumber || null,
+        ]
+          .filter(Boolean)
+          .join(' · '),
+        gross,
+        teacherShare: 0,
+        centerShare: gross,
+      });
+      bump(byStream, 'bookingForms', 'استمارات حجز (سنتر)', {
+        gross,
+        teacherShare: 0,
+        centerShare: gross,
+      });
+    }
+
+    let walletClaimsGross = 0;
+    for (const c of walletClaims) {
+      const gross = Number(c.amount);
+      walletClaimsGross += gross;
+      revenueLines.push({
+        id: `wc-${c.id}`,
+        date: ymdOf(c.createdAt),
+        stream: 'walletClaims',
+        streamLabel: 'محفظة أونلاين',
+        label: 'تحويل من المحفظة',
+        detail: c.note || null,
+        gross,
+        teacherShare: 0,
+        centerShare: gross,
+      });
+      bump(byStream, 'walletClaims', 'محفظة أونلاين (تحويلات)', {
+        gross,
+        teacherShare: 0,
+        centerShare: gross,
+      });
+    }
+
     const sortAgg = (map: Map<string, Agg>) =>
       Array.from(map.values()).sort((a, b) => b.gross - a.gross);
 
     const totalGross =
-      sessionsGross + onlineGross + handoutGross + rentalGross;
+      sessionsGross +
+      onlineGross +
+      handoutGross +
+      rentalGross +
+      bookingFormsGross +
+      walletClaimsGross;
     const totalTeacher =
       sessionsTeacher + onlineTeacher + handoutTeacher;
     const totalCenter =
-      sessionsCenter + onlineCenter + handoutCenter + rentalGross;
+      sessionsCenter +
+      onlineCenter +
+      handoutCenter +
+      rentalGross +
+      bookingFormsGross +
+      walletClaimsGross;
 
     return {
       from: fromDate,
@@ -611,12 +782,31 @@ export class ReportsService {
             centerShare: rentalGross,
             count: rentals.length,
           },
+          bookingForms: {
+            gross: bookingFormsGross,
+            teacherShare: 0,
+            centerShare: bookingFormsGross,
+            count: centerBookings.length,
+          },
+          walletClaims: {
+            gross: walletClaimsGross,
+            teacherShare: 0,
+            centerShare: walletClaimsGross,
+            count: walletClaims.length,
+          },
         },
       },
       byTeacher: sortAgg(byTeacher),
       bySubject: sortAgg(bySubject),
       byRoom: sortAgg(byRoom),
       byStream: sortAgg(byStream),
+      revenueLines: revenueLines.sort((a, b) =>
+        a.date === b.date
+          ? b.gross - a.gross
+          : a.date < b.date
+            ? 1
+            : -1,
+      ),
       recentSessions: sessions.slice(0, 30).map((s) => ({
         id: s.id,
         title: s.title,
@@ -763,6 +953,7 @@ export class ReportsService {
           ? creatorName.get(e.createdByUserId) || null
           : null,
       })),
+      revenueLines: profit.revenueLines || [],
       profitStreams: [
         {
           key: 'sessions',
@@ -783,6 +974,16 @@ export class ReportsService {
           key: 'rentals',
           label: 'قاعات',
           ...profit.summary.streams.rentals,
+        },
+        {
+          key: 'bookingForms',
+          label: 'استمارات حجز',
+          ...profit.summary.streams.bookingForms,
+        },
+        {
+          key: 'walletClaims',
+          label: 'محفظة أونلاين',
+          ...profit.summary.streams.walletClaims,
         },
       ],
     };

@@ -310,6 +310,41 @@ export async function exportPnlExcel(data: any, from: string, to: string) {
   );
   addMetaFooter(streams, 6 + (data?.profitStreams?.length || 0), 5, from, to);
 
+  // —— قائمة الإيرادات ——
+  const revList = wb.addWorksheet('قائمة الإيرادات');
+  setColWidths(revList, [12, 14, 28, 32, 14, 14, 14]);
+  applyRtl(revList);
+  styleTitle(revList, 1, 7, 'قائمة الإيرادات التفصيلية');
+  styleSubtitle(
+    revList,
+    2,
+    7,
+    `${from} → ${to} · ${(data?.revenueLines || []).length} حركة`,
+  );
+  writeTable(
+    revList,
+    4,
+    [
+      'التاريخ',
+      'المصدر',
+      'البيان',
+      'التفاصيل',
+      'الإجمالي',
+      'حصة المدرس',
+      'حصة السنتر',
+    ],
+    (data?.revenueLines || []).map((r: any) => [
+      String(r.date || '').slice(0, 10),
+      r.streamLabel || r.stream || '',
+      r.label || '',
+      r.detail || '',
+      moneyNum(r.gross),
+      moneyNum(r.teacherShare),
+      moneyNum(r.centerShare),
+    ]),
+    [5, 6, 7],
+  );
+
   // —— حسب البند ——
   const byCat = wb.addWorksheet('مصروفات حسب البند');
   setColWidths(byCat, [28, 16, 10]);

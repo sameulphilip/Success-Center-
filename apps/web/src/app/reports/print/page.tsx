@@ -236,6 +236,34 @@ function PnlReport({
         </ReportPrintBlock>
       ) : null}
 
+      {showSection(selected, 'revenue-list') ? (
+        <ReportPrintBlock
+          title={`قائمة الإيرادات · ${(data.revenueLines || []).length}`}
+        >
+          <ReportTable
+            headers={[
+              'التاريخ',
+              'المصدر',
+              'البيان',
+              'التفاصيل',
+              'الإجمالي',
+              'المدرس',
+              'السنتر',
+            ]}
+            rows={(data.revenueLines || []).map((r: any) => [
+              String(r.date || '').slice(0, 10),
+              r.streamLabel || r.stream || '',
+              r.label || '',
+              r.detail || '—',
+              money(r.gross),
+              money(r.teacherShare),
+              money(r.centerShare),
+            ])}
+            empty="لا إيرادات في الفترة"
+          />
+        </ReportPrintBlock>
+      ) : null}
+
       {showSection(selected, 'by-category') ? (
         <ReportPrintBlock title="المصروفات حسب البند">
           <ReportTable

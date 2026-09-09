@@ -11,7 +11,7 @@ import {
   SectionCard,
 } from '@/components/ui';
 import { TablePager, usePaged } from '@/components/TablePager';
-import { api, downloadFile } from '@/lib/api';
+import { api } from '@/lib/api';
 import { AppDialog } from '@/components/AppDialog';
 import {
   reportPrintHref,
@@ -52,7 +52,6 @@ export default function ReportsPage() {
   const [bookings, setBookings] = useState<any>(null);
   const [tab, setTab] = useState<Tab>('pnl');
   const [error, setError] = useState('');
-  const [exporting, setExporting] = useState(false);
   const [excelBusy, setExcelBusy] = useState(false);
   const [payoutBusy, setPayoutBusy] = useState<string>('');
   const [notice, setNotice] = useState('');
@@ -135,36 +134,12 @@ export default function ReportsPage() {
     }
   }
 
-  async function exportPdf() {
-    setExporting(true);
+  function exportPdf() {
     setError('');
-    try {
-      const path =
-        tab === 'finance'
-          ? `/reports/finance/pdf?from=${from}&to=${to}`
-          : tab === 'teachers'
-            ? `/reports/teachers/pdf?from=${from}&to=${to}`
-            : tab === 'bookings'
-              ? `/reports/bookings/pdf?from=${from}&to=${to}`
-              : tab === 'pnl'
-                ? `/reports/pnl/pdf?from=${from}&to=${to}`
-                : `/reports/profit/pdf?from=${from}&to=${to}`;
-      const name =
-        tab === 'finance'
-          ? `finance-${from}-${to}.pdf`
-          : tab === 'teachers'
-            ? `teachers-${from}-${to}.pdf`
-            : tab === 'bookings'
-              ? `bookings-${from}-${to}.pdf`
-              : tab === 'pnl'
-                ? `pnl-${from}-${to}.pdf`
-                : `profit-${from}-${to}.pdf`;
-      await downloadFile(path, name);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'فشل تصدير PDF');
-    } finally {
-      setExporting(false);
-    }
+    const href = reportPrintHref(tab, from, to, [...TAB_SECTIONS[tab]], {
+      hideCollected: false,
+    });
+    window.open(href, '_blank', 'noopener,noreferrer');
   }
 
   async function exportExcel() {
@@ -207,6 +182,7 @@ export default function ReportsPage() {
   const pBookingPaid = usePaged(bookings?.paid || [], `bp:${from}:${to}`);
   const pExpenses = usePaged(pnl?.expenses || [], `ex:${from}:${to}`);
   const pExpCats = usePaged(pnl?.byCategory || [], `exc:${from}:${to}`);
+  const pRevenue = usePaged(pnl?.revenueLines || [], `rv:${from}:${to}`);
 
   const payMethodAr: Record<string, string> = {
     CASH: 'كاش',
@@ -257,10 +233,10 @@ export default function ReportsPage() {
             <button
               type="button"
               className="btn-accent"
-              disabled={exporting}
-              onClick={() => void exportPdf()}
+              onClick={() => exportPdf()}
+              title="يفتح ورقة الطباعة — اختر حفظ كـ PDF من نافذة الطباعة"
             >
-              {exporting ? 'جاري التصدير...' : 'تحميل PDF'}
+              حفظ PDF
             </button>
             <button
               type="button"
@@ -498,6 +474,74 @@ export default function ReportsPage() {
                   <EmptyState>لا مصروفات في الفترة</EmptyState>
                 ) : null}
               </div>
+            </SectionCard>
+          </div>
+
+          <div className="mt-4">
+            <SectionCard
+              title="قائمة الإيرادات"
+              action={
+                <button
+                  type="button"
+                  className="btn-ghost text-xs"
+                  onClick={() => openPrintPicker('pnl', ['revenue-list'])}
+                >
+                  طباعة
+                </button>
+              }
+            >
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>التاريخ</th>
+                      <th>المصدر</th>
+                      <th>البيان</th>
+                      <th>التفاصيل</th>
+                      <th>الإجمالي</th>
+                      <th>حصة المدرس</th>
+                      <th>حصة السنتر</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pRevenue.slice.map((r: any) => (
+                      <tr key={r.id}>
+                        <td className="text-xs tabular-nums">
+                          {String(r.date || '').slice(0, 10)}
+                        </td>
+                        <td className="text-xs font-semibold">
+                          {r.streamLabel}
+                        </td>
+                        <td className="font-medium">{r.label}</td>
+                        <td className="text-xs text-navy/55 max-w-[14rem] truncate">
+                          {r.detail || '—'}
+                        </td>
+                        <td className="tabular-nums font-bold">
+                          {money(r.gross)}
+                        </td>
+                        <td className="tabular-nums text-xs">
+                          {money(r.teacherShare)}
+                        </td>
+                        <td className="tabular-nums text-xs font-semibold text-emerald-800">
+                          {money(r.centerShare)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!pnl.revenueLines?.length ? (
+                  <EmptyState>لا إيرادات في الفترة</EmptyState>
+                ) : null}
+              </div>
+              <TablePager
+                page={pRevenue.page}
+                pages={pRevenue.pages}
+                total={pRevenue.total}
+                size={pRevenue.size}
+                from={pRevenue.from}
+                to={pRevenue.to}
+                onPage={pRevenue.setPage}
+              />
             </SectionCard>
           </div>
 
