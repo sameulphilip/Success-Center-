@@ -1168,6 +1168,27 @@ export class CashService {
     const carriedForward = unclosedPrevious.reduce((s, d) => s + d.expected, 0);
     const todayExpected = close ? 0 : collected.total - drawerExpenses;
     const expectedInDrawer = Math.max(0, todayExpected + carriedForward);
+    const teacherHoldCenterShare = Math.round(
+      teacherHolds.reduce((n, h) => n + Number(h.centerShare || 0), 0) * 100,
+    ) / 100;
+    const walletAvailable = Math.round(
+      Number(onlineFormWallet?.availableAmount || 0) * 100,
+    ) / 100;
+    const safeBalanceRounded = Math.round(Number(balances.safeBalance || 0) * 100) / 100;
+    const ownerNotReceived = {
+      inSafe: safeBalanceRounded,
+      inDrawer: Math.round(expectedInDrawer * 100) / 100,
+      walletAvailable,
+      teacherHoldCenterShare,
+      total:
+        Math.round(
+          (safeBalanceRounded +
+            expectedInDrawer +
+            walletAvailable +
+            teacherHoldCenterShare) *
+            100,
+        ) / 100,
+    };
     const userIds = [
       ...expenses.map((e) => e.createdByUserId),
       ...handovers.map((h) => h.createdByUserId),
@@ -1215,9 +1236,11 @@ export class CashService {
         ? undefined
         : balances.totalHandedToOwner,
       ownerExtraRevenue: isReception ? undefined : balances.ownerExtraRevenue,
+      ownerNotReceived: isReception ? undefined : ownerNotReceived,
       extraRevenueSales,
       teacherHolds,
       teacherHoldTotal: teacherHolds.reduce((n, h) => n + h.gross, 0),
+      teacherHoldCenterShare: isReception ? undefined : teacherHoldCenterShare,
       extraSettlements,
       onlineFormWallet,
       onlineFormsToday,

@@ -144,16 +144,60 @@ export class OpsService {
     if (/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
       where.sessionDate = new Date(`${ymd}T00:00:00.000Z`);
     }
-    return this.prisma.classSession.findMany({
-      where: Object.keys(where).length ? where : undefined,
-      include: {
-        teacher: true,
-        subject: true,
-        _count: { select: { entries: true } },
-      },
-      orderBy: [{ sessionDate: 'desc' }, { createdAt: 'desc' }],
-      take: ymd ? 200 : 100,
-    });
+    return this.prisma.classSession
+      .findMany({
+        where: Object.keys(where).length ? where : undefined,
+        include: {
+          teacher: true,
+          subject: true,
+          _count: { select: { entries: true } },
+          entries: {
+            select: {
+              amount: true,
+              listedFee: true,
+              discountReason: true,
+              refundedAmount: true,
+              payStatus: true,
+            },
+          },
+        },
+        orderBy: [{ sessionDate: 'desc' }, { createdAt: 'desc' }],
+        take: ymd ? 200 : 100,
+      })
+      .then((rows) =>
+        rows.map(({ entries, ...session }) => {
+          let discountCount = 0;
+          let refundCount = 0;
+          let entriesTotal = 0;
+          let entriesNet = 0;
+          for (const e of entries) {
+            const amount = Number(e.amount) || 0;
+            const refunded = Number(e.refundedAmount) || 0;
+            entriesTotal += amount;
+            entriesNet += Math.max(0, amount - refunded);
+            const listed =
+              e.listedFee != null ? Number(e.listedFee) : Number.NaN;
+            const discounted =
+              !!e.discountReason ||
+              (Number.isFinite(listed) && listed > amount + 0.001);
+            if (discounted) discountCount += 1;
+            if (
+              refunded > 0.009 ||
+              e.payStatus === SessionPayStatus.REFUNDED ||
+              e.payStatus === SessionPayStatus.PARTIALLY_REFUNDED
+            ) {
+              refundCount += 1;
+            }
+          }
+          return {
+            ...session,
+            discountCount,
+            refundCount,
+            entriesTotal: Math.round(entriesTotal * 100) / 100,
+            entriesNet: Math.round(entriesNet * 100) / 100,
+          };
+        }),
+      );
   }
 
   async getSession(id: string) {

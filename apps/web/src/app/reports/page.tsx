@@ -22,6 +22,7 @@ import {
   type ReportTab,
 } from '@/lib/report-print';
 import {
+  exportCodesHandoutsExcel,
   exportFinanceExcel,
   exportPnlExcel,
   exportProfitExcel,
@@ -50,6 +51,7 @@ export default function ReportsPage() {
   const [profit, setProfit] = useState<any>(null);
   const [pnl, setPnl] = useState<any>(null);
   const [bookings, setBookings] = useState<any>(null);
+  const [codes, setCodes] = useState<any>(null);
   const [tab, setTab] = useState<Tab>('pnl');
   const [error, setError] = useState('');
   const [excelBusy, setExcelBusy] = useState(false);
@@ -117,18 +119,20 @@ export default function ReportsPage() {
   async function load() {
     setError('');
     try {
-      const [f, t, p, b, n] = await Promise.all([
+      const [f, t, p, b, n, c] = await Promise.all([
         api<any>(`/reports/finance?from=${from}&to=${to}`),
         api<any>(`/reports/teachers?from=${from}&to=${to}`),
         api<any>(`/reports/profit?from=${from}&to=${to}`),
         api<any>(`/reports/bookings?from=${from}&to=${to}`),
         api<any>(`/reports/pnl?from=${from}&to=${to}`),
+        api<any>(`/reports/codes-handouts?from=${from}&to=${to}`),
       ]);
       setFinance(f);
       setTeachers(t);
       setProfit(p);
       setBookings(b);
       setPnl(n);
+      setCodes(c);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'فشل تحميل التقارير');
     }
@@ -155,8 +159,13 @@ export default function ReportsPage() {
       } else if (tab === 'finance') {
         if (!finance) throw new Error('حمّل التقرير أولاً');
         await exportFinanceExcel(finance, from, to);
+      } else if (tab === 'codes') {
+        if (!codes) throw new Error('حمّل التقرير أولاً');
+        await exportCodesHandoutsExcel(codes, from, to);
       } else {
-        throw new Error('Excel متاح لتبويب أرباح ومصروفات · ربحية · مالي');
+        throw new Error(
+          'Excel متاح لتبويب أرباح ومصروفات · ربحية · مالي · أكواد وملازم',
+        );
       }
       setNotice('تم تنزيل ملف Excel');
     } catch (e) {
@@ -183,6 +192,27 @@ export default function ReportsPage() {
   const pExpenses = usePaged(pnl?.expenses || [], `ex:${from}:${to}`);
   const pExpCats = usePaged(pnl?.byCategory || [], `exc:${from}:${to}`);
   const pRevenue = usePaged(pnl?.revenueLines || [], `rv:${from}:${to}`);
+  const pCodesTeachers = usePaged(codes?.byTeacher || [], `ct:${from}:${to}`);
+  const pCodesOffers = usePaged(codes?.byOffer || [], `co:${from}:${to}`);
+  const pCodesProducts = usePaged(codes?.byProduct || [], `cp:${from}:${to}`);
+  const pOnlineSales = usePaged(codes?.onlineSales || [], `os:${from}:${to}`);
+  const pHandoutSales = usePaged(codes?.handoutSales || [], `hs:${from}:${to}`);
+  const pStockOffers = usePaged(codes?.stockOffers || [], `so:${from}:${to}`);
+  const pStockHandouts = usePaged(
+    codes?.stockHandouts || [],
+    `sh:${from}:${to}`,
+  );
+  const pSafeEntries = usePaged(codes?.safeEntries || [], `se:${from}:${to}`);
+
+  function formatAt(iso?: string | null) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '—';
+    return d.toLocaleString('ar-EG', {
+      dateStyle: 'short',
+      timeStyle: 'short',
+    });
+  }
 
   const payMethodAr: Record<string, string> = {
     CASH: 'كاش',
@@ -199,7 +229,7 @@ export default function ReportsPage() {
     <AppShell>
       <PageHeader
         title="التقارير"
-        subtitle="أرباح ومصروفات · ربحية · مالي · استمارات · مدرسين"
+        subtitle="أرباح ومصروفات · ربحية · مالي · استمارات · مدرسين · أكواد وملازم"
         action={
           <div className="flex flex-wrap gap-2 items-end">
             <label className="text-xs text-navy/50">
@@ -246,13 +276,14 @@ export default function ReportsPage() {
                 (tab === 'pnl' && !pnl) ||
                 (tab === 'profit' && !profit) ||
                 (tab === 'finance' && !finance) ||
+                (tab === 'codes' && !codes) ||
                 tab === 'bookings' ||
                 tab === 'teachers'
               }
               onClick={() => void exportExcel()}
               title={
                 tab === 'bookings' || tab === 'teachers'
-                  ? 'Excel متاح لأرباح ومصروفات · ربحية · مالي'
+                  ? 'Excel متاح لأرباح ومصروفات · ربحية · مالي · أكواد وملازم'
                   : 'تحميل Excel'
               }
             >
@@ -305,6 +336,7 @@ export default function ReportsPage() {
             ['finance', 'مالي'],
             ['bookings', 'استمارات'],
             ['teachers', 'مدرسين'],
+            ['codes', 'أكواد وملازم'],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -1248,6 +1280,603 @@ export default function ReportsPage() {
           </div>
         </>
       ) : null}
+
+      {tab === 'codes' && codes ? (
+        <>
+          <div className="mb-2 flex justify-end">
+            <button
+              type="button"
+              className="btn-ghost text-xs"
+              onClick={() => openPrintPicker('codes', ['summary'])}
+            >
+              طباعة الملخص
+            </button>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <KpiCard
+              label="إجمالي الأكواد + الملازم"
+              value={money(codes.summary.totalGross)}
+              accent="gold"
+            />
+            <KpiCard
+              label="حصة المدرسين"
+              value={money(codes.summary.totalTeacher)}
+            />
+            <KpiCard
+              label="حصة السنتر"
+              value={money(codes.summary.totalCenter)}
+              accent="green"
+            />
+            <KpiCard
+              label="عدد الأكواد + الملازم"
+              value={String(codes.summary.totalCount || 0)}
+            />
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <KpiCard
+              label="أكواد"
+              value={money(codes.summary.onlineGross)}
+              hint={`${codes.summary.onlineCount} كود · سنتر ${money(codes.summary.onlineCenter)}`}
+            />
+            <KpiCard
+              label="ملازم"
+              value={money(codes.summary.handoutGross)}
+              hint={`${codes.summary.handoutCount} ملزمة · سنتر ${money(codes.summary.handoutCenter)}`}
+            />
+            <KpiCard
+              label="حصة أكواد (مدرس)"
+              value={money(codes.summary.onlineTeacher)}
+            />
+            <KpiCard
+              label="حصة ملازم (مدرس)"
+              value={money(codes.summary.handoutTeacher)}
+            />
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <KpiCard
+              label="باقي أكواد في السنتر"
+              value={String(codes.summary.onlineRemaining ?? 0)}
+              hint={`إجمالي ${codes.summary.onlineTotalAll ?? 0} · مباع ${codes.summary.onlineSoldAll ?? 0}`}
+              accent="green"
+            />
+            <KpiCard
+              label="باقي ملازم في السنتر"
+              value={String(codes.summary.handoutRemaining ?? 0)}
+              hint={`إجمالي ${codes.summary.handoutTotalAll ?? 0} · مباع ${codes.summary.handoutSoldAll ?? 0}`}
+              accent="green"
+            />
+            <KpiCard
+              label="دخل الخزنة (فترة)"
+              value={money(codes.summary.safeEnteredTotal)}
+              hint={`${codes.summary.safeEntriesCount || 0} حركة · قفل يوم + مبيعات خزنة`}
+              accent="gold"
+            />
+          </div>
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <SectionCard
+              title="المخزون — أكواد متبقية"
+              action={
+                <button
+                  type="button"
+                  className="btn-ghost text-xs"
+                  onClick={() => openPrintPicker('codes', ['stock'])}
+                >
+                  طباعة
+                </button>
+              }
+            >
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>العرض</th>
+                      <th>المدرس</th>
+                      <th>إجمالي</th>
+                      <th>مباع</th>
+                      <th>متبقي</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pStockOffers.slice.map((row: any) => (
+                      <tr key={row.id}>
+                        <td className="font-medium">
+                          {row.title}
+                          {!row.isActive ? (
+                            <span className="mr-1 text-xs text-navy/40">
+                              (موقوف)
+                            </span>
+                          ) : null}
+                        </td>
+                        <td>{row.teacherName}</td>
+                        <td className="tabular-nums">{row.total}</td>
+                        <td className="tabular-nums">{row.sold}</td>
+                        <td className="tabular-nums font-bold text-emerald-800">
+                          {row.remaining}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!codes.stockOffers?.length ? (
+                  <EmptyState>لا توجد عروض أكواد</EmptyState>
+                ) : null}
+              </div>
+              <TablePager
+                page={pStockOffers.page}
+                pages={pStockOffers.pages}
+                total={pStockOffers.total}
+                size={pStockOffers.size}
+                from={pStockOffers.from}
+                to={pStockOffers.to}
+                onPage={pStockOffers.setPage}
+              />
+            </SectionCard>
+
+            <SectionCard
+              title="المخزون — ملازم متبقية"
+              action={
+                <button
+                  type="button"
+                  className="btn-ghost text-xs"
+                  onClick={() => openPrintPicker('codes', ['stock'])}
+                >
+                  طباعة
+                </button>
+              }
+            >
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>الملزمة</th>
+                      <th>المدرس</th>
+                      <th>إجمالي</th>
+                      <th>مباع</th>
+                      <th>متبقي</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pStockHandouts.slice.map((row: any) => (
+                      <tr key={row.id}>
+                        <td className="font-medium">
+                          {row.title}
+                          {!row.isActive ? (
+                            <span className="mr-1 text-xs text-navy/40">
+                              (موقوف)
+                            </span>
+                          ) : null}
+                        </td>
+                        <td>{row.teacherName}</td>
+                        <td className="tabular-nums">{row.total}</td>
+                        <td className="tabular-nums">{row.sold}</td>
+                        <td className="tabular-nums font-bold text-emerald-800">
+                          {row.remaining}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!codes.stockHandouts?.length ? (
+                  <EmptyState>لا توجد ملازم</EmptyState>
+                ) : null}
+              </div>
+              <TablePager
+                page={pStockHandouts.page}
+                pages={pStockHandouts.pages}
+                total={pStockHandouts.total}
+                size={pStockHandouts.size}
+                from={pStockHandouts.from}
+                to={pStockHandouts.to}
+                onPage={pStockHandouts.setPage}
+              />
+            </SectionCard>
+          </div>
+
+          <div className="mt-4">
+            <SectionCard
+              title={`دخول الخزنة · ${codes.safeEntries?.length || 0}`}
+              action={
+                <button
+                  type="button"
+                  className="btn-ghost text-xs"
+                  onClick={() => openPrintPicker('codes', ['safe-entries'])}
+                >
+                  طباعة
+                </button>
+              }
+            >
+              <p className="mb-3 text-xs text-navy/55">
+                الفلوس بتدخل الخزنة أساسًا عند <strong>قفل اليوم</strong> (عدّ
+                الدرج). ولو البيع كان وجهته الخزنة مباشرة، وقت الدخول = وقت تأكيد
+                البيع.
+              </p>
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>وقت الدخول</th>
+                      <th>النوع</th>
+                      <th>البيان</th>
+                      <th>المبلغ</th>
+                      <th>يوم العمل</th>
+                      <th>الإيصال</th>
+                      <th>ملاحظة</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pSafeEntries.slice.map((row: any) => (
+                      <tr key={row.id}>
+                        <td className="text-xs tabular-nums">
+                          {formatAt(row.at)}
+                        </td>
+                        <td>{row.kindLabel}</td>
+                        <td className="font-medium">
+                          {row.title}
+                          {row.teacherName ? (
+                            <span className="block text-xs text-navy/50">
+                              {row.teacherName}
+                            </span>
+                          ) : null}
+                        </td>
+                        <td className="tabular-nums font-bold text-navy">
+                          {money(row.amount)}
+                        </td>
+                        <td className="text-xs tabular-nums">
+                          {row.businessDate || '—'}
+                        </td>
+                        <td className="text-xs">{row.receiptNumber || '—'}</td>
+                        <td className="text-xs text-navy/60">{row.note || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!codes.safeEntries?.length ? (
+                  <EmptyState>مفيش دخول خزنة في الفترة دي</EmptyState>
+                ) : null}
+              </div>
+              <TablePager
+                page={pSafeEntries.page}
+                pages={pSafeEntries.pages}
+                total={pSafeEntries.total}
+                size={pSafeEntries.size}
+                from={pSafeEntries.from}
+                to={pSafeEntries.to}
+                onPage={pSafeEntries.setPage}
+              />
+            </SectionCard>
+          </div>
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <SectionCard
+              title="حسب المدرس"
+              action={
+                <button
+                  type="button"
+                  className="btn-ghost text-xs"
+                  onClick={() => openPrintPicker('codes', ['by-teacher'])}
+                >
+                  طباعة
+                </button>
+              }
+            >
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>المدرس</th>
+                      <th>مباع أكواد</th>
+                      <th>مباع ملازم</th>
+                      <th>باقي أكواد</th>
+                      <th>باقي ملازم</th>
+                      <th>إجمالي</th>
+                      <th>المدرس</th>
+                      <th>السنتر</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pCodesTeachers.slice.map((row: any) => (
+                      <tr key={row.key}>
+                        <td className="font-medium">{row.label}</td>
+                        <td className="tabular-nums">{row.codesSold ?? 0}</td>
+                        <td className="tabular-nums">{row.handoutsSold ?? 0}</td>
+                        <td className="tabular-nums font-bold text-emerald-800">
+                          {row.codesRemaining ?? 0}
+                        </td>
+                        <td className="tabular-nums font-bold text-emerald-800">
+                          {row.handoutsRemaining ?? 0}
+                        </td>
+                        <td className="tabular-nums">{money(row.gross)}</td>
+                        <td className="tabular-nums font-bold text-navy">
+                          {money(row.teacherShare)}
+                        </td>
+                        <td className="tabular-nums">{money(row.centerShare)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!codes.byTeacher?.length ? (
+                  <EmptyState>لا توجد بيانات في الفترة</EmptyState>
+                ) : null}
+              </div>
+              <TablePager
+                page={pCodesTeachers.page}
+                pages={pCodesTeachers.pages}
+                total={pCodesTeachers.total}
+                size={pCodesTeachers.size}
+                from={pCodesTeachers.from}
+                to={pCodesTeachers.to}
+                onPage={pCodesTeachers.setPage}
+              />
+            </SectionCard>
+
+            <SectionCard
+              title="أكواد حسب العرض"
+              action={
+                <button
+                  type="button"
+                  className="btn-ghost text-xs"
+                  onClick={() => openPrintPicker('codes', ['by-offer'])}
+                >
+                  طباعة
+                </button>
+              }
+            >
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>العرض</th>
+                      <th>مباع (فترة)</th>
+                      <th>متبقي</th>
+                      <th>إجمالي</th>
+                      <th>المدرس</th>
+                      <th>السنتر</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pCodesOffers.slice.map((row: any) => (
+                      <tr key={row.key}>
+                        <td className="font-medium">{row.label}</td>
+                        <td className="tabular-nums">{row.count}</td>
+                        <td className="tabular-nums font-bold text-emerald-800">
+                          {row.remaining ?? 0}
+                        </td>
+                        <td className="tabular-nums">{money(row.gross)}</td>
+                        <td className="tabular-nums">{money(row.teacherShare)}</td>
+                        <td className="tabular-nums">{money(row.centerShare)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!codes.byOffer?.length ? (
+                  <EmptyState>لا توجد مبيعات أكواد</EmptyState>
+                ) : null}
+              </div>
+              <TablePager
+                page={pCodesOffers.page}
+                pages={pCodesOffers.pages}
+                total={pCodesOffers.total}
+                size={pCodesOffers.size}
+                from={pCodesOffers.from}
+                to={pCodesOffers.to}
+                onPage={pCodesOffers.setPage}
+              />
+            </SectionCard>
+          </div>
+
+          <div className="mt-4">
+            <SectionCard
+              title="ملازم حسب المنتج"
+              action={
+                <button
+                  type="button"
+                  className="btn-ghost text-xs"
+                  onClick={() => openPrintPicker('codes', ['by-product'])}
+                >
+                  طباعة
+                </button>
+              }
+            >
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>الملزمة</th>
+                      <th>مباع (فترة)</th>
+                      <th>متبقي</th>
+                      <th>إجمالي</th>
+                      <th>المدرس</th>
+                      <th>السنتر</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pCodesProducts.slice.map((row: any) => (
+                      <tr key={row.key}>
+                        <td className="font-medium">{row.label}</td>
+                        <td className="tabular-nums">{row.count}</td>
+                        <td className="tabular-nums font-bold text-emerald-800">
+                          {row.remaining ?? 0}
+                        </td>
+                        <td className="tabular-nums">{money(row.gross)}</td>
+                        <td className="tabular-nums">{money(row.teacherShare)}</td>
+                        <td className="tabular-nums">{money(row.centerShare)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!codes.byProduct?.length ? (
+                  <EmptyState>لا توجد مبيعات ملازم</EmptyState>
+                ) : null}
+              </div>
+              <TablePager
+                page={pCodesProducts.page}
+                pages={pCodesProducts.pages}
+                total={pCodesProducts.total}
+                size={pCodesProducts.size}
+                from={pCodesProducts.from}
+                to={pCodesProducts.to}
+                onPage={pCodesProducts.setPage}
+              />
+            </SectionCard>
+          </div>
+
+          <div className="mt-4">
+            <SectionCard
+              title={`تفاصيل الأكواد · ${codes.onlineSales?.length || 0}`}
+              action={
+                <button
+                  type="button"
+                  className="btn-ghost text-xs"
+                  onClick={() => openPrintPicker('codes', ['online-sales'])}
+                >
+                  طباعة
+                </button>
+              }
+            >
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>التاريخ</th>
+                      <th>وقت التأكيد</th>
+                      <th>المدرس</th>
+                      <th>العرض</th>
+                      <th>الكود</th>
+                      <th>الإجمالي</th>
+                      <th>المدرس</th>
+                      <th>السنتر</th>
+                      <th>الدفع</th>
+                      <th>الوجهة</th>
+                      <th>الإيصال</th>
+                      <th>الطالب</th>
+                      <th>التصفية</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pOnlineSales.slice.map((row: any) => (
+                      <tr key={row.id}>
+                        <td className="text-xs tabular-nums">{row.date}</td>
+                        <td className="text-xs tabular-nums">
+                          {formatAt(row.at)}
+                        </td>
+                        <td>{row.teacherName}</td>
+                        <td className="font-medium">{row.title}</td>
+                        <td className="text-xs tabular-nums">{row.code || '—'}</td>
+                        <td className="tabular-nums font-bold">{money(row.gross)}</td>
+                        <td className="tabular-nums">{money(row.teacherShare)}</td>
+                        <td className="tabular-nums">{money(row.centerShare)}</td>
+                        <td>{row.methodLabel}</td>
+                        <td>{row.cashToLabel}</td>
+                        <td className="text-xs">{row.receiptNumber || '—'}</td>
+                        <td className="text-xs">
+                          {row.studentName || '—'}
+                          {row.phone ? (
+                            <span className="block text-navy/50">{row.phone}</span>
+                          ) : null}
+                        </td>
+                        <td className="text-xs">
+                          {row.settled ? 'اتصفت' : 'مفتوحة'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!codes.onlineSales?.length ? (
+                  <EmptyState>لا توجد مبيعات أكواد في الفترة</EmptyState>
+                ) : null}
+              </div>
+              <TablePager
+                page={pOnlineSales.page}
+                pages={pOnlineSales.pages}
+                total={pOnlineSales.total}
+                size={pOnlineSales.size}
+                from={pOnlineSales.from}
+                to={pOnlineSales.to}
+                onPage={pOnlineSales.setPage}
+              />
+            </SectionCard>
+          </div>
+
+          <div className="mt-4">
+            <SectionCard
+              title={`تفاصيل الملازم · ${codes.handoutSales?.length || 0}`}
+              action={
+                <button
+                  type="button"
+                  className="btn-ghost text-xs"
+                  onClick={() => openPrintPicker('codes', ['handout-sales'])}
+                >
+                  طباعة
+                </button>
+              }
+            >
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>التاريخ</th>
+                      <th>وقت التأكيد</th>
+                      <th>المدرس</th>
+                      <th>الملزمة</th>
+                      <th>كمية</th>
+                      <th>الإجمالي</th>
+                      <th>المدرس</th>
+                      <th>السنتر</th>
+                      <th>الدفع</th>
+                      <th>الوجهة</th>
+                      <th>الإيصال</th>
+                      <th>الطالب</th>
+                      <th>التصفية</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pHandoutSales.slice.map((row: any) => (
+                      <tr key={row.id}>
+                        <td className="text-xs tabular-nums">{row.date}</td>
+                        <td className="text-xs tabular-nums">
+                          {formatAt(row.at)}
+                        </td>
+                        <td>{row.teacherName}</td>
+                        <td className="font-medium">{row.title}</td>
+                        <td className="tabular-nums">{row.qty}</td>
+                        <td className="tabular-nums font-bold">{money(row.gross)}</td>
+                        <td className="tabular-nums">{money(row.teacherShare)}</td>
+                        <td className="tabular-nums">{money(row.centerShare)}</td>
+                        <td>{row.methodLabel}</td>
+                        <td>{row.cashToLabel}</td>
+                        <td className="text-xs">{row.receiptNumber || '—'}</td>
+                        <td className="text-xs">
+                          {row.studentName || '—'}
+                          {row.phone ? (
+                            <span className="block text-navy/50">{row.phone}</span>
+                          ) : null}
+                        </td>
+                        <td className="text-xs">
+                          {row.settled ? 'اتصفت' : 'مفتوحة'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!codes.handoutSales?.length ? (
+                  <EmptyState>لا توجد مبيعات ملازم في الفترة</EmptyState>
+                ) : null}
+              </div>
+              <TablePager
+                page={pHandoutSales.page}
+                pages={pHandoutSales.pages}
+                total={pHandoutSales.total}
+                size={pHandoutSales.size}
+                from={pHandoutSales.from}
+                to={pHandoutSales.to}
+                onPage={pHandoutSales.setPage}
+              />
+            </SectionCard>
+          </div>
+        </>
+      ) : null}
+
       <AppDialog
         open={!!notice}
         tone="success"

@@ -3,7 +3,8 @@ export type ReportTab =
   | 'profit'
   | 'finance'
   | 'bookings'
-  | 'teachers';
+  | 'teachers'
+  | 'codes';
 
 export type ReportSection =
   | 'summary'
@@ -18,7 +19,13 @@ export type ReportSection =
   | 'expense-list'
   | 'by-category'
   | 'streams'
-  | 'revenue-list';
+  | 'revenue-list'
+  | 'online-sales'
+  | 'handout-sales'
+  | 'by-offer'
+  | 'by-product'
+  | 'stock'
+  | 'safe-entries';
 
 export const TAB_LABELS: Record<ReportTab, string> = {
   pnl: 'أرباح ومصروفات',
@@ -26,6 +33,7 @@ export const TAB_LABELS: Record<ReportTab, string> = {
   finance: 'التقرير المالي',
   bookings: 'تقرير الاستمارات',
   teachers: 'تقرير المدرسين',
+  codes: 'أكواد وملازم',
 };
 
 export const SECTION_LABELS: Record<ReportSection, string> = {
@@ -42,6 +50,12 @@ export const SECTION_LABELS: Record<ReportSection, string> = {
   'by-category': 'المصروفات حسب البند',
   streams: 'مصادر الإيراد',
   'revenue-list': 'قائمة الإيرادات',
+  'online-sales': 'تفاصيل الأكواد',
+  'handout-sales': 'تفاصيل الملازم',
+  'by-offer': 'حسب العرض',
+  'by-product': 'حسب الملزمة',
+  stock: 'المخزون المتبقي',
+  'safe-entries': 'دخول الخزنة',
 };
 
 /** أقسام كل تبويب — للتحكم في الطباعة */
@@ -57,6 +71,16 @@ export const TAB_SECTIONS: Record<ReportTab, ReportSection[]> = {
   finance: ['summary', 'payments'],
   bookings: ['summary', 'by-form', 'paid'],
   teachers: ['summary', 'teachers-sessions'],
+  codes: [
+    'summary',
+    'stock',
+    'safe-entries',
+    'by-teacher',
+    'by-offer',
+    'by-product',
+    'online-sales',
+    'handout-sales',
+  ],
 };
 
 export function reportPrintHref(
@@ -82,7 +106,8 @@ export function parseReportTab(value: string | null): ReportTab | null {
     value === 'profit' ||
     value === 'finance' ||
     value === 'bookings' ||
-    value === 'teachers'
+    value === 'teachers' ||
+    value === 'codes'
   ) {
     return value;
   }

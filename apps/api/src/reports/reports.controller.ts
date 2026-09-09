@@ -62,6 +62,11 @@ export class ReportsController {
     return this.reports.pnl(from, to);
   }
 
+  @Get('codes-handouts')
+  codesHandouts(@Query('from') from?: string, @Query('to') to?: string) {
+    return this.reports.codesHandouts(from, to);
+  }
+
   @Get('finance/pdf')
   async financePdf(
     @Res() res: Response,

@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { BookingStatus } from '@prisma/client';
+import { BookingStatus, OnlineCodeStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { splitSessionNet } from '../ops/session-split';
 
@@ -986,6 +986,563 @@ export class ReportsService {
           ...profit.summary.streams.walletClaims,
         },
       ],
+    };
+  }
+
+  /** Detailed online codes + handouts sales report for a date range. */
+  async codesHandouts(from?: string, to?: string) {
+    const fromDate = from
+      ? new Date(from)
+      : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+    const toDate = to ? new Date(to) : new Date();
+    toDate.setHours(23, 59, 59, 999);
+    const paid = { payStatus: 'CONFIRMED' as const };
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    const ymdOf = (d?: Date | string | null) => {
+      if (!d) return '';
+      const dt = d instanceof Date ? d : new Date(d);
+      if (Number.isNaN(dt.getTime())) return '';
+      return dt.toISOString().slice(0, 10);
+    };
+    const person = (t?: { firstName?: string | null; lastName?: string | null } | null) => {
+      if (!t?.firstName) return 'بدون مدرس';
+      const last = t.lastName && t.lastName !== '-' ? t.lastName : '';
+      return `${t.firstName} ${last}`.trim();
+    };
+    const cashToLabel: Record<string, string> = {
+      DRAWER: 'الدرج',
+      OWNER: 'صاحب السنتر',
+      TEACHER_HOLD: 'حساب المدرس',
+      SAFE: 'الخزنة',
+    };
+    const methodLabel: Record<string, string> = {
+      CASH: 'كاش',
+      VODAFONE_CASH: 'فودافون',
+    };
+
+    const [onlineSales, handoutSales, offers, handouts, codeGroups, handoutSoldAll, dayCloses] =
+      await Promise.all([
+      this.prisma.onlineCodeSale.findMany({
+        where: {
+          ...paid,
+          OR: [
+            { confirmedAt: { gte: fromDate, lte: toDate } },
+            {
+              confirmedAt: null,
+              createdAt: { gte: fromDate, lte: toDate },
+            },
+          ],
+        },
+        include: {
+          code: { select: { code: true } },
+          offer: {
+            select: {
+              id: true,
+              title: true,
+              teacherId: true,
+              teacher: { select: { firstName: true, lastName: true } },
+              subject: { select: { nameAr: true, nameEn: true } },
+            },
+          },
+          student: { select: { firstName: true, lastName: true, phone: true } },
+        },
+        orderBy: { confirmedAt: 'desc' },
+      }),
+      this.prisma.handoutSale.findMany({
+        where: {
+          ...paid,
+          OR: [
+            { confirmedAt: { gte: fromDate, lte: toDate } },
+            {
+              confirmedAt: null,
+              createdAt: { gte: fromDate, lte: toDate },
+            },
+          ],
+        },
+        include: {
+          product: {
+            select: {
+              id: true,
+              title: true,
+              teacherId: true,
+              teacher: { select: { firstName: true, lastName: true } },
+            },
+          },
+          student: { select: { firstName: true, lastName: true, phone: true } },
+        },
+        orderBy: { confirmedAt: 'desc' },
+      }),
+      this.prisma.onlineOffer.findMany({
+        include: {
+          teacher: { select: { firstName: true, lastName: true } },
+        },
+        orderBy: [{ title: 'asc' }],
+      }),
+      this.prisma.handoutProduct.findMany({
+        include: {
+          teacher: { select: { firstName: true, lastName: true } },
+        },
+        orderBy: [{ title: 'asc' }],
+      }),
+      this.prisma.onlineAccessCode.groupBy({
+        by: ['offerId', 'status'],
+        _count: true,
+      }),
+      this.prisma.handoutSale.groupBy({
+        by: ['productId'],
+        _sum: { qty: true },
+      }),
+      this.prisma.cashDayClose.findMany({
+        where: {
+          OR: [
+            { businessDate: { gte: fromDate, lte: toDate } },
+            { closedAt: { gte: fromDate, lte: toDate } },
+          ],
+        },
+        orderBy: { closedAt: 'desc' },
+      }),
+    ]);
+
+    type Agg = {
+      key: string;
+      label: string;
+      count: number;
+      qty: number;
+      codesSold: number;
+      handoutsSold: number;
+      gross: number;
+      teacherShare: number;
+      centerShare: number;
+    };
+    const bump = (
+      map: Map<string, Agg>,
+      key: string,
+      label: string,
+      amounts: {
+        count?: number;
+        qty?: number;
+        codesSold?: number;
+        handoutsSold?: number;
+        gross?: number;
+        teacherShare?: number;
+        centerShare?: number;
+      },
+    ) => {
+      const row = map.get(key) || {
+        key,
+        label,
+        count: 0,
+        qty: 0,
+        codesSold: 0,
+        handoutsSold: 0,
+        gross: 0,
+        teacherShare: 0,
+        centerShare: 0,
+      };
+      row.count += amounts.count || 0;
+      row.qty += amounts.qty || 0;
+      row.codesSold += amounts.codesSold || 0;
+      row.handoutsSold += amounts.handoutsSold || 0;
+      row.gross += amounts.gross || 0;
+      row.teacherShare += amounts.teacherShare || 0;
+      row.centerShare += amounts.centerShare || 0;
+      map.set(key, row);
+    };
+
+    const byTeacher = new Map<string, Agg>();
+    const byOffer = new Map<string, Agg>();
+    const byProduct = new Map<string, Agg>();
+    const byCashTo = new Map<string, Agg>();
+    const byMethod = new Map<string, Agg>();
+
+    let onlineGross = 0;
+    let onlineTeacher = 0;
+    let onlineCenter = 0;
+    let onlineHold = 0;
+    let handoutGross = 0;
+    let handoutTeacher = 0;
+    let handoutCenter = 0;
+    let handoutHold = 0;
+    let handoutQty = 0;
+
+    const onlineLines = onlineSales.map((s) => {
+      const gross = Number(s.amount);
+      const teacherShare = Number(s.teacherShare);
+      const centerShare = Number(s.centerShare);
+      onlineGross += gross;
+      onlineTeacher += teacherShare;
+      onlineCenter += centerShare;
+      if (s.cashTo === 'TEACHER_HOLD') onlineHold += 1;
+      const teacherName = person(s.offer.teacher);
+      const teacherId = s.offer.teacherId || 'none';
+      bump(byTeacher, `t-${teacherId}`, teacherName, {
+        count: 1,
+        qty: 1,
+        codesSold: 1,
+        gross,
+        teacherShare,
+        centerShare,
+      });
+      bump(byOffer, s.offer.id, s.offer.title, {
+        count: 1,
+        qty: 1,
+        codesSold: 1,
+        gross,
+        teacherShare,
+        centerShare,
+      });
+      bump(byCashTo, s.cashTo, cashToLabel[s.cashTo] || s.cashTo, {
+        count: 1,
+        qty: 1,
+        codesSold: 1,
+        gross,
+        teacherShare,
+        centerShare,
+      });
+      bump(byMethod, s.method, methodLabel[s.method] || s.method, {
+        count: 1,
+        qty: 1,
+        codesSold: 1,
+        gross,
+        teacherShare,
+        centerShare,
+      });
+      const studentName = s.student
+        ? `${s.student.firstName} ${s.student.lastName === '-' ? '' : s.student.lastName}`.trim()
+        : s.buyerName || null;
+      const atRaw = s.confirmedAt || s.createdAt;
+      return {
+        id: s.id,
+        kind: 'online' as const,
+        date: ymdOf(atRaw),
+        at: atRaw ? new Date(atRaw).toISOString() : null,
+        teacherName,
+        title: s.offer.title,
+        subject: s.offer.subject?.nameAr || s.offer.subject?.nameEn || null,
+        code: s.code?.code || null,
+        qty: 1,
+        gross: round2(gross),
+        teacherShare: round2(teacherShare),
+        centerShare: round2(centerShare),
+        method: s.method,
+        methodLabel: methodLabel[s.method] || s.method,
+        cashTo: s.cashTo,
+        cashToLabel: cashToLabel[s.cashTo] || s.cashTo,
+        receiptNumber: s.receiptNumber,
+        studentName,
+        phone: s.student?.phone || s.buyerPhone || null,
+        settled: !!s.settlementId,
+        vodafoneTxn: s.vodafoneTxn || null,
+      };
+    });
+
+    const handoutLines = handoutSales.map((s) => {
+      const gross = Number(s.amount);
+      const teacherShare = Number(s.teacherShare);
+      const centerShare = Number(s.centerShare);
+      const qty = s.qty || 1;
+      handoutGross += gross;
+      handoutTeacher += teacherShare;
+      handoutCenter += centerShare;
+      handoutQty += qty;
+      if (s.cashTo === 'TEACHER_HOLD') handoutHold += 1;
+      const teacherName = person(s.product.teacher);
+      const teacherId = s.product.teacherId || 'center-only';
+      bump(byTeacher, `t-${teacherId}`, teacherName, {
+        count: qty,
+        qty,
+        handoutsSold: qty,
+        gross,
+        teacherShare,
+        centerShare,
+      });
+      bump(byProduct, s.product.id, s.product.title, {
+        count: qty,
+        qty,
+        handoutsSold: qty,
+        gross,
+        teacherShare,
+        centerShare,
+      });
+      bump(byCashTo, s.cashTo, cashToLabel[s.cashTo] || s.cashTo, {
+        count: qty,
+        qty,
+        handoutsSold: qty,
+        gross,
+        teacherShare,
+        centerShare,
+      });
+      bump(byMethod, s.method, methodLabel[s.method] || s.method, {
+        count: qty,
+        qty,
+        handoutsSold: qty,
+        gross,
+        teacherShare,
+        centerShare,
+      });
+      const studentName = s.student
+        ? `${s.student.firstName} ${s.student.lastName === '-' ? '' : s.student.lastName}`.trim()
+        : null;
+      const atRaw = s.confirmedAt || s.createdAt;
+      return {
+        id: s.id,
+        kind: 'handout' as const,
+        date: ymdOf(atRaw),
+        at: atRaw ? new Date(atRaw).toISOString() : null,
+        teacherName,
+        title: s.product.title,
+        subject: null as string | null,
+        code: null as string | null,
+        qty,
+        gross: round2(gross),
+        teacherShare: round2(teacherShare),
+        centerShare: round2(centerShare),
+        method: s.method,
+        methodLabel: methodLabel[s.method] || s.method,
+        cashTo: s.cashTo,
+        cashToLabel: cashToLabel[s.cashTo] || s.cashTo,
+        receiptNumber: s.receiptNumber,
+        studentName,
+        phone: s.student?.phone || s.buyerPhone || null,
+        settled: !!s.settlementId,
+        vodafoneTxn: s.vodafoneTxn || null,
+      };
+    });
+
+    const sortAgg = (map: Map<string, Agg>) =>
+      [...map.values()]
+        .map((r) => ({
+          ...r,
+          gross: round2(r.gross),
+          teacherShare: round2(r.teacherShare),
+          centerShare: round2(r.centerShare),
+        }))
+        .sort((a, b) => b.gross - a.gross);
+
+    const codeByOffer = new Map<
+      string,
+      { total: number; sold: number; remaining: number }
+    >();
+    for (const row of codeGroups) {
+      const cur = codeByOffer.get(row.offerId) || {
+        total: 0,
+        sold: 0,
+        remaining: 0,
+      };
+      const n = row._count;
+      cur.total += n;
+      if (row.status === OnlineCodeStatus.SOLD) cur.sold += n;
+      if (row.status === OnlineCodeStatus.AVAILABLE) cur.remaining += n;
+      codeByOffer.set(row.offerId, cur);
+    }
+    const soldQtyByProduct = new Map(
+      handoutSoldAll.map((r) => [r.productId, Number(r._sum.qty || 0)]),
+    );
+
+    const stockOffers = offers.map((o) => {
+      const stats = codeByOffer.get(o.id) || {
+        total: 0,
+        sold: 0,
+        remaining: 0,
+      };
+      return {
+        id: o.id,
+        title: o.title,
+        teacherId: o.teacherId,
+        teacherName: person(o.teacher),
+        isActive: o.isActive,
+        price: Number(o.price),
+        total: stats.total,
+        sold: stats.sold,
+        remaining: stats.remaining,
+      };
+    }).sort((a, b) => b.remaining - a.remaining || a.title.localeCompare(b.title, 'ar'));
+
+    const stockHandouts = handouts.map((h) => {
+      const sold = soldQtyByProduct.get(h.id) || 0;
+      const remaining = h.stock;
+      return {
+        id: h.id,
+        title: h.title,
+        teacherId: h.teacherId || null,
+        teacherName: h.teacher ? person(h.teacher) : 'بدون مدرس',
+        isActive: h.isActive,
+        price: Number(h.price),
+        total: remaining + sold,
+        sold,
+        remaining,
+      };
+    }).sort((a, b) => b.remaining - a.remaining || a.title.localeCompare(b.title, 'ar'));
+
+    const remainingByTeacher = new Map<
+      string,
+      { teacherId: string; teacherName: string; codesRemaining: number; handoutsRemaining: number }
+    >();
+    for (const o of stockOffers) {
+      const row = remainingByTeacher.get(o.teacherId) || {
+        teacherId: o.teacherId,
+        teacherName: o.teacherName,
+        codesRemaining: 0,
+        handoutsRemaining: 0,
+      };
+      row.codesRemaining += o.remaining;
+      remainingByTeacher.set(o.teacherId, row);
+    }
+    for (const h of stockHandouts) {
+      const tid = h.teacherId || 'center-only';
+      const row = remainingByTeacher.get(tid) || {
+        teacherId: tid,
+        teacherName: h.teacherName,
+        codesRemaining: 0,
+        handoutsRemaining: 0,
+      };
+      row.handoutsRemaining += h.remaining;
+      remainingByTeacher.set(tid, row);
+    }
+
+    const byOfferOut = sortAgg(byOffer).map((r) => {
+      const stock = codeByOffer.get(r.key);
+      return {
+        ...r,
+        remaining: stock?.remaining ?? 0,
+        soldAll: stock?.sold ?? 0,
+        totalAll: stock?.total ?? 0,
+      };
+    });
+    const byProductOut = sortAgg(byProduct).map((r) => {
+      const stock = stockHandouts.find((h) => h.id === r.key);
+      return {
+        ...r,
+        remaining: stock?.remaining ?? 0,
+        soldAll: stock?.sold ?? 0,
+        totalAll: stock?.total ?? 0,
+      };
+    });
+    const byTeacherOut = sortAgg(byTeacher).map((r) => {
+      const tid = r.key.startsWith('t-') ? r.key.slice(2) : r.key;
+      const rem = remainingByTeacher.get(tid);
+      return {
+        ...r,
+        codesSold: r.codesSold || 0,
+        handoutsSold: r.handoutsSold || 0,
+        codesRemaining: rem?.codesRemaining ?? 0,
+        handoutsRemaining: rem?.handoutsRemaining ?? 0,
+        remaining: (rem?.codesRemaining ?? 0) + (rem?.handoutsRemaining ?? 0),
+      };
+    });
+
+    const onlineRemaining = stockOffers.reduce((n, o) => n + o.remaining, 0);
+    const onlineSoldAll = stockOffers.reduce((n, o) => n + o.sold, 0);
+    const onlineTotalAll = stockOffers.reduce((n, o) => n + o.total, 0);
+    const handoutRemaining = stockHandouts.reduce((n, h) => n + h.remaining, 0);
+    const handoutSoldAllQty = stockHandouts.reduce((n, h) => n + h.sold, 0);
+    const handoutTotalAll = stockHandouts.reduce((n, h) => n + h.total, 0);
+
+    const fmtAt = (d?: Date | string | null) => {
+      if (!d) return null;
+      const dt = d instanceof Date ? d : new Date(d);
+      if (Number.isNaN(dt.getTime())) return null;
+      return dt.toISOString();
+    };
+
+    const safeFromSales = [
+      ...onlineLines
+        .filter((r) => r.cashTo === 'SAFE')
+        .map((r) => ({
+          id: `online-${r.id}`,
+          source: 'sale' as const,
+          kind: 'online' as const,
+          kindLabel: 'كود',
+          businessDate: r.date,
+          at: r.at,
+          amount: r.centerShare,
+          gross: r.gross,
+          title: r.title,
+          teacherName: r.teacherName,
+          receiptNumber: r.receiptNumber,
+          note: 'حصة السنتر دخلت الخزنة مباشرة مع تأكيد البيع',
+        })),
+      ...handoutLines
+        .filter((r) => r.cashTo === 'SAFE')
+        .map((r) => ({
+          id: `handout-${r.id}`,
+          source: 'sale' as const,
+          kind: 'handout' as const,
+          kindLabel: 'ملزمة',
+          businessDate: r.date,
+          at: r.at,
+          amount: r.centerShare,
+          gross: r.gross,
+          title: r.title,
+          teacherName: r.teacherName,
+          receiptNumber: r.receiptNumber,
+          note: 'حصة السنتر دخلت الخزنة مباشرة مع تأكيد البيع',
+        })),
+    ];
+
+    const safeFromCloses = dayCloses.map((c) => ({
+      id: `close-${c.id}`,
+      source: 'day-close' as const,
+      kind: 'day-close' as const,
+      kindLabel: 'قفل يوم',
+      businessDate: ymdOf(c.businessDate),
+      at: fmtAt(c.closedAt),
+      amount: round2(Number(c.transferredToSafe)),
+      gross: round2(Number(c.transferredToSafe)),
+      title: `قفل يوم ${ymdOf(c.businessDate)}`,
+      teacherName: null as string | null,
+      receiptNumber: null as string | null,
+      note: c.note || 'تحويل عدّ الدرج إلى الخزنة عند قفل اليوم',
+    }));
+
+    const safeEntries = [...safeFromCloses, ...safeFromSales].sort((a, b) => {
+      const ta = a.at ? new Date(a.at).getTime() : 0;
+      const tb = b.at ? new Date(b.at).getTime() : 0;
+      return tb - ta;
+    });
+    const safeEnteredTotal = round2(
+      safeEntries.reduce((n, r) => n + Number(r.amount || 0), 0),
+    );
+
+    return {
+      from: fromDate,
+      to: toDate,
+      summary: {
+        onlineCount: onlineSales.length,
+        onlineGross: round2(onlineGross),
+        onlineTeacher: round2(onlineTeacher),
+        onlineCenter: round2(onlineCenter),
+        onlineHold,
+        handoutSalesCount: handoutSales.length,
+        handoutCount: handoutQty,
+        handoutQty,
+        handoutGross: round2(handoutGross),
+        handoutTeacher: round2(handoutTeacher),
+        handoutCenter: round2(handoutCenter),
+        handoutHold,
+        totalCount: onlineSales.length + handoutQty,
+        totalGross: round2(onlineGross + handoutGross),
+        totalTeacher: round2(onlineTeacher + handoutTeacher),
+        totalCenter: round2(onlineCenter + handoutCenter),
+        onlineRemaining,
+        onlineSoldAll,
+        onlineTotalAll,
+        handoutRemaining,
+        handoutSoldAll: handoutSoldAllQty,
+        handoutTotalAll,
+        safeEnteredTotal,
+        safeEntriesCount: safeEntries.length,
+      },
+      byTeacher: byTeacherOut,
+      byOffer: byOfferOut,
+      byProduct: byProductOut,
+      byCashTo: sortAgg(byCashTo),
+      byMethod: sortAgg(byMethod),
+      stockOffers,
+      stockHandouts,
+      safeEntries,
+      onlineSales: onlineLines,
+      handoutSales: handoutLines,
     };
   }
 }

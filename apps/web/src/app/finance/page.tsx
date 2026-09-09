@@ -125,6 +125,14 @@ type CashSnapshot = {
   safeBalance: number;
   ownerBalance?: number;
   ownerExtraRevenue?: number;
+  ownerNotReceived?: {
+    inSafe: number;
+    inDrawer: number;
+    walletAvailable: number;
+    teacherHoldCenterShare: number;
+    total: number;
+  };
+  teacherHoldCenterShare?: number;
   extraRevenueSales?: Array<{
     id: string;
     kind: 'online' | 'handout' | 'rental';
@@ -705,6 +713,10 @@ export default function FinancePage() {
           ...(canOwnerExpense || cash?.canOwnerExpense
             ? [
                 {
+                  label: 'لسه ما استلمتوش',
+                  value: money(cash?.ownerNotReceived?.total ?? 0),
+                },
+                {
                   label: 'عند صاحب السنتر',
                   value: money(cash?.ownerBalance ?? 0),
                 },
@@ -716,6 +728,63 @@ export default function FinancePage() {
           },
         ]}
       />
+
+      {(canOwnerExpense || cash?.canOwnerExpense) && cash?.ownerNotReceived ? (
+        <SectionCard
+          className="mb-4"
+          title="فلوس لسه ما استلمتهاش"
+          subtitle="دي فلوس السنتر اللي لسه ما وصلتش لحسابك — مش نفس «عند صاحب السنتر» (اللي استلمتها فعلًا)"
+        >
+          <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3">
+            <p className="text-[11px] font-bold tracking-wide text-amber-900">
+              الإجمالي اللي لسه ما استلمتوش
+            </p>
+            <p className="text-2xl font-black tabular-nums text-navy">
+              {money(cash.ownerNotReceived.total)}
+            </p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-xl border border-navy/10 bg-white p-3">
+              <p className="text-[11px] text-navy/50">في الخزنة (جاهز للتسليم)</p>
+              <p className="text-lg font-black tabular-nums text-navy">
+                {money(cash.ownerNotReceived.inSafe)}
+              </p>
+              <p className="mt-1 text-[11px] text-navy/45">
+                تستلمها من زرار تسليم لصاحب السنتر
+              </p>
+            </div>
+            <div className="rounded-xl border border-navy/10 bg-white p-3">
+              <p className="text-[11px] text-navy/50">في الدرج (لسه متقفلش)</p>
+              <p className="text-lg font-black tabular-nums text-navy">
+                {money(cash.ownerNotReceived.inDrawer)}
+              </p>
+              <p className="mt-1 text-[11px] text-navy/45">
+                بعد قفل اليوم تدخل الخزنة
+              </p>
+            </div>
+            <div className="rounded-xl border border-navy/10 bg-white p-3">
+              <p className="text-[11px] text-navy/50">محفظة أونلاين متاحة</p>
+              <p className="text-lg font-black tabular-nums text-navy">
+                {money(cash.ownerNotReceived.walletAvailable)}
+              </p>
+              <p className="mt-1 text-[11px] text-navy/45">
+                من صفحة المحفظة → تحويل لصاحب السنتر
+              </p>
+            </div>
+            <div className="rounded-xl border border-navy/10 bg-white p-3">
+              <p className="text-[11px] text-navy/50">
+                نصيب السنتر في حساب مدرس
+              </p>
+              <p className="text-lg font-black tabular-nums text-navy">
+                {money(cash.ownerNotReceived.teacherHoldCenterShare)}
+              </p>
+              <p className="mt-1 text-[11px] text-navy/45">
+                بعد تصفية المدرس يدخل الدرج ثم الخزنة
+              </p>
+            </div>
+          </div>
+        </SectionCard>
+      ) : null}
 
       <Link
         href="/bookings/ewallet"

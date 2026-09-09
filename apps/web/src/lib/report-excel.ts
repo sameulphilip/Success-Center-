@@ -507,3 +507,244 @@ export async function exportFinanceExcel(data: any, from: string, to: string) {
 
   await downloadWorkbook(wb, `Success-Finance-${from}_${to}.xlsx`);
 }
+
+export async function exportCodesHandoutsExcel(
+  data: any,
+  from: string,
+  to: string,
+) {
+  const s = data?.summary || {};
+  const wb = newBook();
+  wb.title = `أكواد وملازم ${from} → ${to}`;
+
+  const summary = wb.addWorksheet('ملخص');
+  setColWidths(summary, [32, 18]);
+  applyRtl(summary);
+  styleTitle(summary, 1, 2, 'Success Center — تقرير الأكواد والملازم');
+  styleSubtitle(summary, 2, 2, `${from} → ${to}`);
+  writeKpiBlock(summary, 4, [
+    { label: 'إجمالي الأكواد + الملازم', value: moneyNum(s.totalGross), tone: 'gold' },
+    { label: 'حصة المدرسين', value: moneyNum(s.totalTeacher) },
+    { label: 'حصة السنتر', value: moneyNum(s.totalCenter), tone: 'emerald' },
+    { label: 'عدد الأكواد', value: Number(s.onlineCount || 0) },
+    { label: 'تحصيل الأكواد', value: moneyNum(s.onlineGross), tone: 'gold' },
+    { label: 'عدد الملازم', value: Number(s.handoutCount || s.handoutQty || 0) },
+    { label: 'تحصيل الملازم', value: moneyNum(s.handoutGross), tone: 'gold' },
+    { label: 'باقي أكواد', value: Number(s.onlineRemaining || 0), tone: 'emerald' },
+    { label: 'باقي ملازم', value: Number(s.handoutRemaining || 0), tone: 'emerald' },
+    { label: 'دخل الخزنة', value: moneyNum(s.safeEnteredTotal), tone: 'gold' },
+  ]);
+
+  const stockCodes = wb.addWorksheet('مخزون أكواد');
+  setColWidths(stockCodes, [28, 20, 10, 10, 10]);
+  applyRtl(stockCodes);
+  styleTitle(stockCodes, 1, 5, 'المخزون — أكواد متبقية');
+  writeTable(
+    stockCodes,
+    3,
+    ['العرض', 'المدرس', 'إجمالي', 'مباع', 'متبقي'],
+    (data?.stockOffers || []).map((r: any) => [
+      r.title,
+      r.teacherName || '',
+      Number(r.total || 0),
+      Number(r.sold || 0),
+      Number(r.remaining || 0),
+    ]),
+    [],
+    [3, 4, 5],
+  );
+
+  const stockHandouts = wb.addWorksheet('مخزون ملازم');
+  setColWidths(stockHandouts, [28, 20, 10, 10, 10]);
+  applyRtl(stockHandouts);
+  styleTitle(stockHandouts, 1, 5, 'المخزون — ملازم متبقية');
+  writeTable(
+    stockHandouts,
+    3,
+    ['الملزمة', 'المدرس', 'إجمالي', 'مباع', 'متبقي'],
+    (data?.stockHandouts || []).map((r: any) => [
+      r.title,
+      r.teacherName || '',
+      Number(r.total || 0),
+      Number(r.sold || 0),
+      Number(r.remaining || 0),
+    ]),
+    [],
+    [3, 4, 5],
+  );
+
+  const safeSheet = wb.addWorksheet('دخول الخزنة');
+  setColWidths(safeSheet, [18, 12, 28, 14, 12, 14, 36]);
+  applyRtl(safeSheet);
+  styleTitle(safeSheet, 1, 7, 'دخول الخزنة');
+  writeTable(
+    safeSheet,
+    3,
+    ['وقت الدخول', 'النوع', 'البيان', 'المبلغ', 'يوم العمل', 'الإيصال', 'ملاحظة'],
+    (data?.safeEntries || []).map((r: any) => [
+      r.at
+        ? new Date(r.at).toLocaleString('ar-EG', {
+            dateStyle: 'short',
+            timeStyle: 'short',
+          })
+        : '',
+      r.kindLabel || '',
+      r.title || '',
+      moneyNum(r.amount),
+      r.businessDate || '',
+      r.receiptNumber || '',
+      r.note || '',
+    ]),
+    [4],
+  );
+
+  const teachers = wb.addWorksheet('حسب المدرس');
+  setColWidths(teachers, [24, 12, 12, 12, 12, 14, 14, 14]);
+  applyRtl(teachers);
+  styleTitle(teachers, 1, 8, 'حسب المدرس');
+  writeTable(
+    teachers,
+    3,
+    [
+      'المدرس',
+      'مباع أكواد',
+      'مباع ملازم',
+      'باقي أكواد',
+      'باقي ملازم',
+      'إجمالي',
+      'المدرس',
+      'السنتر',
+    ],
+    (data?.byTeacher || []).map((r: any) => [
+      r.label,
+      Number(r.codesSold || 0),
+      Number(r.handoutsSold || 0),
+      Number(r.codesRemaining || 0),
+      Number(r.handoutsRemaining || 0),
+      moneyNum(r.gross),
+      moneyNum(r.teacherShare),
+      moneyNum(r.centerShare),
+    ]),
+    [6, 7, 8],
+    [2, 3, 4, 5],
+  );
+
+  const offers = wb.addWorksheet('حسب العرض');
+  setColWidths(offers, [28, 12, 10, 14, 14, 14]);
+  applyRtl(offers);
+  styleTitle(offers, 1, 6, 'أكواد حسب العرض');
+  writeTable(
+    offers,
+    3,
+    ['العرض', 'مباع (فترة)', 'متبقي', 'إجمالي', 'المدرس', 'السنتر'],
+    (data?.byOffer || []).map((r: any) => [
+      r.label,
+      Number(r.count || 0),
+      Number(r.remaining || 0),
+      moneyNum(r.gross),
+      moneyNum(r.teacherShare),
+      moneyNum(r.centerShare),
+    ]),
+    [4, 5, 6],
+    [2, 3],
+  );
+
+  const products = wb.addWorksheet('حسب الملزمة');
+  setColWidths(products, [28, 12, 10, 14, 14, 14]);
+  applyRtl(products);
+  styleTitle(products, 1, 6, 'ملازم حسب المنتج');
+  writeTable(
+    products,
+    3,
+    ['الملزمة', 'مباع (فترة)', 'متبقي', 'إجمالي', 'المدرس', 'السنتر'],
+    (data?.byProduct || []).map((r: any) => [
+      r.label,
+      Number(r.count || 0),
+      Number(r.remaining || 0),
+      moneyNum(r.gross),
+      moneyNum(r.teacherShare),
+      moneyNum(r.centerShare),
+    ]),
+    [4, 5, 6],
+    [2, 3],
+  );
+
+  const online = wb.addWorksheet('تفاصيل الأكواد');
+  setColWidths(online, [12, 18, 22, 14, 12, 12, 12, 10, 14, 14, 18, 16]);
+  applyRtl(online);
+  styleTitle(online, 1, 12, 'تفاصيل مبيعات الأكواد');
+  writeTable(
+    online,
+    3,
+    [
+      'التاريخ',
+      'المدرس',
+      'العرض',
+      'الكود',
+      'الإجمالي',
+      'المدرس',
+      'السنتر',
+      'الدفع',
+      'الوجهة',
+      'الإيصال',
+      'الطالب',
+      'التصفية',
+    ],
+    (data?.onlineSales || []).map((r: any) => [
+      r.date || '',
+      r.teacherName || '',
+      r.title || '',
+      r.code || '',
+      moneyNum(r.gross),
+      moneyNum(r.teacherShare),
+      moneyNum(r.centerShare),
+      r.methodLabel || '',
+      r.cashToLabel || '',
+      r.receiptNumber || '',
+      r.studentName || '',
+      r.settled ? 'اتصفت' : 'مفتوحة',
+    ]),
+    [5, 6, 7],
+  );
+
+  const handouts = wb.addWorksheet('تفاصيل الملازم');
+  setColWidths(handouts, [12, 18, 22, 8, 12, 12, 12, 10, 14, 14, 18, 16]);
+  applyRtl(handouts);
+  styleTitle(handouts, 1, 12, 'تفاصيل مبيعات الملازم');
+  writeTable(
+    handouts,
+    3,
+    [
+      'التاريخ',
+      'المدرس',
+      'الملزمة',
+      'كمية',
+      'الإجمالي',
+      'المدرس',
+      'السنتر',
+      'الدفع',
+      'الوجهة',
+      'الإيصال',
+      'الطالب',
+      'التصفية',
+    ],
+    (data?.handoutSales || []).map((r: any) => [
+      r.date || '',
+      r.teacherName || '',
+      r.title || '',
+      Number(r.qty || 0),
+      moneyNum(r.gross),
+      moneyNum(r.teacherShare),
+      moneyNum(r.centerShare),
+      r.methodLabel || '',
+      r.cashToLabel || '',
+      r.receiptNumber || '',
+      r.studentName || '',
+      r.settled ? 'اتصفت' : 'مفتوحة',
+    ]),
+    [5, 6, 7],
+    [4],
+  );
+
+  await downloadWorkbook(wb, `Success-Codes-Handouts-${from}_${to}.xlsx`);
+}

@@ -110,7 +110,9 @@ function ReportsPrintContent() {
             ? `/reports/finance?from=${from}&to=${to}`
             : tab === 'bookings'
               ? `/reports/bookings?from=${from}&to=${to}`
-              : `/reports/teachers?from=${from}&to=${to}`;
+              : tab === 'codes'
+                ? `/reports/codes-handouts?from=${from}&to=${to}`
+                : `/reports/teachers?from=${from}&to=${to}`;
     api<any>(path)
       .then(setData)
       .catch((e) =>
@@ -184,6 +186,9 @@ function ReportsPrintContent() {
             selected={selected}
             hideCollected={hideCollected}
           />
+        ) : null}
+        {tab === 'codes' ? (
+          <CodesHandoutsReport data={data} selected={selected} />
         ) : null}
 
         <ReportPrintFooter docNo={number} printedAt={printedAt} />
@@ -659,6 +664,275 @@ function TeachersReport({
             </ReportPrintBlock>
           ) : null}
         </>
+      ) : null}
+    </>
+  );
+}
+
+function CodesHandoutsReport({
+  data,
+  selected,
+}: {
+  data: any;
+  selected: ReportSection[] | null;
+}) {
+  const s = data.summary || {};
+  return (
+    <>
+      {showSection(selected, 'summary') ? (
+        <ReportPrintBlock title="ملخص الأكواد والملازم">
+          <ReportStatsGrid>
+            <ReportStat
+              label="إجمالي الأكواد + الملازم"
+              value={money(s.totalGross)}
+              tone="gold"
+            />
+            <ReportStat label="حصة المدرسين" value={money(s.totalTeacher)} />
+            <ReportStat
+              label="حصة السنتر"
+              value={money(s.totalCenter)}
+              tone="emerald"
+            />
+            <ReportStat label="عدد الأكواد + الملازم" value={String(s.totalCount || 0)} />
+            <ReportStat
+              label="تحصيل الأكواد"
+              value={money(s.onlineGross)}
+              tone="gold"
+            />
+            <ReportStat label="عدد الأكواد" value={String(s.onlineCount || 0)} />
+            <ReportStat
+              label="تحصيل الملازم"
+              value={money(s.handoutGross)}
+              tone="gold"
+            />
+            <ReportStat
+              label="عدد الملازم"
+              value={String(s.handoutCount || s.handoutQty || 0)}
+            />
+            <ReportStat
+              label="باقي أكواد في السنتر"
+              value={String(s.onlineRemaining || 0)}
+              tone="emerald"
+            />
+            <ReportStat
+              label="باقي ملازم في السنتر"
+              value={String(s.handoutRemaining || 0)}
+              tone="emerald"
+            />
+            <ReportStat
+              label="دخل الخزنة"
+              value={money(s.safeEnteredTotal)}
+              tone="gold"
+            />
+          </ReportStatsGrid>
+        </ReportPrintBlock>
+      ) : null}
+
+      {showSection(selected, 'stock') ? (
+        <>
+          <ReportPrintBlock title="المخزون — أكواد متبقية">
+            <ReportTable
+              headers={['العرض', 'المدرس', 'إجمالي', 'مباع', 'متبقي']}
+              rows={(data.stockOffers || []).map((row: any) => [
+                row.title,
+                row.teacherName || '',
+                String(row.total || 0),
+                String(row.sold || 0),
+                String(row.remaining || 0),
+              ])}
+              empty="لا عروض أكواد"
+            />
+          </ReportPrintBlock>
+          <ReportPrintBlock title="المخزون — ملازم متبقية">
+            <ReportTable
+              headers={['الملزمة', 'المدرس', 'إجمالي', 'مباع', 'متبقي']}
+              rows={(data.stockHandouts || []).map((row: any) => [
+                row.title,
+                row.teacherName || '',
+                String(row.total || 0),
+                String(row.sold || 0),
+                String(row.remaining || 0),
+              ])}
+              empty="لا ملازم"
+            />
+          </ReportPrintBlock>
+        </>
+      ) : null}
+
+      {showSection(selected, 'safe-entries') ? (
+        <ReportPrintBlock title="دخول الخزنة">
+          <ReportTable
+            headers={[
+              'وقت الدخول',
+              'النوع',
+              'البيان',
+              'المبلغ',
+              'يوم العمل',
+              'الإيصال',
+              'ملاحظة',
+            ]}
+            rows={(data.safeEntries || []).map((row: any) => [
+              row.at
+                ? new Date(row.at).toLocaleString('ar-EG', {
+                    dateStyle: 'short',
+                    timeStyle: 'short',
+                  })
+                : '—',
+              row.kindLabel || '',
+              row.title || '',
+              money(row.amount),
+              row.businessDate || '—',
+              row.receiptNumber || '—',
+              row.note || '—',
+            ])}
+            empty="مفيش دخول خزنة في الفترة"
+          />
+        </ReportPrintBlock>
+      ) : null}
+
+      {showSection(selected, 'by-teacher') ? (
+        <ReportPrintBlock title="حسب المدرس">
+          <ReportTable
+            headers={[
+              'المدرس',
+              'مباع أكواد',
+              'مباع ملازم',
+              'باقي أكواد',
+              'باقي ملازم',
+              'إجمالي',
+              'المدرس',
+              'السنتر',
+            ]}
+            rows={(data.byTeacher || []).map((row: any) => [
+              row.label,
+              String(row.codesSold || 0),
+              String(row.handoutsSold || 0),
+              String(row.codesRemaining || 0),
+              String(row.handoutsRemaining || 0),
+              money(row.gross),
+              money(row.teacherShare),
+              money(row.centerShare),
+            ])}
+            empty="لا بيانات"
+          />
+        </ReportPrintBlock>
+      ) : null}
+
+      {showSection(selected, 'by-offer') ? (
+        <ReportPrintBlock title="أكواد حسب العرض">
+          <ReportTable
+            headers={['العرض', 'مباع (فترة)', 'متبقي', 'إجمالي', 'المدرس', 'السنتر']}
+            rows={(data.byOffer || []).map((row: any) => [
+              row.label,
+              String(row.count || 0),
+              String(row.remaining || 0),
+              money(row.gross),
+              money(row.teacherShare),
+              money(row.centerShare),
+            ])}
+            empty="لا مبيعات أكواد"
+          />
+        </ReportPrintBlock>
+      ) : null}
+
+      {showSection(selected, 'by-product') ? (
+        <ReportPrintBlock title="ملازم حسب المنتج">
+          <ReportTable
+            headers={[
+              'الملزمة',
+              'مباع (فترة)',
+              'متبقي',
+              'إجمالي',
+              'المدرس',
+              'السنتر',
+            ]}
+            rows={(data.byProduct || []).map((row: any) => [
+              row.label,
+              String(row.count || 0),
+              String(row.remaining || 0),
+              money(row.gross),
+              money(row.teacherShare),
+              money(row.centerShare),
+            ])}
+            empty="لا مبيعات ملازم"
+          />
+        </ReportPrintBlock>
+      ) : null}
+
+      {showSection(selected, 'online-sales') ? (
+        <ReportPrintBlock
+          title={`تفاصيل الأكواد · ${(data.onlineSales || []).length}`}
+        >
+          <ReportTable
+            headers={[
+              'التاريخ',
+              'المدرس',
+              'العرض',
+              'الكود',
+              'الإجمالي',
+              'المدرس',
+              'السنتر',
+              'الدفع',
+              'الوجهة',
+              'الإيصال',
+              'الطالب',
+              'التصفية',
+            ]}
+            rows={(data.onlineSales || []).map((row: any) => [
+              row.date || '',
+              row.teacherName || '',
+              row.title || '',
+              row.code || '—',
+              money(row.gross),
+              money(row.teacherShare),
+              money(row.centerShare),
+              row.methodLabel || '',
+              row.cashToLabel || '',
+              row.receiptNumber || '—',
+              row.studentName || '—',
+              row.settled ? 'اتصفت' : 'مفتوحة',
+            ])}
+            empty="لا مبيعات أكواد"
+          />
+        </ReportPrintBlock>
+      ) : null}
+
+      {showSection(selected, 'handout-sales') ? (
+        <ReportPrintBlock
+          title={`تفاصيل الملازم · ${(data.handoutSales || []).length}`}
+        >
+          <ReportTable
+            headers={[
+              'التاريخ',
+              'المدرس',
+              'الملزمة',
+              'كمية',
+              'الإجمالي',
+              'المدرس',
+              'السنتر',
+              'الدفع',
+              'الوجهة',
+              'الإيصال',
+              'الطالب',
+              'التصفية',
+            ]}
+            rows={(data.handoutSales || []).map((row: any) => [
+              row.date || '',
+              row.teacherName || '',
+              row.title || '',
+              String(row.qty || 0),
+              money(row.gross),
+              money(row.teacherShare),
+              money(row.centerShare),
+              row.methodLabel || '',
+              row.cashToLabel || '',
+              row.receiptNumber || '—',
+              row.studentName || '—',
+              row.settled ? 'اتصفت' : 'مفتوحة',
+            ])}
+            empty="لا مبيعات ملازم"
+          />
+        </ReportPrintBlock>
       ) : null}
     </>
   );

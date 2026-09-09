@@ -51,6 +51,10 @@ type Session = {
   teacher: Teacher;
   subject?: Subject | null;
   _count?: { entries: number };
+  discountCount?: number;
+  refundCount?: number;
+  entriesTotal?: number;
+  entriesNet?: number;
   entries?: Entry[];
 };
 
@@ -823,6 +827,26 @@ export default function OpsPage() {
   const pagedSessions = usePaged(sessions, sessionDate);
   const pagedEntries = usePaged(detail?.entries || [], detail?.id || '');
   const pagedBlocks = usePaged(blocks, blocks.length);
+  const dayDiscountCount = sessions.reduce(
+    (n, s) => n + Number(s.discountCount || 0),
+    0,
+  );
+  const dayRefundCount = sessions.reduce(
+    (n, s) => n + Number(s.refundCount || 0),
+    0,
+  );
+  const dayEntriesCount = sessions.reduce(
+    (n, s) => n + Number(s._count?.entries || 0),
+    0,
+  );
+  const dayEntriesTotal = sessions.reduce(
+    (n, s) => n + Number(s.entriesTotal || 0),
+    0,
+  );
+  const dayEntriesNet = sessions.reduce(
+    (n, s) => n + Number(s.entriesNet || 0),
+    0,
+  );
 
   return (
     <AppShell>
@@ -839,6 +863,23 @@ export default function OpsPage() {
           {
             label: sessionDate ? 'جلسات اليوم' : 'كل الجلسات',
             value: sessions.length,
+          },
+          {
+            label: sessionDate ? 'قيود اليوم' : 'القيود (المعروض)',
+            value: dayEntriesCount,
+          },
+          {
+            label: sessionDate ? 'مجموع القيد' : 'مجموع القيد (المعروض)',
+            value: `${Math.round(dayEntriesNet).toLocaleString('en-EG')} ج.م`,
+            highlight: true,
+          },
+          {
+            label: sessionDate ? 'خصم اليوم' : 'خصم (المعروض)',
+            value: dayDiscountCount,
+          },
+          {
+            label: sessionDate ? 'استرجاع اليوم' : 'استرجاع (المعروض)',
+            value: dayRefundCount,
           },
           { label: 'حظر نشط', value: blocks.length },
         ]}
@@ -1021,6 +1062,40 @@ export default function OpsPage() {
                 </button>
               )}
             </div>
+            {sessionDate ? (
+              <div className="mb-3 grid grid-cols-2 gap-2 text-[12px] sm:grid-cols-4">
+                <div className="rounded-xl bg-navy/5 px-3 py-2">
+                  <p className="text-navy/45">عدد القيود</p>
+                  <p className="font-extrabold tabular-nums text-navy">
+                    {dayEntriesCount.toLocaleString('en-EG')}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-gold/15 px-3 py-2">
+                  <p className="text-navy/45">مجموع القيد</p>
+                  <p className="font-extrabold tabular-nums text-navy">
+                    {Math.round(dayEntriesNet).toLocaleString('en-EG')} ج.م
+                  </p>
+                  {dayEntriesTotal - dayEntriesNet > 0.009 ? (
+                    <p className="text-[10px] text-navy/40">
+                      قبل الاسترجاع{' '}
+                      {Math.round(dayEntriesTotal).toLocaleString('en-EG')}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="rounded-xl bg-amber-50 px-3 py-2">
+                  <p className="text-amber-800/70">أخدوا خصم</p>
+                  <p className="font-extrabold tabular-nums text-amber-950">
+                    {dayDiscountCount.toLocaleString('en-EG')}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-rose-50 px-3 py-2">
+                  <p className="text-rose-800/70">عملوا استرجاع</p>
+                  <p className="font-extrabold tabular-nums text-rose-950">
+                    {dayRefundCount.toLocaleString('en-EG')}
+                  </p>
+                </div>
+              </div>
+            ) : null}
             <ul className="space-y-2">
               {pagedSessions.slice.map((s) => (
                 <li key={s.id}>
@@ -1091,6 +1166,46 @@ export default function OpsPage() {
                       </span>
                       <span className="opacity-50">·</span>
                       <span>{s._count?.entries ?? 0} قيد</span>
+                      {(s.entriesNet || 0) > 0.009 ||
+                      (s._count?.entries || 0) > 0 ? (
+                        <>
+                          <span className="opacity-50">·</span>
+                          <span className="font-bold tabular-nums">
+                            {Math.round(Number(s.entriesNet || 0)).toLocaleString(
+                              'en-EG',
+                            )}{' '}
+                            ج.م
+                          </span>
+                        </>
+                      ) : null}
+                      {(s.discountCount || 0) > 0 ? (
+                        <>
+                          <span className="opacity-50">·</span>
+                          <span
+                            className={`font-bold ${
+                              selectedId === s.id
+                                ? 'text-amber-200'
+                                : 'text-amber-800'
+                            }`}
+                          >
+                            خصم {s.discountCount}
+                          </span>
+                        </>
+                      ) : null}
+                      {(s.refundCount || 0) > 0 ? (
+                        <>
+                          <span className="opacity-50">·</span>
+                          <span
+                            className={`font-bold ${
+                              selectedId === s.id
+                                ? 'text-rose-200'
+                                : 'text-rose-700'
+                            }`}
+                          >
+                            استرجاع {s.refundCount}
+                          </span>
+                        </>
+                      ) : null}
                     </span>
                   </button>
                 </li>
