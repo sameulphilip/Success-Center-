@@ -1189,7 +1189,7 @@ export default function RevenuePage() {
                         ? ` (${sellOnline.qty} × ${unit.toLocaleString('en-EG')})`
                         : ''}
                       {!toOwner
-                        ? ' · على حساب المدرس (متدخلش قفل اليوم)'
+                        ? ' · نصيب السنتر في الدرج فورًا · نصيب المدرس يتصفى لاحقًا'
                         : ''}
                     </p>
                   ) : null;
@@ -1720,7 +1720,7 @@ export default function RevenuePage() {
               </div>
               {!toOwner ? (
                 <p className="text-[11px] text-navy/45">
-                  على حساب المدرس · متدخلش قفل اليوم · بعد التصفية نصيب السنتر يدخل درج اليوم
+                  نصيب السنتر يدخل الدرج فورًا مع قفل اليوم · نصيب المدرس يتصفى من حساب المدرس
                 </p>
               ) : null}
               <FieldLabel label="الدفع">

@@ -196,6 +196,8 @@ type CashSnapshot = {
     gross: number;
     teacherShare: number;
     centerShare: number;
+    centerPendingInHold?: number;
+    centerAlreadyInDrawer?: number;
   }>;
   teacherHoldTotal?: number;
   totalHandedToOwner?: number;
@@ -698,7 +700,7 @@ export default function FinancePage() {
       <PageHero
         eyebrow="CASH"
         title="الخزنة والدرج"
-        subtitle="فودافون كاش بتتحسب كاش مع قفل اليوم. قاعات الاستقبال في الدرج. أكواد وملازم الاستقبال على حساب المدرس لحد التصفية، وبعدين نصيب السنتر يدخل درج اليوم."
+        subtitle="فودافون كاش بتتحسب كاش مع قفل اليوم. قاعات الاستقبال في الدرج. أكواد وملازم الاستقبال: نصيب السنتر يدخل الدرج فورًا، ونصيب المدرس يتصفى من حساب المدرس."
         metrics={[
           {
             label: 'المفروض في الدرج',
@@ -707,7 +709,7 @@ export default function FinancePage() {
           },
           { label: 'رصيد الخزنة', value: money(cash?.safeBalance ?? 0) },
           {
-            label: 'حسابات المدرسين',
+            label: 'مستحق للمدرسين',
             value: money(cash?.teacherHoldTotal ?? 0),
           },
           ...(canOwnerExpense || cash?.canOwnerExpense
@@ -773,13 +775,13 @@ export default function FinancePage() {
             </div>
             <div className="rounded-xl border border-navy/10 bg-white p-3">
               <p className="text-[11px] text-navy/50">
-                نصيب السنتر في حساب مدرس
+                نصيب سنتر لسه في حساب قديم
               </p>
               <p className="text-lg font-black tabular-nums text-navy">
                 {money(cash.ownerNotReceived.teacherHoldCenterShare)}
               </p>
               <p className="mt-1 text-[11px] text-navy/45">
-                بعد تصفية المدرس يدخل الدرج ثم الخزنة
+                مبيعات قديمة قبل التحديث — تدخل الدرج عند تصفية المدرس
               </p>
             </div>
           </div>
@@ -846,7 +848,7 @@ export default function FinancePage() {
       <SectionCard
         className="mb-4"
         title="حسابات مدرسين مفتوحة"
-        subtitle="فلوس أكواد وملازم الاستقبال — تتصفى مع المدرس وبعدين نصيب السنتر يدخل درج اليوم مع الإيراد"
+        subtitle="المستحق هنا = نصيب المدرس فقط. نصيب السنتر من المبيعات الجديدة بيدخل الدرج من يوم البيع."
         action={
           <Link href="/finance/settlements" className="btn-secondary text-sm">
             تقرير التصفيات
@@ -873,7 +875,7 @@ export default function FinancePage() {
                   </p>
                 </div>
                 <p className="tabular-nums text-lg font-black text-navy">
-                  {money(h.gross)}
+                  {money(h.teacherShare)}
                 </p>
               </div>
               <div className="mb-3 grid grid-cols-2 gap-2 text-[12px]">
@@ -884,9 +886,19 @@ export default function FinancePage() {
                   </p>
                 </div>
                 <div className="rounded-lg bg-emerald-50 px-3 py-2">
-                  <p className="text-navy/45">يدخل درج اليوم</p>
+                  <p className="text-navy/45">
+                    {(h.centerPendingInHold || 0) > 0.009
+                      ? 'سنتر لسه هيدخل الدرج'
+                      : 'سنتر في الدرج بالفعل'}
+                  </p>
                   <p className="font-bold tabular-nums text-emerald-900">
-                    {money(h.centerShare)}
+                    {money(
+                      (h.centerPendingInHold || 0) > 0.009
+                        ? Number(h.centerPendingInHold || 0)
+                        : Number(
+                            h.centerAlreadyInDrawer || h.centerShare || 0,
+                          ),
+                    )}
                   </p>
                 </div>
               </div>
@@ -900,7 +912,7 @@ export default function FinancePage() {
                     teacherId: h.teacherId,
                     teacherName: h.teacherName,
                     teacherPaid: h.teacherShare,
-                    centerToSafe: h.centerShare,
+                    centerToSafe: h.centerPendingInHold || 0,
                   })
                 }
               >
@@ -917,8 +929,8 @@ export default function FinancePage() {
         title="مبيعات الإيرادات الإضافية"
         subtitle={
           isReception
-            ? 'القاعات في الدرج · الأكواد والملازم على حساب المدرس لحد التصفية'
-            : `الدرج ${money(extraDrawerTotal)} · حساب مدرس ${money(cash?.teacherHoldTotal ?? 0)} · صاحب السنتر ${money(extraOwnerTotal)}`
+            ? 'القاعات والأكواد والملازم: نصيب السنتر في الدرج فورًا · نصيب المدرس يتصفى من حسابه'
+            : `الدرج ${money(extraDrawerTotal)} · مستحق مدرسين ${money(cash?.teacherHoldTotal ?? 0)} · صاحب السنتر ${money(extraOwnerTotal)}`
         }
         badge={
           extraSales.length ? (
@@ -2157,7 +2169,11 @@ export default function FinancePage() {
         open={confirm?.kind === 'settle-hold'}
         tone="info"
         title={`تصفية مع ${confirm?.teacherName || 'المدرس'}`}
-        message={`هتدفع للمدرس ${money(Number(confirm?.teacherPaid || 0))} وهتحط نصيب السنتر ${money(Number(confirm?.centerToSafe || 0))} في درج اليوم مع الإيراد.`}
+        message={
+          Number(confirm?.centerToSafe || 0) > 0.009
+            ? `هتدفع للمدرس ${money(Number(confirm?.teacherPaid || 0))} وهتحط نصيب السنتر القديم ${money(Number(confirm?.centerToSafe || 0))} في درج اليوم.`
+            : `هتدفع للمدرس ${money(Number(confirm?.teacherPaid || 0))} بس. نصيب السنتر داخل الدرج بالفعل من يوم البيع.`
+        }
         confirmLabel={
           busy.startsWith('settle-') ? 'جاري التصفية...' : 'تأكيد التصفية'
         }

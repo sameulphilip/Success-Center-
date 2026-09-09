@@ -34,15 +34,13 @@ function personName(t?: { firstName?: string; lastName?: string } | null) {
   return `${t.firstName} ${last}`.trim();
 }
 
-function cashToForRole(
-  role?: string,
-  kind: 'hold' | 'drawer' = 'hold',
-) {
+function cashToForRole(role?: string) {
   if (role === RoleCode.SUPER_ADMIN || role === RoleCode.CENTER_MANAGER) {
     return ExtraRevenueCashTo.OWNER;
   }
-  if (kind === 'drawer') return ExtraRevenueCashTo.DRAWER;
-  return ExtraRevenueCashTo.TEACHER_HOLD;
+  // Reception: center share enters today's drawer immediately.
+  // Teacher share stays payable until settle (tracked via settlementId = null).
+  return ExtraRevenueCashTo.DRAWER;
 }
 
 function storedCenter(row: {
@@ -1076,7 +1074,7 @@ export class RevenueService {
         confirmedAt: isCash ? new Date() : null,
         confirmedByUserId: isCash ? userId : null,
         createdByUserId: userId,
-        cashTo: cashToForRole(role, 'drawer'),
+        cashTo: cashToForRole(role),
         notes: data.notes,
       },
       include: { classroom: true },

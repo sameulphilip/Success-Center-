@@ -155,13 +155,22 @@ export class CashService {
     const range = { gte: start, lte: end };
     const confirmed = SessionPayStatus.CONFIRMED;
 
-    /** Drawer extra sales: direct DRAWER by confirm day, or teacher-hold settled into drawer on settlement day. */
+    /** Drawer extra sales:
+     * - New policy: DRAWER + unsettled → centerShare on confirm day
+     * - Legacy settle: DRAWER tied to a settlement with centerToSafe > 0 → on settle day
+     * (Settlements with centerToSafe = 0 are teacher-only payouts; center already counted at confirm.)
+     */
     const drawerExtra = {
       payStatus: confirmed,
       cashTo: ExtraRevenueCashTo.DRAWER,
       OR: [
         { settlementId: null, confirmedAt: range },
-        { settlement: { createdAt: range } },
+        {
+          settlement: {
+            createdAt: range,
+            centerToSafe: { gt: 0 },
+          },
+        },
       ],
     };
     const drawerRental = {
@@ -573,10 +582,15 @@ export class CashService {
   }
 
   private async teacherHolds() {
+    // Unsettled teacher dues:
+    // - Legacy: cashTo=TEACHER_HOLD (center was waiting for settle)
+    // - New: cashTo=DRAWER + settlementId=null (center already in drawer; only teacherShare owed)
     const where = {
       payStatus: SessionPayStatus.CONFIRMED,
-      cashTo: ExtraRevenueCashTo.TEACHER_HOLD,
       settlementId: null,
+      cashTo: {
+        in: [ExtraRevenueCashTo.TEACHER_HOLD, ExtraRevenueCashTo.DRAWER],
+      },
     };
     const [online, handouts] = await Promise.all([
       this.prisma.onlineCodeSale.findMany({
@@ -585,6 +599,7 @@ export class CashService {
           amount: true,
           teacherShare: true,
           centerShare: true,
+          cashTo: true,
           offer: {
             select: {
               teacherId: true,
@@ -599,6 +614,7 @@ export class CashService {
           amount: true,
           teacherShare: true,
           centerShare: true,
+          cashTo: true,
           product: {
             select: {
               teacherId: true,
@@ -617,13 +633,21 @@ export class CashService {
       gross: number;
       teacherShare: number;
       centerShare: number;
+      /** Center share still NOT in drawer (legacy TEACHER_HOLD only). */
+      centerPendingInHold: number;
+      centerAlreadyInDrawer: number;
     };
     const map = new Map<string, Hold>();
     const bump = (
       teacherId: string | null,
       teacher: { firstName: string; lastName: string } | null | undefined,
       kind: 'online' | 'handout',
-      row: { amount: Prisma.Decimal | number; teacherShare: Prisma.Decimal | number; centerShare: Prisma.Decimal | number },
+      row: {
+        amount: Prisma.Decimal | number;
+        teacherShare: Prisma.Decimal | number;
+        centerShare: Prisma.Decimal | number;
+        cashTo: ExtraRevenueCashTo;
+      },
     ) => {
       const key = teacherId || 'none';
       const curr = map.get(key) || {
@@ -639,12 +663,21 @@ export class CashService {
         gross: 0,
         teacherShare: 0,
         centerShare: 0,
+        centerPendingInHold: 0,
+        centerAlreadyInDrawer: 0,
       };
       if (kind === 'online') curr.onlineCount += 1;
       else curr.handoutCount += 1;
+      const teacherPart = money(row.teacherShare);
+      const centerPart = money(row.centerShare);
       curr.gross += money(row.amount);
-      curr.teacherShare += money(row.teacherShare);
-      curr.centerShare += money(row.centerShare);
+      curr.teacherShare += teacherPart;
+      curr.centerShare += centerPart;
+      if (row.cashTo === ExtraRevenueCashTo.TEACHER_HOLD) {
+        curr.centerPendingInHold += centerPart;
+      } else {
+        curr.centerAlreadyInDrawer += centerPart;
+      }
       map.set(key, curr);
     };
 
@@ -661,8 +694,10 @@ export class CashService {
         gross: Math.round(h.gross * 100) / 100,
         teacherShare: Math.round(h.teacherShare * 100) / 100,
         centerShare: Math.round(h.centerShare * 100) / 100,
+        centerPendingInHold: Math.round(h.centerPendingInHold * 100) / 100,
+        centerAlreadyInDrawer: Math.round(h.centerAlreadyInDrawer * 100) / 100,
       }))
-      .sort((a, b) => b.gross - a.gross);
+      .sort((a, b) => b.teacherShare - a.teacherShare);
   }
 
   private async extraSettlements() {
@@ -931,16 +966,13 @@ export class CashService {
       where: { businessDate: dateOnly(today) },
       select: { id: true },
     });
-    if (closedToday) {
-      throw new BadRequestException(
-        'اليوم مقفول — افتح اليوم تاني الأول عشان نصيب السنتر يدخل الدرج مع إيراد اليوم',
-      );
-    }
 
     const holdWhere = {
       payStatus: SessionPayStatus.CONFIRMED,
-      cashTo: ExtraRevenueCashTo.TEACHER_HOLD,
       settlementId: null,
+      cashTo: {
+        in: [ExtraRevenueCashTo.TEACHER_HOLD, ExtraRevenueCashTo.DRAWER],
+      },
     };
 
     return this.prisma.$transaction(async (tx) => {
@@ -953,6 +985,7 @@ export class CashService {
                 amount: true,
                 teacherShare: true,
                 centerShare: true,
+                cashTo: true,
               },
             })
           : Promise.resolve([] as Array<{
@@ -960,6 +993,7 @@ export class CashService {
               amount: Prisma.Decimal;
               teacherShare: Prisma.Decimal;
               centerShare: Prisma.Decimal;
+              cashTo: ExtraRevenueCashTo;
             }>),
         tx.handoutSale.findMany({
           where: { ...holdWhere, product: { teacherId } },
@@ -968,6 +1002,7 @@ export class CashService {
             amount: true,
             teacherShare: true,
             centerShare: true,
+            cashTo: true,
           },
         }),
       ]);
@@ -975,25 +1010,42 @@ export class CashService {
         throw new BadRequestException('لا يوجد حساب مفتوح لهذا المدرس');
       }
 
-      const teacherPaid = [...online, ...handouts].reduce(
-        (n, s) => n + money(s.teacherShare),
-        0,
+      const all = [...online, ...handouts];
+      const legacyHold = all.filter(
+        (s) => s.cashTo === ExtraRevenueCashTo.TEACHER_HOLD,
       );
-      const centerToDrawer = [...online, ...handouts].reduce(
+      // Legacy holds still need an open day so center share can enter today's drawer.
+      if (legacyHold.length && closedToday) {
+        throw new BadRequestException(
+          'اليوم مقفول — افتح اليوم تاني الأول عشان نصيب السنتر القديم يدخل الدرج مع إيراد اليوم',
+        );
+      }
+
+      const teacherPaid = all.reduce((n, s) => n + money(s.teacherShare), 0);
+      const grossAmount = all.reduce((n, s) => n + money(s.amount), 0);
+      const legacyCenter = legacyHold.reduce(
         (n, s) => n + money(s.centerShare),
         0,
       );
-      const grossAmount = [...online, ...handouts].reduce(
-        (n, s) => n + money(s.amount),
-        0,
-      );
+
+      const legacyOnlineIds = online
+        .filter((s) => s.cashTo === ExtraRevenueCashTo.TEACHER_HOLD)
+        .map((s) => s.id);
+      const drawerOnlineIds = online
+        .filter((s) => s.cashTo === ExtraRevenueCashTo.DRAWER)
+        .map((s) => s.id);
+      const legacyHandoutIds = handouts
+        .filter((s) => s.cashTo === ExtraRevenueCashTo.TEACHER_HOLD)
+        .map((s) => s.id);
+      const drawerHandoutIds = handouts
+        .filter((s) => s.cashTo === ExtraRevenueCashTo.DRAWER)
+        .map((s) => s.id);
 
       const settlement = await tx.extraTeacherSettlement.create({
         data: {
           teacherId,
           teacherPaid: Math.round(teacherPaid * 100) / 100,
-          // Column name is historical; value is center share routed to today's drawer.
-          centerToSafe: Math.round(centerToDrawer * 100) / 100,
+          centerToSafe: Math.round(legacyCenter * 100) / 100,
           grossAmount: Math.round(grossAmount * 100) / 100,
           onlineCount: online.length,
           handoutCount: handouts.length,
@@ -1001,23 +1053,61 @@ export class CashService {
         },
       });
 
-      if (online.length) {
+      // Legacy HOLD → DRAWER on this settlement (center enters drawer via centerToSafe > 0).
+      if (legacyOnlineIds.length) {
         await tx.onlineCodeSale.updateMany({
-          where: { id: { in: online.map((s) => s.id) } },
+          where: { id: { in: legacyOnlineIds } },
           data: {
             cashTo: ExtraRevenueCashTo.DRAWER,
             settlementId: settlement.id,
           },
         });
       }
-      if (handouts.length) {
+      if (legacyHandoutIds.length) {
         await tx.handoutSale.updateMany({
-          where: { id: { in: handouts.map((s) => s.id) } },
+          where: { id: { in: legacyHandoutIds } },
           data: {
             cashTo: ExtraRevenueCashTo.DRAWER,
             settlementId: settlement.id,
           },
         });
+      }
+
+      // New DRAWER sales: center already counted on confirm day.
+      // Attach to a zero-center settlement when this settle also injects legacy center,
+      // so collectionsForDay won't double-count them on settle day.
+      const newDrawerIds = {
+        online: drawerOnlineIds,
+        handout: drawerHandoutIds,
+      };
+      if (newDrawerIds.online.length || newDrawerIds.handout.length) {
+        let newSettlementId = settlement.id;
+        if (legacyCenter > 0.009) {
+          const teacherOnly = await tx.extraTeacherSettlement.create({
+            data: {
+              teacherId,
+              teacherPaid: 0,
+              centerToSafe: 0,
+              grossAmount: 0,
+              onlineCount: newDrawerIds.online.length,
+              handoutCount: newDrawerIds.handout.length,
+              settledByUserId: userId,
+            },
+          });
+          newSettlementId = teacherOnly.id;
+        }
+        if (newDrawerIds.online.length) {
+          await tx.onlineCodeSale.updateMany({
+            where: { id: { in: newDrawerIds.online } },
+            data: { settlementId: newSettlementId },
+          });
+        }
+        if (newDrawerIds.handout.length) {
+          await tx.handoutSale.updateMany({
+            where: { id: { in: newDrawerIds.handout } },
+            data: { settlementId: newSettlementId },
+          });
+        }
       }
 
       return {
@@ -1169,7 +1259,10 @@ export class CashService {
     const todayExpected = close ? 0 : collected.total - drawerExpenses;
     const expectedInDrawer = Math.max(0, todayExpected + carriedForward);
     const teacherHoldCenterShare = Math.round(
-      teacherHolds.reduce((n, h) => n + Number(h.centerShare || 0), 0) * 100,
+      teacherHolds.reduce(
+        (n, h) => n + Number(h.centerPendingInHold || 0),
+        0,
+      ) * 100,
     ) / 100;
     const walletAvailable = Math.round(
       Number(onlineFormWallet?.availableAmount || 0) * 100,
@@ -1239,7 +1332,7 @@ export class CashService {
       ownerNotReceived: isReception ? undefined : ownerNotReceived,
       extraRevenueSales,
       teacherHolds,
-      teacherHoldTotal: teacherHolds.reduce((n, h) => n + h.gross, 0),
+      teacherHoldTotal: teacherHolds.reduce((n, h) => n + h.teacherShare, 0),
       teacherHoldCenterShare: isReception ? undefined : teacherHoldCenterShare,
       extraSettlements,
       onlineFormWallet,
@@ -1899,10 +1992,10 @@ export class CashService {
         amount: r.amount,
         serials: formatStrRange(r.codes),
         note: r.hold
-          ? 'على حساب المدرس — مش في عدّ الدرج'
+          ? 'على حساب المدرس — مش في عدّ الدرج (قديم)'
           : r.settledDrawer
-            ? 'بعد تصفية المدرس — نصيب السنتر في الدرج'
-            : undefined,
+            ? 'نصيب المدرس اتصفى · نصيب السنتر في الدرج'
+            : 'نصيب السنتر في عدّ الدرج · نصيب المدرس لسه متصفاش',
       })),
       ...[...handByProduct.entries()].map(([id, r]) => ({
         key: `hn-${id}`,
@@ -1916,10 +2009,10 @@ export class CashService {
             ? formatStrRange(r.receipts)
             : r.receipts[0] || '—',
         note: r.hold
-          ? 'على حساب المدرس — مش في عدّ الدرج'
+          ? 'على حساب المدرس — مش في عدّ الدرج (قديم)'
           : r.settledDrawer
-            ? 'بعد تصفية المدرس — نصيب السنتر في الدرج'
-            : undefined,
+            ? 'نصيب المدرس اتصفى · نصيب السنتر في الدرج'
+            : 'نصيب السنتر في عدّ الدرج · نصيب المدرس لسه متصفاش',
       })),
     ];
 
