@@ -141,6 +141,44 @@ type CashSnapshot = {
     handedToOwner: number;
     balance: number;
   };
+  safeComposition?: {
+    method: 'fifo';
+    note: string;
+    remainingDayCloses: number;
+    remainingOnline: number;
+    remainingHandouts: number;
+    total: number;
+    dayCloses: Array<{
+      id: string;
+      kindLabel: string;
+      label: string;
+      businessDate: string | null;
+      at: string;
+      original: number;
+      remaining: number;
+      detail?: string | null;
+    }>;
+    onlineSales: Array<{
+      id: string;
+      kindLabel: string;
+      label: string;
+      businessDate: string | null;
+      at: string;
+      original: number;
+      remaining: number;
+      detail?: string | null;
+    }>;
+    handoutSales: Array<{
+      id: string;
+      kindLabel: string;
+      label: string;
+      businessDate: string | null;
+      at: string;
+      original: number;
+      remaining: number;
+      detail?: string | null;
+    }>;
+  };
   safeExpenses?: Array<{
     id: string;
     amount: string | number;
@@ -2132,32 +2170,149 @@ export default function FinancePage() {
               </p>
             </div>
 
+            {cash.safeComposition ? (
+              <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50/60 p-3">
+                <p className="text-[11px] font-bold tracking-wide text-amber-900">
+                  الرصيد ده عبارة عن إيه؟
+                </p>
+                <p className="text-[11px] text-navy/55">{cash.safeComposition.note}</p>
+                <div className="flex justify-between gap-2 font-bold">
+                  <span>من قفل أيام لسه متسلمتش</span>
+                  <span className="tabular-nums text-navy">
+                    {money(cash.safeComposition.remainingDayCloses)}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-2 font-bold">
+                  <span>من أكواد (وجهة خزنة)</span>
+                  <span className="tabular-nums text-navy">
+                    {money(cash.safeComposition.remainingOnline)}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-2 font-bold">
+                  <span>من ملازم (وجهة خزنة)</span>
+                  <span className="tabular-nums text-navy">
+                    {money(cash.safeComposition.remainingHandouts)}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-2 border-t border-amber-200/80 pt-2 text-base font-black">
+                  <span>الإجمالي</span>
+                  <span className="tabular-nums">
+                    {money(cash.safeComposition.total)}
+                  </span>
+                </div>
+              </div>
+            ) : null}
+
+            {cash.safeComposition?.dayCloses?.length ? (
+              <div>
+                <p className="mb-2 text-[11px] font-bold tracking-wide text-navy/50">
+                  قفلات أيام لسه جوه الرصيد
+                </p>
+                <ul className="space-y-1.5">
+                  {cash.safeComposition.dayCloses.map((row) => (
+                    <li
+                      key={row.id}
+                      className="flex justify-between gap-2 rounded-lg border border-mist bg-white px-3 py-1.5"
+                    >
+                      <div className="min-w-0">
+                        <p className="font-semibold">{row.label}</p>
+                        <p className="truncate text-[11px] text-navy/45">
+                          أصل القفل {money(row.original)}
+                          {row.detail ? ` · ${row.detail}` : ''}
+                          {row.remaining < row.original - 0.009
+                            ? ` · اتخصم منه جزء`
+                            : ''}
+                        </p>
+                      </div>
+                      <p className="shrink-0 font-extrabold tabular-nums text-navy">
+                        {money(row.remaining)}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
+            {cash.safeComposition?.onlineSales?.length ? (
+              <div>
+                <p className="mb-2 text-[11px] font-bold tracking-wide text-navy/50">
+                  أكواد لسه جوه الرصيد
+                </p>
+                <ul className="space-y-1.5">
+                  {cash.safeComposition.onlineSales.map((row) => (
+                    <li
+                      key={row.id}
+                      className="flex justify-between gap-2 rounded-lg border border-mist bg-white px-3 py-1.5"
+                    >
+                      <div className="min-w-0">
+                        <p className="font-semibold">{row.label}</p>
+                        <p className="truncate text-[11px] text-navy/45">
+                          {row.businessDate || ''}
+                          {row.detail ? ` · ${row.detail}` : ''}
+                        </p>
+                      </div>
+                      <p className="shrink-0 font-extrabold tabular-nums text-navy">
+                        {money(row.remaining)}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
+            {cash.safeComposition?.handoutSales?.length ? (
+              <div>
+                <p className="mb-2 text-[11px] font-bold tracking-wide text-navy/50">
+                  ملازم لسه جوه الرصيد
+                </p>
+                <ul className="space-y-1.5">
+                  {cash.safeComposition.handoutSales.map((row) => (
+                    <li
+                      key={row.id}
+                      className="flex justify-between gap-2 rounded-lg border border-mist bg-white px-3 py-1.5"
+                    >
+                      <div className="min-w-0">
+                        <p className="font-semibold">{row.label}</p>
+                        <p className="truncate text-[11px] text-navy/45">
+                          {row.businessDate || ''}
+                          {row.detail ? ` · ${row.detail}` : ''}
+                        </p>
+                      </div>
+                      <p className="shrink-0 font-extrabold tabular-nums text-navy">
+                        {money(row.remaining)}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
             <div className="space-y-2 rounded-xl border border-navy/10 bg-sand/40 p-3">
               <p className="text-[11px] font-bold tracking-wide text-navy/50">
-                التقسيم
+                حركة الخزنة من أول النظام
               </p>
               <div className="flex justify-between gap-2">
-                <span>من قفل الأيام</span>
+                <span>إجمالي دخل الخزنة</span>
                 <span className="font-bold tabular-nums text-emerald-800">
-                  + {money(cash.safeBreakdown.fromDayCloses)}
+                  + {money(cash.safeBreakdown.intoSafe)}
                 </span>
               </div>
-              <div className="flex justify-between gap-2">
-                <span>أكواد قديمة → خزنة</span>
-                <span className="font-bold tabular-nums text-emerald-800">
-                  + {money(cash.safeBreakdown.fromOnlineSafe)}
-                </span>
-              </div>
-              <div className="flex justify-between gap-2">
-                <span>ملازم قديمة → خزنة</span>
-                <span className="font-bold tabular-nums text-emerald-800">
-                  + {money(cash.safeBreakdown.fromHandoutSafe)}
-                </span>
-              </div>
-              <div className="flex justify-between gap-2 border-t border-navy/10 pt-2 font-extrabold">
-                <span>إجمالي الدخل</span>
+              <div className="flex justify-between gap-2 text-[12px] text-navy/55">
+                <span>منها قفل أيام</span>
                 <span className="tabular-nums">
-                  {money(cash.safeBreakdown.intoSafe)}
+                  {money(cash.safeBreakdown.fromDayCloses)}
+                </span>
+              </div>
+              <div className="flex justify-between gap-2 text-[12px] text-navy/55">
+                <span>منها أكواد → خزنة</span>
+                <span className="tabular-nums">
+                  {money(cash.safeBreakdown.fromOnlineSafe)}
+                </span>
+              </div>
+              <div className="flex justify-between gap-2 text-[12px] text-navy/55">
+                <span>منها ملازم → خزنة</span>
+                <span className="tabular-nums">
+                  {money(cash.safeBreakdown.fromHandoutSafe)}
                 </span>
               </div>
               <div className="flex justify-between gap-2">
@@ -2178,99 +2333,6 @@ export default function FinancePage() {
                   {money(cash.safeBreakdown.balance)}
                 </span>
               </div>
-            </div>
-
-            <div>
-              <p className="mb-2 text-[11px] font-bold tracking-wide text-navy/50">
-                آخر قفلات الأيام (دخل الخزنة)
-              </p>
-              <ul className="space-y-1.5">
-                {(cash.closes || []).slice(0, 20).map((c) => {
-                  const ymd = String(c.businessDate).slice(0, 10);
-                  return (
-                    <li
-                      key={c.id}
-                      className="flex justify-between gap-2 rounded-lg border border-mist bg-white px-3 py-1.5"
-                    >
-                      <div className="min-w-0">
-                        <p className="font-semibold">قفل {formatArDay(ymd)}</p>
-                        <p className="truncate text-[11px] text-navy/45">
-                          {c.closedAt
-                            ? new Date(c.closedAt).toLocaleString('ar-EG')
-                            : ''}
-                          {c.closedByName ? ` · ${c.closedByName}` : ''}
-                        </p>
-                      </div>
-                      <p className="shrink-0 font-extrabold tabular-nums text-emerald-800">
-                        +{money(Number(c.transferredToSafe ?? c.countedAmount))}
-                      </p>
-                    </li>
-                  );
-                })}
-                {!cash.closes?.length ? (
-                  <li className="text-navy/40">لا توجد قفلات</li>
-                ) : null}
-              </ul>
-            </div>
-
-            <div>
-              <p className="mb-2 text-[11px] font-bold tracking-wide text-navy/50">
-                التسليمات (خرجت من الخزنة ليك)
-              </p>
-              <ul className="space-y-1.5">
-                {(cash.handovers || []).slice(0, 20).map((h) => (
-                  <li
-                    key={h.id}
-                    className="flex justify-between gap-2 rounded-lg border border-mist bg-white px-3 py-1.5"
-                  >
-                    <div className="min-w-0">
-                      <p className="font-semibold">تسليم</p>
-                      <p className="truncate text-[11px] text-navy/45">
-                        {new Date(h.createdAt).toLocaleString('ar-EG')}
-                        {h.createdByName ? ` · ${h.createdByName}` : ''}
-                        {h.note ? ` · ${h.note}` : ''}
-                      </p>
-                    </div>
-                    <p className="shrink-0 font-extrabold tabular-nums text-rose-700">
-                      −{money(Number(h.amount))}
-                    </p>
-                  </li>
-                ))}
-                {!cash.handovers?.length ? (
-                  <li className="text-navy/40">لا توجد تسليمات</li>
-                ) : null}
-              </ul>
-            </div>
-
-            <div>
-              <p className="mb-2 text-[11px] font-bold tracking-wide text-navy/50">
-                مصروفات من الخزنة
-              </p>
-              <ul className="space-y-1.5">
-                {(cash.safeExpenses || []).map((e) => (
-                  <li
-                    key={e.id}
-                    className="flex justify-between gap-2 rounded-lg border border-mist bg-white px-3 py-1.5"
-                  >
-                    <div className="min-w-0">
-                      <p className="font-semibold">{e.category}</p>
-                      <p className="truncate text-[11px] text-navy/45">
-                        {formatArDay(
-                          String(e.businessDate || e.createdAt).slice(0, 10),
-                        )}
-                        {e.createdByName ? ` · ${e.createdByName}` : ''}
-                        {e.note ? ` · ${e.note}` : ''}
-                      </p>
-                    </div>
-                    <p className="shrink-0 font-extrabold tabular-nums text-rose-700">
-                      −{money(Number(e.amount))}
-                    </p>
-                  </li>
-                ))}
-                {!cash.safeExpenses?.length ? (
-                  <li className="text-navy/40">لا توجد مصروفات خزنة</li>
-                ) : null}
-              </ul>
             </div>
           </div>
         ) : (

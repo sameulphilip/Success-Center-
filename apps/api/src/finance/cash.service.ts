@@ -411,6 +411,204 @@ export class CashService {
     };
   }
 
+  /**
+   * Attribute current safe balance to remaining inflows using FIFO:
+   * oldest day-closes / legacy SAFE sales are consumed first by expenses + handovers.
+   */
+  private async safeComposition() {
+    const legacySafe = {
+      payStatus: SessionPayStatus.CONFIRMED,
+      cashTo: ExtraRevenueCashTo.SAFE,
+    };
+    const [closes, onlineSafe, handoutSafe, expenses, handovers] =
+      await Promise.all([
+        this.prisma.cashDayClose.findMany({
+          orderBy: [{ closedAt: 'asc' }, { businessDate: 'asc' }],
+          select: {
+            id: true,
+            businessDate: true,
+            closedAt: true,
+            transferredToSafe: true,
+            countedAmount: true,
+          },
+        }),
+        this.prisma.onlineCodeSale.findMany({
+          where: legacySafe,
+          orderBy: [{ confirmedAt: 'asc' }, { createdAt: 'asc' }],
+          select: {
+            id: true,
+            confirmedAt: true,
+            createdAt: true,
+            centerShare: true,
+            receiptNumber: true,
+            offer: { select: { title: true } },
+          },
+        }),
+        this.prisma.handoutSale.findMany({
+          where: legacySafe,
+          orderBy: [{ confirmedAt: 'asc' }, { createdAt: 'asc' }],
+          select: {
+            id: true,
+            confirmedAt: true,
+            createdAt: true,
+            centerShare: true,
+            qty: true,
+            receiptNumber: true,
+            product: { select: { title: true } },
+          },
+        }),
+        this.prisma.cashExpense.findMany({
+          where: { paidFrom: CashExpenseFrom.SAFE },
+          orderBy: { createdAt: 'asc' },
+          select: { id: true, amount: true, createdAt: true },
+        }),
+        this.prisma.cashHandover.findMany({
+          orderBy: { createdAt: 'asc' },
+          select: { id: true, amount: true, createdAt: true },
+        }),
+      ]);
+
+    type Layer = {
+      id: string;
+      kind: 'day-close' | 'online' | 'handout';
+      kindLabel: string;
+      label: string;
+      at: Date;
+      businessDate: string | null;
+      original: number;
+      remaining: number;
+      detail?: string | null;
+    };
+
+    const layers: Layer[] = [];
+    for (const c of closes) {
+      const amount = money(c.transferredToSafe);
+      if (amount <= 0.009) continue;
+      const ymd = ymdFromDate(c.businessDate);
+      layers.push({
+        id: `close-${c.id}`,
+        kind: 'day-close',
+        kindLabel: 'قفل يوم',
+        label: `قفل يوم ${ymd}`,
+        at: c.closedAt,
+        businessDate: ymd,
+        original: amount,
+        remaining: amount,
+        detail: `عدّ ${Number(c.countedAmount).toLocaleString('en-EG')} ج.م`,
+      });
+    }
+    for (const s of onlineSafe) {
+      const amount = money(s.centerShare);
+      if (amount <= 0.009) continue;
+      const at = s.confirmedAt || s.createdAt;
+      layers.push({
+        id: `online-${s.id}`,
+        kind: 'online',
+        kindLabel: 'كود',
+        label: s.offer.title,
+        at,
+        businessDate: ymdFromDate(at),
+        original: amount,
+        remaining: amount,
+        detail: s.receiptNumber || null,
+      });
+    }
+    for (const s of handoutSafe) {
+      const amount = money(s.centerShare);
+      if (amount <= 0.009) continue;
+      const at = s.confirmedAt || s.createdAt;
+      layers.push({
+        id: `handout-${s.id}`,
+        kind: 'handout',
+        kindLabel: 'ملزمة',
+        label: s.product.title,
+        at,
+        businessDate: ymdFromDate(at),
+        original: amount,
+        remaining: amount,
+        detail: s.receiptNumber
+          ? `${s.receiptNumber}${s.qty > 1 ? ` · كمية ${s.qty}` : ''}`
+          : s.qty > 1
+            ? `كمية ${s.qty}`
+            : null,
+      });
+    }
+    layers.sort((a, b) => a.at.getTime() - b.at.getTime());
+
+    const outflows = [
+      ...expenses.map((e) => ({
+        at: e.createdAt,
+        amount: money(e.amount),
+      })),
+      ...handovers.map((h) => ({
+        at: h.createdAt,
+        amount: money(h.amount),
+      })),
+    ].sort((a, b) => a.at.getTime() - b.at.getTime());
+
+    let idx = 0;
+    for (const out of outflows) {
+      let left = out.amount;
+      while (left > 0.009 && idx < layers.length) {
+        const take = Math.min(layers[idx].remaining, left);
+        layers[idx].remaining = Math.round((layers[idx].remaining - take) * 100) / 100;
+        left = Math.round((left - take) * 100) / 100;
+        if (layers[idx].remaining <= 0.009) {
+          layers[idx].remaining = 0;
+          idx += 1;
+        }
+      }
+    }
+
+    const remainingLayers = layers
+      .filter((l) => l.remaining > 0.009)
+      .map((l) => ({
+        id: l.id,
+        kind: l.kind,
+        kindLabel: l.kindLabel,
+        label: l.label,
+        businessDate: l.businessDate,
+        at: l.at.toISOString(),
+        original: l.original,
+        remaining: l.remaining,
+        detail: l.detail || null,
+      }))
+      .reverse();
+
+    const sumKind = (kind: Layer['kind']) =>
+      Math.round(
+        remainingLayers
+          .filter((l) => l.kind === kind)
+          .reduce((n, l) => n + l.remaining, 0) * 100,
+      ) / 100;
+
+    const remainingDayCloses = sumKind('day-close');
+    const remainingOnline = sumKind('online');
+    const remainingHandouts = sumKind('handout');
+    const total =
+      Math.round(
+        (remainingDayCloses + remainingOnline + remainingHandouts) * 100,
+      ) / 100;
+
+    // Group remaining day closes for a cleaner list
+    const dayCloseRows = remainingLayers.filter((l) => l.kind === 'day-close');
+    const onlineRows = remainingLayers.filter((l) => l.kind === 'online');
+    const handoutRows = remainingLayers.filter((l) => l.kind === 'handout');
+
+    return {
+      method: 'fifo' as const,
+      note:
+        'التسليمات والمصروفات بتخصم من أقدم دخل أولاً. قفل اليوم فيه تحصيل مختلط (حصص/استمارات/نصيب سنتر من الدرج)، مش بس أكواد وملازم.',
+      remainingDayCloses,
+      remainingOnline,
+      remainingHandouts,
+      total,
+      dayCloses: dayCloseRows,
+      onlineSales: onlineRows,
+      handoutSales: handoutRows,
+    };
+  }
+
   private async extraRevenueSales(forReception: boolean) {
     const confirmed = SessionPayStatus.CONFIRMED;
     const where = forReception
@@ -1230,7 +1428,7 @@ export class CashService {
       paidFrom: CashExpenseFrom.DRAWER,
       businessDate,
     };
-    const [collected, drawerExpAgg, drawerToday, close, balances, expenses, handovers, closes, safeExpenses, unclosedPrevious, extraRevenueSales, teacherHolds, extraSettlements, onlineFormWallet, onlineFormsToday] =
+    const [collected, drawerExpAgg, drawerToday, close, balances, safeComposition, expenses, handovers, closes, safeExpenses, unclosedPrevious, extraRevenueSales, teacherHolds, extraSettlements, onlineFormWallet, onlineFormsToday] =
       await Promise.all([
         this.dayCollections(ymd),
         this.prisma.cashExpense.aggregate({
@@ -1243,6 +1441,7 @@ export class CashService {
         }),
         this.prisma.cashDayClose.findUnique({ where: { businessDate } }),
         this.balances(),
+        isReception ? Promise.resolve(null) : this.safeComposition(),
         this.prisma.cashExpense.findMany({
           where: expenseWhere,
           orderBy: [{ businessDate: 'desc' }, { createdAt: 'desc' }],
@@ -1342,6 +1541,7 @@ export class CashService {
       expectedInDrawer,
       ...balances,
       safeBreakdown: isReception ? undefined : balances.safeBreakdown,
+      safeComposition: isReception ? undefined : safeComposition || undefined,
       ownerBalance: isReception ? undefined : balances.ownerBalance,
       ownerSpent: isReception ? undefined : balances.ownerSpent,
       totalHandedToOwner: isReception
