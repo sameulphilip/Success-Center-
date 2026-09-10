@@ -132,6 +132,24 @@ type CashSnapshot = {
     teacherHoldCenterShare: number;
     total: number;
   };
+  safeBreakdown?: {
+    fromDayCloses: number;
+    fromOnlineSafe: number;
+    fromHandoutSafe: number;
+    intoSafe: number;
+    safeExpenses: number;
+    handedToOwner: number;
+    balance: number;
+  };
+  safeExpenses?: Array<{
+    id: string;
+    amount: string | number;
+    category: string;
+    note?: string | null;
+    businessDate?: string;
+    createdAt: string;
+    createdByName?: string | null;
+  }>;
   teacherHoldCenterShare?: number;
   extraRevenueSales?: Array<{
     id: string;
@@ -237,6 +255,7 @@ type CashSnapshot = {
     expectedAmount: string | number;
     difference: string | number;
     vodafoneCollected: string | number;
+    transferredToSafe?: string | number;
     closedAt: string;
     closedByName?: string | null;
   }>;
@@ -300,6 +319,7 @@ export default function FinancePage() {
   const [handAmount, setHandAmount] = useState('');
   const [handNote, setHandNote] = useState('');
   const [showExtraSales, setShowExtraSales] = useState(false);
+  const [safeDetailOpen, setSafeDetailOpen] = useState(false);
   const [tab, setTab] = useState<'receipts' | 'safe' | 'close'>(
     canReceipts ? 'receipts' : canSafe ? 'safe' : 'close',
   );
@@ -746,15 +766,19 @@ export default function FinancePage() {
             </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-xl border border-navy/10 bg-white p-3">
+            <button
+              type="button"
+              onClick={() => setSafeDetailOpen(true)}
+              className="rounded-xl border border-navy/10 bg-white p-3 text-right transition hover:border-navy/30 hover:bg-sand/40"
+            >
               <p className="text-[11px] text-navy/50">في الخزنة (جاهز للتسليم)</p>
               <p className="text-lg font-black tabular-nums text-navy">
                 {money(cash.ownerNotReceived.inSafe)}
               </p>
-              <p className="mt-1 text-[11px] text-navy/45">
-                تستلمها من زرار تسليم لصاحب السنتر
+              <p className="mt-1 text-[11px] font-semibold text-brand">
+                اضغط لعرض التفصيل والتقسيم ←
               </p>
-            </div>
+            </button>
             <div className="rounded-xl border border-navy/10 bg-white p-3">
               <p className="text-[11px] text-navy/50">في الدرج (لسه متقفلش)</p>
               <p className="text-lg font-black tabular-nums text-navy">
@@ -2088,6 +2112,171 @@ export default function FinancePage() {
       </>
       ) : null}
 
+      <AppDialog
+        open={safeDetailOpen}
+        tone="info"
+        title="تفصيل رصيد الخزنة"
+        message="الرصيد الحالي = كل اللي دخل الخزنة − المصروفات − التسليمات"
+        confirmLabel="حسناً"
+        onConfirm={() => setSafeDetailOpen(false)}
+        onClose={() => setSafeDetailOpen(false)}
+      >
+        {cash?.safeBreakdown ? (
+          <div className="mt-4 max-h-[60vh] space-y-4 overflow-auto overscroll-contain text-sm">
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 px-3 py-3">
+              <p className="text-[11px] font-bold text-emerald-900">
+                المتاح للتسليم الآن
+              </p>
+              <p className="text-2xl font-black tabular-nums text-navy">
+                {money(cash.safeBreakdown.balance)}
+              </p>
+            </div>
+
+            <div className="space-y-2 rounded-xl border border-navy/10 bg-sand/40 p-3">
+              <p className="text-[11px] font-bold tracking-wide text-navy/50">
+                التقسيم
+              </p>
+              <div className="flex justify-between gap-2">
+                <span>من قفل الأيام</span>
+                <span className="font-bold tabular-nums text-emerald-800">
+                  + {money(cash.safeBreakdown.fromDayCloses)}
+                </span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span>أكواد قديمة → خزنة</span>
+                <span className="font-bold tabular-nums text-emerald-800">
+                  + {money(cash.safeBreakdown.fromOnlineSafe)}
+                </span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span>ملازم قديمة → خزنة</span>
+                <span className="font-bold tabular-nums text-emerald-800">
+                  + {money(cash.safeBreakdown.fromHandoutSafe)}
+                </span>
+              </div>
+              <div className="flex justify-between gap-2 border-t border-navy/10 pt-2 font-extrabold">
+                <span>إجمالي الدخل</span>
+                <span className="tabular-nums">
+                  {money(cash.safeBreakdown.intoSafe)}
+                </span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span>مصروفات من الخزنة</span>
+                <span className="font-bold tabular-nums text-rose-700">
+                  − {money(cash.safeBreakdown.safeExpenses)}
+                </span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span>تسليمات لصاحب السنتر</span>
+                <span className="font-bold tabular-nums text-rose-700">
+                  − {money(cash.safeBreakdown.handedToOwner)}
+                </span>
+              </div>
+              <div className="flex justify-between gap-2 border-t border-navy/10 pt-2 text-base font-black">
+                <span>الرصيد الحالي</span>
+                <span className="tabular-nums text-navy">
+                  {money(cash.safeBreakdown.balance)}
+                </span>
+              </div>
+            </div>
+
+            <div>
+              <p className="mb-2 text-[11px] font-bold tracking-wide text-navy/50">
+                آخر قفلات الأيام (دخل الخزنة)
+              </p>
+              <ul className="space-y-1.5">
+                {(cash.closes || []).slice(0, 20).map((c) => {
+                  const ymd = String(c.businessDate).slice(0, 10);
+                  return (
+                    <li
+                      key={c.id}
+                      className="flex justify-between gap-2 rounded-lg border border-mist bg-white px-3 py-1.5"
+                    >
+                      <div className="min-w-0">
+                        <p className="font-semibold">قفل {formatArDay(ymd)}</p>
+                        <p className="truncate text-[11px] text-navy/45">
+                          {c.closedAt
+                            ? new Date(c.closedAt).toLocaleString('ar-EG')
+                            : ''}
+                          {c.closedByName ? ` · ${c.closedByName}` : ''}
+                        </p>
+                      </div>
+                      <p className="shrink-0 font-extrabold tabular-nums text-emerald-800">
+                        +{money(Number(c.transferredToSafe ?? c.countedAmount))}
+                      </p>
+                    </li>
+                  );
+                })}
+                {!cash.closes?.length ? (
+                  <li className="text-navy/40">لا توجد قفلات</li>
+                ) : null}
+              </ul>
+            </div>
+
+            <div>
+              <p className="mb-2 text-[11px] font-bold tracking-wide text-navy/50">
+                التسليمات (خرجت من الخزنة ليك)
+              </p>
+              <ul className="space-y-1.5">
+                {(cash.handovers || []).slice(0, 20).map((h) => (
+                  <li
+                    key={h.id}
+                    className="flex justify-between gap-2 rounded-lg border border-mist bg-white px-3 py-1.5"
+                  >
+                    <div className="min-w-0">
+                      <p className="font-semibold">تسليم</p>
+                      <p className="truncate text-[11px] text-navy/45">
+                        {new Date(h.createdAt).toLocaleString('ar-EG')}
+                        {h.createdByName ? ` · ${h.createdByName}` : ''}
+                        {h.note ? ` · ${h.note}` : ''}
+                      </p>
+                    </div>
+                    <p className="shrink-0 font-extrabold tabular-nums text-rose-700">
+                      −{money(Number(h.amount))}
+                    </p>
+                  </li>
+                ))}
+                {!cash.handovers?.length ? (
+                  <li className="text-navy/40">لا توجد تسليمات</li>
+                ) : null}
+              </ul>
+            </div>
+
+            <div>
+              <p className="mb-2 text-[11px] font-bold tracking-wide text-navy/50">
+                مصروفات من الخزنة
+              </p>
+              <ul className="space-y-1.5">
+                {(cash.safeExpenses || []).map((e) => (
+                  <li
+                    key={e.id}
+                    className="flex justify-between gap-2 rounded-lg border border-mist bg-white px-3 py-1.5"
+                  >
+                    <div className="min-w-0">
+                      <p className="font-semibold">{e.category}</p>
+                      <p className="truncate text-[11px] text-navy/45">
+                        {formatArDay(
+                          String(e.businessDate || e.createdAt).slice(0, 10),
+                        )}
+                        {e.createdByName ? ` · ${e.createdByName}` : ''}
+                        {e.note ? ` · ${e.note}` : ''}
+                      </p>
+                    </div>
+                    <p className="shrink-0 font-extrabold tabular-nums text-rose-700">
+                      −{money(Number(e.amount))}
+                    </p>
+                  </li>
+                ))}
+                {!cash.safeExpenses?.length ? (
+                  <li className="text-navy/40">لا توجد مصروفات خزنة</li>
+                ) : null}
+              </ul>
+            </div>
+          </div>
+        ) : (
+          <p className="mt-3 text-sm text-navy/50">جاري تحميل التفصيل…</p>
+        )}
+      </AppDialog>
       <AppDialog
         open={confirm?.kind === 'close'}
         tone="danger"

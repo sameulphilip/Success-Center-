@@ -378,10 +378,10 @@ export class CashService {
         }),
         this.prisma.onlineWalletClaim.aggregate({ _sum: { amount: true } }),
       ]);
-    const intoSafe =
-      money(closes._sum.transferredToSafe) +
-      money(onlineSafe._sum.centerShare) +
-      money(handoutSafe._sum.centerShare);
+    const fromDayCloses = money(closes._sum.transferredToSafe);
+    const fromOnlineSafe = money(onlineSafe._sum.centerShare);
+    const fromHandoutSafe = money(handoutSafe._sum.centerShare);
+    const intoSafe = fromDayCloses + fromOnlineSafe + fromHandoutSafe;
     const outSafeExp = money(safeExp._sum.amount);
     const handed = money(handovers._sum.amount);
     const ownerSpent = money(ownerExp._sum.amount);
@@ -391,13 +391,23 @@ export class CashService {
       money(handoutOwner._sum.centerShare) +
       money(rentalOwner._sum.amount) +
       walletClaimed;
+    const safeBalance = intoSafe - outSafeExp - handed;
     return {
-      safeBalance: intoSafe - outSafeExp - handed,
+      safeBalance,
       ownerBalance: handed - ownerSpent + ownerExtraRevenue,
       totalHandedToOwner: handed,
       ownerSpent,
       ownerExtraRevenue,
       onlineWalletClaimed: walletClaimed,
+      safeBreakdown: {
+        fromDayCloses,
+        fromOnlineSafe,
+        fromHandoutSafe,
+        intoSafe,
+        safeExpenses: outSafeExp,
+        handedToOwner: handed,
+        balance: safeBalance,
+      },
     };
   }
 
@@ -1220,7 +1230,7 @@ export class CashService {
       paidFrom: CashExpenseFrom.DRAWER,
       businessDate,
     };
-    const [collected, drawerExpAgg, drawerToday, close, balances, expenses, handovers, closes, unclosedPrevious, extraRevenueSales, teacherHolds, extraSettlements, onlineFormWallet, onlineFormsToday] =
+    const [collected, drawerExpAgg, drawerToday, close, balances, expenses, handovers, closes, safeExpenses, unclosedPrevious, extraRevenueSales, teacherHolds, extraSettlements, onlineFormWallet, onlineFormsToday] =
       await Promise.all([
         this.dayCollections(ymd),
         this.prisma.cashExpense.aggregate({
@@ -1240,12 +1250,19 @@ export class CashService {
         }),
         this.prisma.cashHandover.findMany({
           orderBy: { createdAt: 'desc' },
-          take: 20,
+          take: isReception ? 20 : 40,
         }),
         this.prisma.cashDayClose.findMany({
           orderBy: { businessDate: 'desc' },
-          take: 14,
+          take: isReception ? 14 : 40,
         }),
+        isReception
+          ? Promise.resolve([])
+          : this.prisma.cashExpense.findMany({
+              where: { paidFrom: CashExpenseFrom.SAFE },
+              orderBy: [{ businessDate: 'desc' }, { createdAt: 'desc' }],
+              take: 40,
+            }),
         this.unclosedPrevious(ymd),
         this.extraRevenueSales(isReception),
         this.teacherHolds(),
@@ -1284,6 +1301,7 @@ export class CashService {
     };
     const userIds = [
       ...expenses.map((e) => e.createdByUserId),
+      ...safeExpenses.map((e) => e.createdByUserId),
       ...handovers.map((h) => h.createdByUserId),
       ...closes.map((c) => c.closedByUserId),
       close?.closedByUserId,
@@ -1323,6 +1341,7 @@ export class CashService {
       })),
       expectedInDrawer,
       ...balances,
+      safeBreakdown: isReception ? undefined : balances.safeBreakdown,
       ownerBalance: isReception ? undefined : balances.ownerBalance,
       ownerSpent: isReception ? undefined : balances.ownerSpent,
       totalHandedToOwner: isReception
@@ -1346,6 +1365,14 @@ export class CashService {
           ? names.get(e.createdByUserId) || null
           : null,
       })),
+      safeExpenses: isReception
+        ? undefined
+        : safeExpenses.map((e) => ({
+            ...e,
+            createdByName: e.createdByUserId
+              ? names.get(e.createdByUserId) || null
+              : null,
+          })),
       handovers: handovers.map((h) => ({
         ...h,
         createdByName: h.createdByUserId
