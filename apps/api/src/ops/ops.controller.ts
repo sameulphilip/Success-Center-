@@ -65,8 +65,13 @@ export class OpsController {
   list(
     @Query('status') status?: ClassSessionStatus,
     @Query('date') date?: string,
+    @Query('unsettled') unsettled?: string,
   ) {
-    return this.ops.listSessions(status, date);
+    const flag =
+      unsettled === '1' ||
+      unsettled === 'true' ||
+      unsettled === 'yes';
+    return this.ops.listSessions(status, date, flag);
   }
 
   @Get('sessions/open')
@@ -124,9 +129,9 @@ export class OpsController {
       centerAmount?: number;
       notes?: string | null;
     },
-    @CurrentUser() user: { role: string },
+    @CurrentUser() user: { userId: string; role: string },
   ) {
-    return this.ops.updateOpenSession(id, body, user?.role);
+    return this.ops.updateOpenSession(id, body, user?.role, user?.userId);
   }
 
   @Post('sessions/:id/pay')
@@ -213,9 +218,9 @@ export class OpsController {
   @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
   remove(
     @Param('id') id: string,
-    @CurrentUser() user: { role: string },
+    @CurrentUser() user: { userId: string; role: string },
   ) {
-    return this.ops.deleteSession(id, user?.role);
+    return this.ops.deleteSession(id, user?.role, user?.userId);
   }
 
   @Post('entries/:id/refund')
@@ -235,9 +240,9 @@ export class OpsController {
   @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
   removeEntry(
     @Param('id') id: string,
-    @CurrentUser() user: { role: string },
+    @CurrentUser() user: { userId: string; role: string },
   ) {
-    return this.ops.deleteEntry(id, user?.role);
+    return this.ops.deleteEntry(id, user?.role, user?.userId);
   }
 
   @Get('blocks')

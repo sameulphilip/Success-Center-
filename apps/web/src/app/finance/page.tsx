@@ -121,7 +121,21 @@ type CashSnapshot = {
     collectedTotal: number;
     drawerExpenses: number;
     expected: number;
+    warnings?: {
+      openSessions: number;
+      pendingVodafone: number;
+      unsettledTeachers: number;
+      messages: string[];
+      hasWarnings: boolean;
+    };
   }>;
+  closeWarnings?: {
+    openSessions: number;
+    pendingVodafone: number;
+    unsettledTeachers: number;
+    messages: string[];
+    hasWarnings: boolean;
+  };
   safeBalance: number;
   ownerBalance?: number;
   ownerExtraRevenue?: number;
@@ -325,6 +339,31 @@ function payMethodLabel(method?: string) {
   return 'كاش';
 }
 
+function formatAuditAction(action: string) {
+  switch (action) {
+    case 'DAY_REOPENED':
+      return 'فتح يوم مقفول';
+    case 'SESSION_ENTRY_DELETED_AFTER_CLOSE':
+      return 'مسح قيد بعد قفل الجلسة';
+    case 'SESSION_UPDATED_AFTER_CLOSE':
+      return 'تعديل جلسة مقفولة';
+    case 'SESSION_DELETED_AFTER_CLOSE':
+      return 'مسح جلسة مقفولة';
+    default:
+      return action;
+  }
+}
+
+function closeWarningText(
+  warnings?: {
+    messages?: string[];
+    hasWarnings?: boolean;
+  } | null,
+) {
+  if (!warnings?.hasWarnings || !warnings.messages?.length) return '';
+  return `تحذير: ${warnings.messages.join(' · ')}`;
+}
+
 export default function FinancePage() {
   const me = getStoredUser();
   const canReceipts = hasPerm(me?.permissions, 'finance.receipts');
@@ -358,6 +397,17 @@ export default function FinancePage() {
   const [handNote, setHandNote] = useState('');
   const [showExtraSales, setShowExtraSales] = useState(false);
   const [safeDetailOpen, setSafeDetailOpen] = useState(false);
+  const [auditLogs, setAuditLogs] = useState<
+    Array<{
+      id: string;
+      action: string;
+      entityType: string;
+      entityId?: string | null;
+      details?: unknown;
+      createdAt: string;
+      userName?: string | null;
+    }>
+  >([]);
   const [tab, setTab] = useState<'receipts' | 'safe' | 'close'>(
     canReceipts ? 'receipts' : canSafe ? 'safe' : 'close',
   );
@@ -468,6 +518,13 @@ export default function FinancePage() {
             setHandAmount(String(Math.round(snap.safeBalance)));
           }
         }),
+      );
+    }
+    if (canReopen) {
+      jobs.push(
+        api<typeof auditLogs>('/finance/cash/audit-logs?limit=30').then(
+          setAuditLogs,
+        ),
       );
     }
     const results = await Promise.allSettled(jobs);
@@ -1217,6 +1274,11 @@ export default function FinancePage() {
                           </p>
                         </div>
                       </div>
+                      {d.warnings?.hasWarnings ? (
+                        <div className="mb-3 rounded-xl border border-rose-200 bg-rose-50 px-2.5 py-2 text-[11px] font-semibold text-rose-900">
+                          {d.warnings.messages.join(' · ')}
+                        </div>
+                      ) : null}
                       <FieldLabel label="العدّ الفعلي">
                         <input
                           className="field"
@@ -1576,6 +1638,22 @@ export default function FinancePage() {
                     />
                   </FieldLabel>
 
+                  {cash?.closeWarnings?.hasWarnings ? (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-950">
+                      <p className="text-[11px] font-bold text-amber-800/80">
+                        قبل القفل
+                      </p>
+                      <ul className="mt-1 list-disc pr-4 space-y-0.5">
+                        {cash.closeWarnings.messages.map((m) => (
+                          <li key={m}>{m}</li>
+                        ))}
+                      </ul>
+                      <p className="mt-2 text-[11px] font-normal text-amber-900/70">
+                        تقدر تقفل برضه، بس راجع النقط دي الأول.
+                      </p>
+                    </div>
+                  ) : null}
+
                   <button
                     type="button"
                     className="btn-primary w-full"
@@ -1643,6 +1721,44 @@ export default function FinancePage() {
               <EmptyState>لا يوجد قفل يوم بعد</EmptyState>
             )}
           </SectionCard>
+
+          {canReopen ? (
+            <SectionCard
+              title="سجل التدقيق"
+              subtitle="فتح يوم · تعديل/مسح بعد قفل الجلسة"
+              badge={
+                auditLogs.length ? (
+                  <span className="badge-navy">{auditLogs.length}</span>
+                ) : null
+              }
+            >
+              {auditLogs.length ? (
+                <ul className="space-y-2">
+                  {auditLogs.map((row) => (
+                    <li
+                      key={row.id}
+                      className="rounded-xl border border-mist bg-sand/40 px-3 py-2 text-sm"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <p className="font-bold text-navy">
+                          {formatAuditAction(row.action)}
+                        </p>
+                        <p className="text-[11px] tabular-nums text-navy/45">
+                          {new Date(row.createdAt).toLocaleString('ar-EG')}
+                        </p>
+                      </div>
+                      <p className="mt-0.5 text-[12px] text-navy/55">
+                        {row.userName || 'مستخدم'}
+                        {row.entityType ? ` · ${row.entityType}` : ''}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <EmptyState>مفيش أحداث مسجّلة لسه</EmptyState>
+              )}
+            </SectionCard>
+          ) : null}
         </div>
         </>
         ) : null}
@@ -2355,9 +2471,12 @@ export default function FinancePage() {
             ? Number(prevCounted[ymd] || 0)
             : Number(counted || 0);
           const diff = cnt - exp;
+          const warn = closeWarningText(
+            ymd ? day?.warnings : cash?.closeWarnings,
+          );
           return `العدّ ${money(cnt)} هيتحوّل للخزنة.\nالمفروض ${money(exp)} · الفرق ${money(diff)}.${
             ymd ? '' : '\nبعد القفل مصروف الاستقبال يبقى من الخزنة.'
-          }`;
+          }${warn ? `\n\n${warn}` : ''}`;
         })()}
         confirmLabel={busy === 'close' ? 'جاري القفل...' : 'تأكيد القفل'}
         cancelLabel="رجوع"

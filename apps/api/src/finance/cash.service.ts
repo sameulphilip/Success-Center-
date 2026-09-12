@@ -6,6 +6,7 @@ import {
 import {
   BookingStatus,
   CashExpenseFrom,
+  ClassSessionStatus,
   ExtraRevenueCashTo,
   OnlineCodeStatus,
   Prisma,
@@ -64,6 +65,14 @@ function addDays(ymd: string, delta: number) {
 
 const OPEN_DAY_LOOKBACK = 21;
 
+export type CloseDayWarnings = {
+  openSessions: number;
+  pendingVodafone: number;
+  unsettledTeachers: number;
+  messages: string[];
+  hasWarnings: boolean;
+};
+
 export type OpenDayFigures = {
   date: string;
   collectedCash: number;
@@ -71,6 +80,7 @@ export type OpenDayFigures = {
   collectedTotal: number;
   drawerExpenses: number;
   expected: number;
+  warnings?: CloseDayWarnings;
 };
 
 function money(n: Prisma.Decimal | number | null | undefined) {
@@ -308,6 +318,108 @@ export class CashService {
     };
   }
 
+  /** Soft checks before closing a cash day (UI warns; close still allowed). */
+  async closeDayWarnings(ymd: string): Promise<CloseDayWarnings> {
+    const businessDate = dateOnly(ymd);
+    const { start, end } = cairoBounds(ymd);
+    const createdRange = { gte: start, lte: end };
+
+    const [openSessions, pendingEntries, pendingOnline, pendingHandout, unsettledTeachers] =
+      await Promise.all([
+        this.prisma.classSession.count({
+          where: {
+            status: ClassSessionStatus.OPEN,
+            sessionDate: businessDate,
+          },
+        }),
+        this.prisma.sessionEntry.count({
+          where: {
+            payStatus: SessionPayStatus.PENDING_CONFIRM,
+            session: { sessionDate: businessDate },
+          },
+        }),
+        this.prisma.onlineCodeSale.count({
+          where: {
+            payStatus: SessionPayStatus.PENDING_CONFIRM,
+            createdAt: createdRange,
+          },
+        }),
+        this.prisma.handoutSale.count({
+          where: {
+            payStatus: SessionPayStatus.PENDING_CONFIRM,
+            createdAt: createdRange,
+          },
+        }),
+        this.prisma.classSession.count({
+          where: {
+            status: ClassSessionStatus.CLOSED,
+            teacherPaidAt: null,
+            sessionDate: businessDate,
+          },
+        }),
+      ]);
+
+    const pendingVodafone =
+      pendingEntries + pendingOnline + pendingHandout;
+    const messages: string[] = [];
+    if (openSessions > 0) {
+      messages.push(`${openSessions} جلسة لسه مفتوحة`);
+    }
+    if (pendingVodafone > 0) {
+      messages.push(`${pendingVodafone} تحويل فودافون معلّق`);
+    }
+    if (unsettledTeachers > 0) {
+      messages.push(`${unsettledTeachers} جلسة مقفولة ولسه متتصفاش مع المدرس`);
+    }
+
+    return {
+      openSessions,
+      pendingVodafone,
+      unsettledTeachers,
+      messages,
+      hasWarnings: messages.length > 0,
+    };
+  }
+
+  async listAuditLogs(limit = 40) {
+    const take = Math.min(100, Math.max(1, Number(limit) || 40));
+    const rows = await this.prisma.auditLog.findMany({
+      orderBy: { createdAt: 'desc' },
+      take,
+      include: {
+        user: { select: { id: true, fullName: true } },
+      },
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      action: r.action,
+      entityType: r.entityType,
+      entityId: r.entityId,
+      details: r.details,
+      createdAt: r.createdAt,
+      userId: r.userId,
+      userName: r.user?.fullName || null,
+    }));
+  }
+
+  private async writeAudit(opts: {
+    userId?: string | null;
+    action: string;
+    entityType: string;
+    entityId?: string | null;
+    details?: Prisma.InputJsonValue;
+  }) {
+    await this.prisma.auditLog.create({
+      data: {
+        userId: opts.userId || null,
+        action: opts.action,
+        entityType: opts.entityType,
+        entityId: opts.entityId || null,
+        details: opts.details ?? undefined,
+      },
+    });
+  }
+
   /** Unclosed business days before today that still have drawer activity. */
   private async unclosedPrevious(today = cairoYmd()): Promise<OpenDayFigures[]> {
     const start = addDays(today, -OPEN_DAY_LOOKBACK);
@@ -328,9 +440,16 @@ export class CashService {
     if (!candidates.length) return [];
 
     const figures = await Promise.all(candidates.map((ymd) => this.dayFigures(ymd)));
-    return figures.filter(
+    const active = figures.filter(
       (f) => f.collectedTotal > 0.009 || f.drawerExpenses > 0.009,
     );
+    const withWarnings = await Promise.all(
+      active.map(async (f) => ({
+        ...f,
+        warnings: await this.closeDayWarnings(f.date),
+      })),
+    );
+    return withWarnings;
   }
 
   private async balances() {
@@ -1427,7 +1546,7 @@ export class CashService {
       paidFrom: CashExpenseFrom.DRAWER,
       businessDate,
     };
-    const [collected, drawerExpAgg, drawerToday, close, balances, safeComposition, expenses, handovers, closes, safeExpenses, unclosedPrevious, extraRevenueSales, teacherHolds, extraSettlements, onlineFormWallet, onlineFormsToday] =
+    const [collected, drawerExpAgg, drawerToday, close, balances, safeComposition, expenses, handovers, closes, safeExpenses, unclosedPrevious, extraRevenueSales, teacherHolds, extraSettlements, onlineFormWallet, onlineFormsToday, closeWarnings] =
       await Promise.all([
         this.dayCollections(ymd),
         this.prisma.cashExpense.aggregate({
@@ -1467,6 +1586,7 @@ export class CashService {
         this.extraSettlements(),
         this.onlineFormWallet(),
         this.onlineFormsForDay(ymd),
+        this.closeDayWarnings(ymd),
       ]);
 
     const drawerExpenses = money(drawerExpAgg._sum.amount);
@@ -1555,6 +1675,7 @@ export class CashService {
       extraSettlements,
       onlineFormWallet,
       onlineFormsToday,
+      closeWarnings,
       viewerScope: isReception ? 'reception' : 'owner',
       canOwnerExpense: !isReception,
       categories: EXPENSE_CATEGORIES,
@@ -1923,7 +2044,10 @@ export class CashService {
   }
 
   /** Undo an accidental day close — removes the close row (safe balance recalculates). */
-  async reopenDay(body: { businessDate?: string }) {
+  async reopenDay(
+    body: { businessDate?: string },
+    userId?: string,
+  ) {
     const today = cairoYmd();
     const raw = (body.businessDate || '').trim();
     const ymd = raw || today;
@@ -1947,6 +2071,19 @@ export class CashService {
     }
 
     await this.prisma.cashDayClose.delete({ where: { businessDate } });
+    await this.writeAudit({
+      userId,
+      action: 'DAY_REOPENED',
+      entityType: 'CashDayClose',
+      entityId: existing.id,
+      details: {
+        businessDate: ymd,
+        countedAmount: Number(existing.countedAmount),
+        transferredToSafe: Number(existing.transferredToSafe),
+        difference: Number(existing.difference),
+        closedByUserId: existing.closedByUserId,
+      },
+    });
     return {
       ok: true,
       businessDate: ymd,

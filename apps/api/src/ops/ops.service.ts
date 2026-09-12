@@ -8,6 +8,7 @@ import {
   BlockScope,
   ClassSessionStatus,
   OpsCheckInSource,
+  Prisma,
   RefundReason,
   RoleCode,
   SessionPayMethod,
@@ -137,9 +138,22 @@ export class OpsService {
     });
   }
 
-  listSessions(status?: ClassSessionStatus, date?: string) {
-    const where: { status?: ClassSessionStatus; sessionDate?: Date } = {};
-    if (status) where.status = status;
+  listSessions(
+    status?: ClassSessionStatus,
+    date?: string,
+    unsettled?: boolean,
+  ) {
+    const where: {
+      status?: ClassSessionStatus;
+      sessionDate?: Date;
+      teacherPaidAt?: null;
+    } = {};
+    if (unsettled) {
+      where.status = ClassSessionStatus.CLOSED;
+      where.teacherPaidAt = null;
+    } else if (status) {
+      where.status = status;
+    }
     const ymd = String(date || '').trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
       where.sessionDate = new Date(`${ymd}T00:00:00.000Z`);
@@ -162,7 +176,7 @@ export class OpsService {
           },
         },
         orderBy: [{ sessionDate: 'desc' }, { createdAt: 'desc' }],
-        take: ymd ? 200 : 100,
+        take: unsettled && !ymd ? 200 : ymd ? 200 : 100,
       })
       .then((rows) =>
         rows.map(({ entries, ...session }) => {
@@ -343,6 +357,7 @@ export class OpsService {
       notes?: string | null;
     },
     role?: string,
+    userId?: string,
   ) {
     if (role !== RoleCode.SUPER_ADMIN && role !== RoleCode.CENTER_MANAGER) {
       throw new ForbiddenException('تعديل الجلسة للمدير فقط');
@@ -442,6 +457,19 @@ export class OpsService {
 
     if (isClosed && moneyChanged) {
       const settled = await this.applyClosedSessionSettlement(sessionId);
+      await this.writeAudit({
+        userId,
+        action: 'SESSION_UPDATED_AFTER_CLOSE',
+        entityType: 'ClassSession',
+        entityId: sessionId,
+        details: {
+          feeAmount,
+          centerAmount,
+          teacherPaidAt: !!session.teacherPaidAt,
+          settledTeacherAmount: Number(settled.settledTeacherAmount || 0),
+          settledCenterAmount: Number(settled.settledCenterAmount || 0),
+        },
+      });
       if (session.teacherPaidAt) {
         await this.cash.syncTeacherSessionPayout({
           sessionId,
@@ -1138,7 +1166,7 @@ export class OpsService {
     });
   }
 
-  async deleteEntry(entryId: string, role?: string) {
+  async deleteEntry(entryId: string, role?: string, userId?: string) {
     if (role !== RoleCode.SUPER_ADMIN && role !== RoleCode.CENTER_MANAGER) {
       throw new ForbiddenException('مسح تسجيل الطالب للمدير فقط');
     }
@@ -1153,10 +1181,25 @@ export class OpsService {
       );
     }
 
+    const wasClosed = entry.session.status === ClassSessionStatus.CLOSED;
     await this.prisma.sessionEntry.delete({ where: { id: entryId } });
 
-    if (entry.session.status === ClassSessionStatus.CLOSED) {
+    if (wasClosed) {
       await this.applyClosedSessionSettlement(entry.sessionId);
+      await this.writeAudit({
+        userId,
+        action: 'SESSION_ENTRY_DELETED_AFTER_CLOSE',
+        entityType: 'SessionEntry',
+        entityId: entryId,
+        details: {
+          sessionId: entry.sessionId,
+          studentId: entry.studentId,
+          studentName: `${entry.student.firstName} ${entry.student.lastName === '-' ? '' : entry.student.lastName}`.trim(),
+          amount: Number(entry.amount),
+          receiptNumber: entry.receiptNumber,
+          sessionDate: sessionDayYmd(entry.session.sessionDate),
+        },
+      });
     }
 
     return { ok: true, deletedId: entryId };
@@ -1205,12 +1248,13 @@ export class OpsService {
     });
   }
 
-  async deleteSession(sessionId: string, role?: string) {
+  async deleteSession(sessionId: string, role?: string, userId?: string) {
     if (role !== RoleCode.SUPER_ADMIN && role !== RoleCode.CENTER_MANAGER) {
       throw new ForbiddenException('مسح الجلسة للمدير فقط');
     }
     const session = await this.prisma.classSession.findUnique({
       where: { id: sessionId },
+      include: { teacher: true, _count: { select: { entries: true } } },
     });
     if (!session) throw new NotFoundException('الجلسة غير موجودة');
 
@@ -1221,6 +1265,43 @@ export class OpsService {
       }),
       this.prisma.classSession.delete({ where: { id: sessionId } }),
     ]);
+
+    if (session.status === ClassSessionStatus.CLOSED) {
+      await this.writeAudit({
+        userId,
+        action: 'SESSION_DELETED_AFTER_CLOSE',
+        entityType: 'ClassSession',
+        entityId: sessionId,
+        details: {
+          sessionDate: sessionDayYmd(session.sessionDate),
+          teacherName: teacherLabel(session.teacher),
+          title: session.title,
+          entries: session._count.entries,
+          settledTeacherAmount: Number(session.settledTeacherAmount || 0),
+          settledCenterAmount: Number(session.settledCenterAmount || 0),
+          teacherPaidAt: !!session.teacherPaidAt,
+        },
+      });
+    }
+
     return { ok: true, deletedId: sessionId };
+  }
+
+  private async writeAudit(opts: {
+    userId?: string | null;
+    action: string;
+    entityType: string;
+    entityId?: string | null;
+    details?: Prisma.InputJsonValue;
+  }) {
+    await this.prisma.auditLog.create({
+      data: {
+        userId: opts.userId || null,
+        action: opts.action,
+        entityType: opts.entityType,
+        entityId: opts.entityId || null,
+        details: opts.details ?? undefined,
+      },
+    });
   }
 }

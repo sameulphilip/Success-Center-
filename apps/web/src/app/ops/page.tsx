@@ -182,6 +182,9 @@ export default function OpsPage() {
 
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionDate, setSessionDate] = useState(cairoYmd);
+  const [listFilter, setListFilter] = useState<
+    'all' | 'open' | 'closed' | 'unsettled'
+  >('all');
   const [selectedId, setSelectedId] = useState('');
   const [detail, setDetail] = useState<Session | null>(null);
   const editLocked = detail?.status === 'CLOSED' && !!detail?.teacherPaidAt;
@@ -258,7 +261,12 @@ export default function OpsPage() {
   });
 
   async function loadLists() {
-    const qs = sessionDate ? `?date=${sessionDate}` : '';
+    const params = new URLSearchParams();
+    if (sessionDate) params.set('date', sessionDate);
+    if (listFilter === 'open') params.set('status', 'OPEN');
+    if (listFilter === 'closed') params.set('status', 'CLOSED');
+    if (listFilter === 'unsettled') params.set('unsettled', '1');
+    const qs = params.toString() ? `?${params.toString()}` : '';
     const [s, t, b, g] = await Promise.all([
       api<Session[]>(`/ops/sessions${qs}`),
       api<Teacher[]>('/teachers'),
@@ -296,7 +304,7 @@ export default function OpsPage() {
 
   useEffect(() => {
     loadLists().catch((e) => setError(e.message));
-  }, [sessionDate]);
+  }, [sessionDate, listFilter]);
 
   useEffect(() => {
     if (selectedId) loadDetail(selectedId).catch((e) => setError(e.message));
@@ -1066,6 +1074,37 @@ export default function OpsPage() {
                 </button>
               )}
             </div>
+            <div className="mb-3 flex flex-wrap gap-1.5">
+              {(
+                [
+                  ['all', 'الكل'],
+                  ['open', 'مفتوحة'],
+                  ['closed', 'مقفولة'],
+                  ['unsettled', 'لسه متتصفاش'],
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={`rounded-full px-3 py-1.5 text-[11px] font-bold ${
+                    listFilter === key
+                      ? key === 'unsettled'
+                        ? 'bg-rose-700 text-white'
+                        : 'bg-[#0B2545] text-white'
+                      : 'bg-white border border-mist text-navy/70'
+                  }`}
+                  onClick={() => {
+                    setListFilter(key);
+                    if (key === 'unsettled' && sessionDate) {
+                      // show backlog across days unless user re-picks a date
+                      setSessionDate('');
+                    }
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             {sessionDate ? (
               <div className="mb-3 grid grid-cols-2 gap-2 text-[12px] sm:grid-cols-4">
                 <div className="rounded-xl bg-navy/5 px-3 py-2">
@@ -1235,9 +1274,11 @@ export default function OpsPage() {
               ))}
               {!sessions.length ? (
                 <EmptyState>
-                  {sessionDate
-                    ? 'لا توجد جلسات في اليوم ده'
-                    : 'لا توجد جلسات'}
+                  {listFilter === 'unsettled'
+                    ? 'مفيش جلسات مقفولة لسه متتصفاش'
+                    : sessionDate
+                      ? 'لا توجد جلسات في اليوم ده'
+                      : 'لا توجد جلسات'}
                 </EmptyState>
               ) : null}
             </ul>

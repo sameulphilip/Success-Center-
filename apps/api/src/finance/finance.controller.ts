@@ -214,8 +214,18 @@ export class FinanceController {
   @Post('cash/reopen-day')
   @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
   @RequirePerms('finance.close')
-  reopenDay(@Body() body: { businessDate?: string }) {
-    return this.cash.reopenDay(body || {});
+  reopenDay(
+    @CurrentUser() user: { userId: string },
+    @Body() body: { businessDate?: string },
+  ) {
+    return this.cash.reopenDay(body || {}, user?.userId);
+  }
+
+  @Get('cash/audit-logs')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  @RequirePerms('finance.close')
+  auditLogs(@Query('limit') limit?: string) {
+    return this.cash.listAuditLogs(limit ? Number(limit) : 40);
   }
 
   @Post('cash/handover')
