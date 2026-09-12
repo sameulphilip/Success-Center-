@@ -1129,18 +1129,37 @@ export default function OpsPage() {
                           </span>
                         ) : null}
                       </span>
-                      <span
-                        className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-bold ${
-                          s.status === 'OPEN'
-                            ? selectedId === s.id
-                              ? 'bg-emerald-400/20 text-emerald-100'
-                              : 'bg-emerald-50 text-emerald-800'
-                            : selectedId === s.id
-                              ? 'bg-white/15 text-white/80'
-                              : 'bg-amber-50 text-amber-800'
-                        }`}
-                      >
-                        {s.status === 'OPEN' ? 'مفتوحة' : 'مقفولة'}
+                      <span className="shrink-0 flex flex-col items-end gap-1">
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                            s.status === 'OPEN'
+                              ? selectedId === s.id
+                                ? 'bg-emerald-400/20 text-emerald-100'
+                                : 'bg-emerald-50 text-emerald-800'
+                              : selectedId === s.id
+                                ? 'bg-white/15 text-white/80'
+                                : 'bg-amber-50 text-amber-800'
+                          }`}
+                        >
+                          {s.status === 'OPEN' ? 'مفتوحة' : 'مقفولة'}
+                        </span>
+                        {s.status === 'CLOSED' ? (
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                              s.teacherPaidAt
+                                ? selectedId === s.id
+                                  ? 'bg-sky-400/25 text-sky-100'
+                                  : 'bg-sky-50 text-sky-800'
+                                : selectedId === s.id
+                                  ? 'bg-rose-400/25 text-rose-100'
+                                  : 'bg-rose-50 text-rose-800'
+                            }`}
+                          >
+                            {s.teacherPaidAt
+                              ? 'اتسوّت مع المدرس'
+                              : 'لسه متتصفاش'}
+                          </span>
+                        ) : null}
                       </span>
                     </span>
                     <span
@@ -1241,12 +1260,25 @@ export default function OpsPage() {
                 title={`${detail.teacher.firstName} ${detail.teacher.lastName}`}
                 subtitle={`${formatSessionDay(detail.sessionDate)}${formatSessionDay(detail.sessionDate) ? ' · ' : ''}${detail.subject?.nameAr || 'بدون مادة'} · سعر ${Number(detail.feeAmount).toLocaleString('en-EG')} · سنتر ${centerCutOf(detail).toLocaleString('en-EG')} · مدرس ${teacherCutOf(detail).toLocaleString('en-EG')}`}
                 badge={
-                  <span
-                    className={
-                      detail.status === 'OPEN' ? 'badge-ok' : 'badge-warn'
-                    }
-                  >
-                    {detail.status === 'OPEN' ? 'مفتوحة' : 'مقفولة'}
+                  <span className="flex flex-wrap items-center gap-1.5 justify-end">
+                    <span
+                      className={
+                        detail.status === 'OPEN' ? 'badge-ok' : 'badge-warn'
+                      }
+                    >
+                      {detail.status === 'OPEN' ? 'مفتوحة' : 'مقفولة'}
+                    </span>
+                    {detail.status === 'CLOSED' ? (
+                      <span
+                        className={
+                          detail.teacherPaidAt ? 'badge-ok' : 'badge-danger'
+                        }
+                      >
+                        {detail.teacherPaidAt
+                          ? 'اتسوّت مع المدرس'
+                          : 'لسه متتصفاش'}
+                      </span>
+                    ) : null}
                   </span>
                 }
                 action={
