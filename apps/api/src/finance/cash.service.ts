@@ -156,15 +156,14 @@ export class CashService {
     const confirmed = SessionPayStatus.CONFIRMED;
 
     /** Drawer extra sales:
-     * - New policy: DRAWER + unsettled → centerShare on confirm day
-     * - Legacy settle: DRAWER tied to a settlement with centerToSafe > 0 → on settle day
-     * (Settlements with centerToSafe = 0 are teacher-only payouts; center already counted at confirm.)
+     * - New policy: DRAWER centerShare counts on confirm day (even after teacher settle).
+     * - Legacy settle: DRAWER tied to settlement with centerToSafe > 0 → on settle day.
      */
     const drawerExtra = {
       payStatus: confirmed,
       cashTo: ExtraRevenueCashTo.DRAWER,
       OR: [
-        { settlementId: null, confirmedAt: range },
+        { confirmedAt: range },
         {
           settlement: {
             createdAt: range,
@@ -2131,6 +2130,7 @@ export class CashService {
         codes: string[];
         hold: boolean;
         settledDrawer: boolean;
+        inDrawer: boolean;
       }
     >();
     for (const s of online) {
@@ -2143,11 +2143,18 @@ export class CashService {
         codes: [] as string[],
         hold: false,
         settledDrawer: false,
+        inDrawer: false,
       };
       cur.count += 1;
-      cur.amount += money(s.amount);
+      // Day-close amount for DRAWER is center share; hold/owner show gross for visibility.
+      const lineAmt =
+        s.cashTo === ExtraRevenueCashTo.DRAWER
+          ? money(s.centerShare)
+          : money(s.amount);
+      cur.amount += lineAmt;
       if (s.code?.code) cur.codes.push(s.code.code);
       if (s.cashTo === ExtraRevenueCashTo.TEACHER_HOLD) cur.hold = true;
+      if (s.cashTo === ExtraRevenueCashTo.DRAWER) cur.inDrawer = true;
       if (s.cashTo === ExtraRevenueCashTo.DRAWER && s.settlementId)
         cur.settledDrawer = true;
       codeByOffer.set(s.offer.id, cur);
@@ -2162,6 +2169,7 @@ export class CashService {
         receipts: string[];
         hold: boolean;
         settledDrawer: boolean;
+        inDrawer: boolean;
       }
     >();
     for (const s of handouts) {
@@ -2174,11 +2182,17 @@ export class CashService {
         receipts: [] as string[],
         hold: false,
         settledDrawer: false,
+        inDrawer: false,
       };
       cur.count += s.qty;
-      cur.amount += money(s.amount);
+      const lineAmt =
+        s.cashTo === ExtraRevenueCashTo.DRAWER
+          ? money(s.centerShare)
+          : money(s.amount);
+      cur.amount += lineAmt;
       if (s.receiptNumber) cur.receipts.push(s.receiptNumber);
       if (s.cashTo === ExtraRevenueCashTo.TEACHER_HOLD) cur.hold = true;
+      if (s.cashTo === ExtraRevenueCashTo.DRAWER) cur.inDrawer = true;
       if (s.cashTo === ExtraRevenueCashTo.DRAWER && s.settlementId)
         cur.settledDrawer = true;
       handByProduct.set(s.product.id, cur);
@@ -2220,9 +2234,11 @@ export class CashService {
         serials: formatStrRange(r.codes),
         note: r.hold
           ? 'على حساب المدرس — مش في عدّ الدرج (قديم)'
-          : r.settledDrawer
-            ? 'نصيب المدرس اتصفى · نصيب السنتر في الدرج'
-            : 'نصيب السنتر في عدّ الدرج · نصيب المدرس لسه متصفاش',
+          : r.inDrawer
+            ? r.settledDrawer
+              ? 'نصيب المدرس اتصفى · نصيب السنتر في الدرج'
+              : 'نصيب السنتر في عدّ الدرج · نصيب المدرس لسه متصفاش'
+            : 'مش في عدّ الدرج (خزنة / مالك)',
       })),
       ...[...handByProduct.entries()].map(([id, r]) => ({
         key: `hn-${id}`,
@@ -2237,9 +2253,11 @@ export class CashService {
             : r.receipts[0] || '—',
         note: r.hold
           ? 'على حساب المدرس — مش في عدّ الدرج (قديم)'
-          : r.settledDrawer
-            ? 'نصيب المدرس اتصفى · نصيب السنتر في الدرج'
-            : 'نصيب السنتر في عدّ الدرج · نصيب المدرس لسه متصفاش',
+          : r.inDrawer
+            ? r.settledDrawer
+              ? 'نصيب المدرس اتصفى · نصيب السنتر في الدرج'
+              : 'نصيب السنتر في عدّ الدرج · نصيب المدرس لسه متصفاش'
+            : 'مش في عدّ الدرج (خزنة / مالك)',
       })),
     ];
 

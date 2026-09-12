@@ -616,6 +616,8 @@ model SessionEntry {
   listedFee          Decimal?         @db.Decimal(12, 2)
   /** Required when amount is less than listedFee */
   discountReason     String?
+  /** Discounted payment stays with center (not split with teacher). */
+  centerKeepsAll     Boolean          @default(false)
   method             SessionPayMethod
   payStatus          SessionPayStatus @default(PENDING_CONFIRM)
   vodafoneTxn        String?

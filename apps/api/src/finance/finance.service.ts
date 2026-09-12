@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { BookingStatus, ExtraRevenueCashTo, PaymentStatus, PayoutStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { splitSessionNet } from '../ops/session-split';
+import { splitSessionFromEntries } from '../ops/session-split';
 import { CashService } from './cash.service';
 
 function cairoYmd(d = new Date()) {
@@ -469,12 +469,8 @@ export class FinanceService {
     let sessionsCount = 0;
 
     for (const s of sessions) {
-      const entryGross = s.entries.reduce(
-        (sum, e) => sum + Number(e.amount) - Number(e.refundedAmount),
-        0,
-      );
-      const share = splitSessionNet({
-        net: entryGross,
+      const share = splitSessionFromEntries({
+        entries: s.entries,
         feeAmount: Number(s.feeAmount),
         teacherPercent: s.teacherPercent,
         centerAmount: s.centerAmount,

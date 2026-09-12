@@ -84,6 +84,7 @@ type Entry = {
   amount: string | number;
   listedFee?: string | number | null;
   discountReason?: string | null;
+  centerKeepsAll?: boolean;
   method: 'CASH' | 'VODAFONE_CASH';
   payStatus: string;
   vodafoneTxn?: string | null;
@@ -230,6 +231,7 @@ export default function OpsPage() {
     payMode: 'full' as PayMode,
     customAmount: '',
     discountReason: '',
+    centerKeepsAll: false,
   });
   const [payMatch, setPayMatch] = useState<{
     status: 'idle' | 'loading' | 'found' | 'missing' | 'error';
@@ -635,6 +637,7 @@ export default function OpsPage() {
               : undefined,
           amount,
           discountReason: needsReason ? discountReason : undefined,
+          centerKeepsAll: needsReason ? payForm.centerKeepsAll : undefined,
         }),
       });
       setPayForm({
@@ -647,6 +650,7 @@ export default function OpsPage() {
         payMode: 'full',
         customAmount: '',
         discountReason: '',
+        centerKeepsAll: false,
       });
       setScanned(null);
       await loadDetail(selectedId);
@@ -1674,20 +1678,41 @@ export default function OpsPage() {
                           payForm.customAmount,
                         ) <
                         sessionListedFee(detail) - 0.001 ? (
-                          <FieldLabel label="سبب الخصم *">
-                            <input
-                              className="field"
-                              required
-                              value={payForm.discountReason}
-                              onChange={(e) =>
-                                setPayForm({
-                                  ...payForm,
-                                  discountReason: e.target.value,
-                                })
-                              }
-                              placeholder="مثال: قريب للمدرس · منحة · خصم إداري"
-                            />
-                          </FieldLabel>
+                          <>
+                            <FieldLabel label="سبب الخصم *">
+                              <input
+                                className="field"
+                                required
+                                value={payForm.discountReason}
+                                onChange={(e) =>
+                                  setPayForm({
+                                    ...payForm,
+                                    discountReason: e.target.value,
+                                  })
+                                }
+                                placeholder="مثال: قريب للمدرس · منحة · خصم إداري · تؤام"
+                              />
+                            </FieldLabel>
+                            <label className="flex items-start gap-2 text-xs font-semibold text-navy/80 cursor-pointer select-none">
+                              <input
+                                type="checkbox"
+                                className="mt-0.5"
+                                checked={payForm.centerKeepsAll}
+                                onChange={(e) =>
+                                  setPayForm({
+                                    ...payForm,
+                                    centerKeepsAll: e.target.checked,
+                                  })
+                                }
+                              />
+                              <span>
+                                المبلغ كله للسنتر
+                                <span className="block font-normal text-navy/50">
+                                  نصيب المدرس من الطالب ده = صفر
+                                </span>
+                              </span>
+                            </label>
+                          </>
                         ) : null}
                       </div>
                     ) : null}
@@ -1776,6 +1801,11 @@ export default function OpsPage() {
                                 {e.discountReason ? (
                                   <span className="block text-[11px] font-normal text-navy/60">
                                     {e.discountReason}
+                                  </span>
+                                ) : null}
+                                {e.centerKeepsAll ? (
+                                  <span className="block text-[11px] font-semibold text-emerald-800">
+                                    كله للسنتر
                                   </span>
                                 ) : null}
                               </div>

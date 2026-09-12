@@ -17,7 +17,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { normalizePhone, isValidMobile, phoneLookupVariants } from '../common/phone.util';
 import { CashService } from '../finance/cash.service';
 import {
-  splitSessionNet,
+  splitSessionFromEntries,
   teacherPercentFromCenter,
 } from './session-split';
 
@@ -403,18 +403,13 @@ export class OpsService {
     const moneyChanged = feeChanged || centerChanged;
     let oldTeacherShare = Number(session.settledTeacherAmount || 0);
     if (session.teacherPaidAt && oldTeacherShare < 0.01) {
-      const oldNet = session.entries
-        .filter(
-          (e) =>
-            e.payStatus === SessionPayStatus.CONFIRMED ||
-            e.payStatus === SessionPayStatus.PARTIALLY_REFUNDED,
-        )
-        .reduce(
-          (n, e) => n + Number(e.amount) - Number(e.refundedAmount || 0),
-          0,
-        );
-      oldTeacherShare = splitSessionNet({
-        net: oldNet,
+      const paidEntries = session.entries.filter(
+        (e) =>
+          e.payStatus === SessionPayStatus.CONFIRMED ||
+          e.payStatus === SessionPayStatus.PARTIALLY_REFUNDED,
+      );
+      oldTeacherShare = splitSessionFromEntries({
+        entries: paidEntries,
         feeAmount: Number(session.feeAmount),
         teacherPercent: session.teacherPercent,
         centerAmount: session.centerAmount,
@@ -504,12 +499,8 @@ export class OpsService {
         e.payStatus === SessionPayStatus.CONFIRMED ||
         e.payStatus === SessionPayStatus.PARTIALLY_REFUNDED,
     );
-    let net = 0;
-    for (const e of confirmed) {
-      net += Number(e.amount) - Number(e.refundedAmount);
-    }
-    const { teacherShare, centerShare } = splitSessionNet({
-      net,
+    const { teacherShare, centerShare } = splitSessionFromEntries({
+      entries: confirmed,
       feeAmount: Number(session.feeAmount),
       teacherPercent: session.teacherPercent,
       centerAmount: session.centerAmount,
@@ -709,6 +700,7 @@ export class OpsService {
       vodafoneTxn?: string;
       amount?: number;
       discountReason?: string;
+      centerKeepsAll?: boolean;
       note?: string;
     },
     userId?: string,
@@ -774,11 +766,13 @@ export class OpsService {
       throw new BadRequestException('المبلغ أكبر من سعر الجلسة');
     }
     const discountReason = (data.discountReason || '').trim();
-    if (amount < listedFee - 0.001 && !discountReason) {
+    const isDiscount = amount < listedFee - 0.001;
+    if (isDiscount && !discountReason) {
       throw new BadRequestException(
         'سبب الخصم مطلوب عند الدفع بأقل من سعر الجلسة',
       );
     }
+    const centerKeepsAll = isDiscount && Boolean(data.centerKeepsAll);
 
     const isCash = data.method === SessionPayMethod.CASH;
     const receiptNumber = `SP-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`;
@@ -789,7 +783,8 @@ export class OpsService {
         studentId: student.id,
         amount,
         listedFee,
-        discountReason: amount < listedFee - 0.001 ? discountReason : null,
+        discountReason: isDiscount ? discountReason : null,
+        centerKeepsAll,
         method: data.method,
         vodafoneTxn: data.vodafoneTxn?.trim() || null,
         receiptNumber,
@@ -1037,12 +1032,8 @@ export class OpsService {
         e.payStatus === SessionPayStatus.CONFIRMED ||
         e.payStatus === SessionPayStatus.PARTIALLY_REFUNDED,
     );
-    let net = 0;
-    for (const e of confirmed) {
-      net += Number(e.amount) - Number(e.refundedAmount);
-    }
-    const { teacherShare, centerShare } = splitSessionNet({
-      net,
+    const { teacherShare, centerShare } = splitSessionFromEntries({
+      entries: confirmed,
       feeAmount: Number(session.feeAmount),
       teacherPercent: session.teacherPercent,
       centerAmount: session.centerAmount,

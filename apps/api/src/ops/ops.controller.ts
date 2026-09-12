@@ -145,6 +145,7 @@ export class OpsController {
       vodafoneTxn?: string;
       amount?: number;
       discountReason?: string;
+      centerKeepsAll?: boolean;
       note?: string;
     },
     @CurrentUser() user: { userId: string },
