@@ -124,6 +124,12 @@ enum ExtraRevenueCashTo {
   SAFE
 }
 
+/** Owner puts personal cash into the center (IN) or takes it back (OUT). */
+enum OwnerAdvanceKind {
+  IN
+  OUT
+}
+
 model User {
   id              String    @id @default(cuid())
   email           String    @unique
@@ -879,4 +885,17 @@ model OnlineWalletClaim {
   createdAt       DateTime @default(now())
 
   @@index([createdAt])
+}
+
+/// Owner advance (استلاف): money from owner's pocket into the safe, later repaid.
+model OwnerAdvance {
+  id              String           @id @default(cuid())
+  kind            OwnerAdvanceKind
+  amount          Decimal          @db.Decimal(12, 2)
+  note            String?
+  createdByUserId String?
+  createdAt       DateTime         @default(now())
+
+  @@index([createdAt])
+  @@index([kind, createdAt])
 }

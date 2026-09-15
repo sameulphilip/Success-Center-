@@ -62,6 +62,19 @@ function money(n: number) {
   return `${Math.round(Number(n) || 0).toLocaleString('en-EG')} ج.م`;
 }
 
+function transferWhen(t: Transfer) {
+  const raw = t.status === 'PAID' ? t.paidAt || t.createdAt : t.createdAt;
+  if (!raw) return '—';
+  return new Date(raw).toLocaleString('ar-EG', {
+    timeZone: 'Africa/Cairo',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 export default function OnlineWalletPage() {
   const me = getStoredUser();
   const isAdmin = me?.role === 'SUPER_ADMIN';
@@ -429,6 +442,9 @@ export default function OnlineWalletPage() {
                   </>
                 ) : null}
               </p>
+              <p className="text-[11px] tabular-nums text-navy/45">
+                {t.status === 'PAID' ? 'تأكيد' : 'تسجيل'} · {transferWhen(t)}
+              </p>
               <p className="text-[11px] text-navy/40">
                 طالب: {t.studentPhone}
               </p>
@@ -545,6 +561,7 @@ export default function OnlineWalletPage() {
                 <th>م</th>
                 <th>الطالب</th>
                 <th>الاستمارة</th>
+                <th>التاريخ</th>
                 <th>الطريقة</th>
                 <th>الرقم المرجعي</th>
                 <th>المبلغ</th>
@@ -563,6 +580,9 @@ export default function OnlineWalletPage() {
                     <p className="text-[11px] text-navy/45">{t.studentPhone}</p>
                   </td>
                   <td className="text-xs">{t.form?.gradeLabel || t.form?.title}</td>
+                  <td className="text-[11px] tabular-nums text-navy/60 whitespace-nowrap">
+                    {transferWhen(t)}
+                  </td>
                   <td className="text-xs">
                     {methodLabel[t.paymentMethod || ''] || t.paymentMethod}
                   </td>

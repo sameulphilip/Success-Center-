@@ -151,16 +151,27 @@ type CashSnapshot = {
     fromOnlineSafe: number;
     fromHandoutSafe: number;
     intoSafe: number;
+    ownerAdvanceIn?: number;
     safeExpenses: number;
     handedToOwner: number;
+    ownerAdvanceOut?: number;
     balance: number;
   };
+  ownerAdvanceOutstanding?: number;
+  ownerAdvances?: Array<{
+    id: string;
+    kind: 'IN' | 'OUT';
+    amount: string | number;
+    note?: string | null;
+    createdAt: string;
+  }>;
   safeComposition?: {
     method: 'fifo';
     note: string;
     remainingDayCloses: number;
     remainingOnline: number;
     remainingHandouts: number;
+    remainingAdvances?: number;
     total: number;
     dayCloses: Array<{
       id: string;
@@ -183,6 +194,16 @@ type CashSnapshot = {
       detail?: string | null;
     }>;
     handoutSales: Array<{
+      id: string;
+      kindLabel: string;
+      label: string;
+      businessDate: string | null;
+      at: string;
+      original: number;
+      remaining: number;
+      detail?: string | null;
+    }>;
+    advances?: Array<{
       id: string;
       kindLabel: string;
       label: string;
@@ -349,6 +370,10 @@ function formatAuditAction(action: string) {
       return 'تعديل جلسة مقفولة';
     case 'SESSION_DELETED_AFTER_CLOSE':
       return 'مسح جلسة مقفولة';
+    case 'OWNER_ADVANCE_IN':
+      return 'استلاف من صاحب السنتر';
+    case 'OWNER_ADVANCE_OUT':
+      return 'سداد استلاف لصاحب السنتر';
     default:
       return action;
   }
@@ -374,6 +399,7 @@ export default function FinancePage() {
   const canDelete =
     me?.role === 'SUPER_ADMIN' || me?.role === 'CENTER_MANAGER';
   const canReopen = canDelete && canClose;
+  const canOwnerAdvance = canDelete && canSafe;
   const [payments, setPayments] = useState<ReceiptRow[]>([]);
   const [summary, setSummary] = useState<FinanceSummary | null>(null);
   const [cash, setCash] = useState<CashSnapshot | null>(null);
@@ -395,6 +421,8 @@ export default function FinancePage() {
   const [closeDetailsOpen, setCloseDetailsOpen] = useState(true);
   const [handAmount, setHandAmount] = useState('');
   const [handNote, setHandNote] = useState('');
+  const [advanceAmount, setAdvanceAmount] = useState('');
+  const [advanceNote, setAdvanceNote] = useState('');
   const [showExtraSales, setShowExtraSales] = useState(false);
   const [safeDetailOpen, setSafeDetailOpen] = useState(false);
   const [auditLogs, setAuditLogs] = useState<
@@ -420,6 +448,8 @@ export default function FinancePage() {
       | 'close'
       | 'reopen'
       | 'handover'
+      | 'advance-in'
+      | 'advance-out'
       | 'del-receipt'
       | 'del-expense'
       | 'del-extra'
@@ -658,6 +688,29 @@ export default function FinancePage() {
     }
   }
 
+  async function doAdvance(kind: 'IN' | 'OUT') {
+    setBusy(kind === 'IN' ? 'advance-in' : 'advance-out');
+    setError('');
+    try {
+      await api('/finance/cash/owner-advance', {
+        method: 'POST',
+        body: JSON.stringify({
+          kind,
+          amount: Number(advanceAmount),
+          note: advanceNote.trim() || undefined,
+        }),
+      });
+      setConfirm(null);
+      setAdvanceAmount('');
+      setAdvanceNote('');
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'فشل تسجيل الاستلاف');
+    } finally {
+      setBusy('');
+    }
+  }
+
   async function doDeleteReceipt() {
     if (!confirm?.id || !confirm.source) return;
     setBusy(`del-r-${confirm.id}`);
@@ -836,6 +889,14 @@ export default function FinancePage() {
                 {
                   label: 'عند صاحب السنتر',
                   value: money(cash?.ownerBalance ?? 0),
+                },
+              ]
+            : []),
+          ...(canOwnerAdvance
+            ? [
+                {
+                  label: 'استلاف مستحق',
+                  value: money(cash?.ownerAdvanceOutstanding ?? 0),
                 },
               ]
             : []),
@@ -1899,6 +1960,98 @@ export default function FinancePage() {
           </div>
         </SectionCard>
         ) : null}
+
+        {tab === 'safe' && canOwnerAdvance ? (
+        <SectionCard
+          className="mt-4 lg:mt-0"
+          title="استلاف صاحب السنتر"
+          subtitle="فلوس من جيب صاحب السنتر للخزنة — ترجع له بعدين (مش تسليم أرباح)"
+        >
+          <div className="space-y-3">
+            <p className="rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-sm font-semibold text-amber-950">
+              مستحق له دلوقتي{' '}
+              <span className="font-black tabular-nums">
+                {money(cash?.ownerAdvanceOutstanding ?? 0)}
+              </span>
+            </p>
+            <FieldLabel label="المبلغ">
+              <input
+                className="field"
+                type="number"
+                min={1}
+                value={advanceAmount}
+                onChange={(e) => setAdvanceAmount(e.target.value)}
+              />
+            </FieldLabel>
+            <FieldLabel label="ملاحظة">
+              <input
+                className="field"
+                value={advanceNote}
+                onChange={(e) => setAdvanceNote(e.target.value)}
+                placeholder="مثلاً: إيجار · كهربا"
+              />
+            </FieldLabel>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                className="btn-accent w-full"
+                disabled={
+                  busy === 'advance-in' ||
+                  !Number(advanceAmount) ||
+                  Number(advanceAmount) <= 0
+                }
+                onClick={() => setConfirm({ kind: 'advance-in' })}
+              >
+                سلّفت السنتر
+              </button>
+              <button
+                type="button"
+                className="btn-primary w-full"
+                disabled={
+                  busy === 'advance-out' ||
+                  !Number(advanceAmount) ||
+                  Number(advanceAmount) <= 0 ||
+                  (cash?.ownerAdvanceOutstanding ?? 0) <= 0
+                }
+                onClick={() => setConfirm({ kind: 'advance-out' })}
+              >
+                خدت فلوسي
+              </button>
+            </div>
+            {(cash?.ownerAdvances || []).length ? (
+              <ul className="mt-2 max-h-56 space-y-2 overflow-auto text-sm">
+                {(cash?.ownerAdvances || []).map((a) => (
+                  <li
+                    key={a.id}
+                    className="flex justify-between gap-3 rounded-xl bg-sand px-3 py-2"
+                  >
+                    <span>
+                      <span className="font-bold">
+                        {a.kind === 'IN' ? 'سلّف' : 'استرجع'}
+                      </span>
+                      {a.note ? (
+                        <span className="text-navy/45"> · {a.note}</span>
+                      ) : null}
+                      <span className="block text-[11px] text-navy/40 mt-0.5">
+                        {new Date(a.createdAt).toLocaleString('ar-EG')}
+                      </span>
+                    </span>
+                    <span
+                      className={`font-extrabold tabular-nums ${
+                        a.kind === 'IN' ? 'text-emerald-800' : 'text-rose-700'
+                      }`}
+                    >
+                      {a.kind === 'IN' ? '+' : '−'} {money(Number(a.amount))}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-xs text-navy/45">مفيش حركات استلاف بعد</p>
+            )}
+          </div>
+        </SectionCard>
+        ) : null}
       </div>
 
       {tab === 'safe' ? (
@@ -2270,7 +2423,7 @@ export default function FinancePage() {
         open={safeDetailOpen}
         tone="info"
         title="تفصيل رصيد الخزنة"
-        message="الرصيد الحالي = كل اللي دخل الخزنة − المصروفات − التسليمات"
+        message="الرصيد = دخل الخزنة (قفل + استلاف) − المصروفات − التسليمات − سداد الاستلاف"
         confirmLabel="حسناً"
         onConfirm={() => setSafeDetailOpen(false)}
         onClose={() => setSafeDetailOpen(false)}
@@ -2310,6 +2463,14 @@ export default function FinancePage() {
                     {money(cash.safeComposition.remainingHandouts)}
                   </span>
                 </div>
+                {(cash.safeComposition.remainingAdvances || 0) > 0.009 ? (
+                  <div className="flex justify-between gap-2 font-bold">
+                    <span>من استلاف صاحب السنتر</span>
+                    <span className="tabular-nums text-navy">
+                      {money(cash.safeComposition.remainingAdvances || 0)}
+                    </span>
+                  </div>
+                ) : null}
                 <div className="flex justify-between gap-2 border-t border-amber-200/80 pt-2 text-base font-black">
                   <span>الإجمالي</span>
                   <span className="tabular-nums">
@@ -2431,6 +2592,14 @@ export default function FinancePage() {
                   {money(cash.safeBreakdown.fromHandoutSafe)}
                 </span>
               </div>
+              {(cash.safeBreakdown.ownerAdvanceIn || 0) > 0.009 ? (
+                <div className="flex justify-between gap-2">
+                  <span>استلاف من صاحب السنتر</span>
+                  <span className="font-bold tabular-nums text-emerald-800">
+                    + {money(cash.safeBreakdown.ownerAdvanceIn || 0)}
+                  </span>
+                </div>
+              ) : null}
               <div className="flex justify-between gap-2">
                 <span>مصروفات من الخزنة</span>
                 <span className="font-bold tabular-nums text-rose-700">
@@ -2443,6 +2612,14 @@ export default function FinancePage() {
                   − {money(cash.safeBreakdown.handedToOwner)}
                 </span>
               </div>
+              {(cash.safeBreakdown.ownerAdvanceOut || 0) > 0.009 ? (
+                <div className="flex justify-between gap-2">
+                  <span>سداد استلاف</span>
+                  <span className="font-bold tabular-nums text-rose-700">
+                    − {money(cash.safeBreakdown.ownerAdvanceOut || 0)}
+                  </span>
+                </div>
+              ) : null}
               <div className="flex justify-between gap-2 border-t border-navy/10 pt-2 text-base font-black">
                 <span>الرصيد الحالي</span>
                 <span className="tabular-nums text-navy">
@@ -2503,6 +2680,30 @@ export default function FinancePage() {
         confirmLabel={busy === 'handover' ? 'جاري التسليم...' : 'تأكيد التسليم'}
         cancelLabel="رجوع"
         onConfirm={doHandover}
+        onClose={() => setConfirm(null)}
+      />
+      <AppDialog
+        open={confirm?.kind === 'advance-in'}
+        tone="info"
+        title="استلاف من صاحب السنتر"
+        message={`تسجيل إن صاحب السنتر حط ${money(Number(advanceAmount) || 0)} من جيبه في الخزنة؟\nهيظهر كمستحق استلاف لحد ما يسترجعه.`}
+        confirmLabel={
+          busy === 'advance-in' ? 'جاري الحفظ...' : 'تأكيد الاستلاف'
+        }
+        cancelLabel="رجوع"
+        onConfirm={() => void doAdvance('IN')}
+        onClose={() => setConfirm(null)}
+      />
+      <AppDialog
+        open={confirm?.kind === 'advance-out'}
+        tone="danger"
+        title="سداد استلاف"
+        message={`إرجاع ${money(Number(advanceAmount) || 0)} لصاحب السنتر من الخزنة؟\nالمستحق الحالي ${money(cash?.ownerAdvanceOutstanding ?? 0)}.`}
+        confirmLabel={
+          busy === 'advance-out' ? 'جاري الحفظ...' : 'تأكيد الاسترجاع'
+        }
+        cancelLabel="رجوع"
+        onConfirm={() => void doAdvance('OUT')}
         onClose={() => setConfirm(null)}
       />
       <AppDialog

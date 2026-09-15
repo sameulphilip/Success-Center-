@@ -9,6 +9,7 @@ import {
   ClassSessionStatus,
   ExtraRevenueCashTo,
   OnlineCodeStatus,
+  OwnerAdvanceKind,
   Prisma,
   SessionPayStatus,
 } from '@prisma/client';
@@ -461,7 +462,7 @@ export class CashService {
       payStatus: SessionPayStatus.CONFIRMED,
       cashTo: ExtraRevenueCashTo.SAFE,
     };
-    const [closes, safeExp, ownerExp, handovers, onlineOwner, handoutOwner, rentalOwner, onlineSafe, handoutSafe, walletClaims] =
+    const [closes, safeExp, ownerExp, handovers, onlineOwner, handoutOwner, rentalOwner, onlineSafe, handoutSafe, walletClaims, advanceInAgg, advanceOutAgg] =
       await Promise.all([
         this.prisma.cashDayClose.aggregate({ _sum: { transferredToSafe: true } }),
         this.prisma.cashExpense.aggregate({
@@ -495,6 +496,14 @@ export class CashService {
           _sum: { centerShare: true },
         }),
         this.prisma.onlineWalletClaim.aggregate({ _sum: { amount: true } }),
+        this.prisma.ownerAdvance.aggregate({
+          where: { kind: OwnerAdvanceKind.IN },
+          _sum: { amount: true },
+        }),
+        this.prisma.ownerAdvance.aggregate({
+          where: { kind: OwnerAdvanceKind.OUT },
+          _sum: { amount: true },
+        }),
       ]);
     const fromDayCloses = money(closes._sum.transferredToSafe);
     const fromOnlineSafe = money(onlineSafe._sum.centerShare);
@@ -504,12 +513,22 @@ export class CashService {
     const handed = money(handovers._sum.amount);
     const ownerSpent = money(ownerExp._sum.amount);
     const walletClaimed = money(walletClaims._sum.amount);
+    const ownerAdvanceIn = money(advanceInAgg._sum.amount);
+    const ownerAdvanceOut = money(advanceOutAgg._sum.amount);
+    const ownerAdvanceOutstanding = Math.max(
+      0,
+      Math.round((ownerAdvanceIn - ownerAdvanceOut) * 100) / 100,
+    );
     const ownerExtraRevenue =
       money(onlineOwner._sum.centerShare) +
       money(handoutOwner._sum.centerShare) +
       money(rentalOwner._sum.amount) +
       walletClaimed;
-    const safeBalance = intoSafe - outSafeExp - handed;
+    const safeBalance =
+      Math.round(
+        (intoSafe + ownerAdvanceIn - outSafeExp - handed - ownerAdvanceOut) *
+          100,
+      ) / 100;
     return {
       safeBalance,
       ownerBalance: handed - ownerSpent + ownerExtraRevenue,
@@ -517,13 +536,18 @@ export class CashService {
       ownerSpent,
       ownerExtraRevenue,
       onlineWalletClaimed: walletClaimed,
+      ownerAdvanceIn,
+      ownerAdvanceOut,
+      ownerAdvanceOutstanding,
       safeBreakdown: {
         fromDayCloses,
         fromOnlineSafe,
         fromHandoutSafe,
         intoSafe,
+        ownerAdvanceIn,
         safeExpenses: outSafeExp,
         handedToOwner: handed,
+        ownerAdvanceOut,
         balance: safeBalance,
       },
     };
@@ -538,7 +562,7 @@ export class CashService {
       payStatus: SessionPayStatus.CONFIRMED,
       cashTo: ExtraRevenueCashTo.SAFE,
     };
-    const [closes, onlineSafe, handoutSafe, expenses, handovers] =
+    const [closes, onlineSafe, handoutSafe, expenses, handovers, advances] =
       await Promise.all([
         this.prisma.cashDayClose.findMany({
           orderBy: [{ closedAt: 'asc' }, { businessDate: 'asc' }],
@@ -584,11 +608,15 @@ export class CashService {
           orderBy: { createdAt: 'asc' },
           select: { id: true, amount: true, createdAt: true },
         }),
+        this.prisma.ownerAdvance.findMany({
+          orderBy: { createdAt: 'asc' },
+          select: { id: true, kind: true, amount: true, createdAt: true, note: true },
+        }),
       ]);
 
     type Layer = {
       id: string;
-      kind: 'day-close' | 'online' | 'handout';
+      kind: 'day-close' | 'online' | 'handout' | 'advance';
       kindLabel: string;
       label: string;
       at: Date;
@@ -651,6 +679,22 @@ export class CashService {
             : null,
       });
     }
+    for (const a of advances) {
+      if (a.kind !== OwnerAdvanceKind.IN) continue;
+      const amount = money(a.amount);
+      if (amount <= 0.009) continue;
+      layers.push({
+        id: `advance-${a.id}`,
+        kind: 'advance',
+        kindLabel: 'استلاف',
+        label: 'استلاف من صاحب السنتر',
+        at: a.createdAt,
+        businessDate: ymdFromDate(a.createdAt),
+        original: amount,
+        remaining: amount,
+        detail: a.note || null,
+      });
+    }
     layers.sort((a, b) => a.at.getTime() - b.at.getTime());
 
     const outflows = [
@@ -662,6 +706,12 @@ export class CashService {
         at: h.createdAt,
         amount: money(h.amount),
       })),
+      ...advances
+        .filter((a) => a.kind === OwnerAdvanceKind.OUT)
+        .map((a) => ({
+          at: a.createdAt,
+          amount: money(a.amount),
+        })),
     ].sort((a, b) => a.at.getTime() - b.at.getTime());
 
     let idx = 0;
@@ -703,27 +753,35 @@ export class CashService {
     const remainingDayCloses = sumKind('day-close');
     const remainingOnline = sumKind('online');
     const remainingHandouts = sumKind('handout');
+    const remainingAdvances = sumKind('advance');
     const total =
       Math.round(
-        (remainingDayCloses + remainingOnline + remainingHandouts) * 100,
+        (remainingDayCloses +
+          remainingOnline +
+          remainingHandouts +
+          remainingAdvances) *
+          100,
       ) / 100;
 
     // Group remaining day closes for a cleaner list
     const dayCloseRows = remainingLayers.filter((l) => l.kind === 'day-close');
     const onlineRows = remainingLayers.filter((l) => l.kind === 'online');
     const handoutRows = remainingLayers.filter((l) => l.kind === 'handout');
+    const advanceRows = remainingLayers.filter((l) => l.kind === 'advance');
 
     return {
       method: 'fifo' as const,
       note:
-        'التسليمات والمصروفات بتخصم من أقدم دخل أولاً. قفل اليوم فيه تحصيل مختلط (حصص/استمارات/نصيب سنتر من الدرج)، مش بس أكواد وملازم.',
+        'التسليمات والمصروفات وسداد الاستلاف بتخصم من أقدم دخل أولاً. قفل اليوم فيه تحصيل مختلط (حصص/استمارات/نصيب سنتر من الدرج)، مش بس أكواد وملازم.',
       remainingDayCloses,
       remainingOnline,
       remainingHandouts,
+      remainingAdvances,
       total,
       dayCloses: dayCloseRows,
       onlineSales: onlineRows,
       handoutSales: handoutRows,
+      advances: advanceRows,
     };
   }
 
@@ -1546,7 +1604,7 @@ export class CashService {
       paidFrom: CashExpenseFrom.DRAWER,
       businessDate,
     };
-    const [collected, drawerExpAgg, drawerToday, close, balances, safeComposition, expenses, handovers, closes, safeExpenses, unclosedPrevious, extraRevenueSales, teacherHolds, extraSettlements, onlineFormWallet, onlineFormsToday, closeWarnings] =
+    const [collected, drawerExpAgg, drawerToday, close, balances, safeComposition, expenses, handovers, closes, safeExpenses, unclosedPrevious, extraRevenueSales, teacherHolds, extraSettlements, onlineFormWallet, onlineFormsToday, closeWarnings, ownerAdvances] =
       await Promise.all([
         this.dayCollections(ymd),
         this.prisma.cashExpense.aggregate({
@@ -1587,6 +1645,12 @@ export class CashService {
         this.onlineFormWallet(),
         this.onlineFormsForDay(ymd),
         this.closeDayWarnings(ymd),
+        isReception
+          ? Promise.resolve([])
+          : this.prisma.ownerAdvance.findMany({
+              orderBy: { createdAt: 'desc' },
+              take: 40,
+            }),
       ]);
 
     const drawerExpenses = money(drawerExpAgg._sum.amount);
@@ -1668,6 +1732,10 @@ export class CashService {
         : balances.totalHandedToOwner,
       ownerExtraRevenue: isReception ? undefined : balances.ownerExtraRevenue,
       ownerNotReceived: isReception ? undefined : ownerNotReceived,
+      ownerAdvanceOutstanding: isReception
+        ? undefined
+        : balances.ownerAdvanceOutstanding,
+      ownerAdvances: isReception ? undefined : ownerAdvances,
       extraRevenueSales,
       teacherHolds,
       teacherHoldTotal: teacherHolds.reduce((n, h) => n + h.teacherShare, 0),
@@ -2584,6 +2652,65 @@ export class CashService {
 
   listOnlineWalletClaims(take = 30) {
     return this.prisma.onlineWalletClaim.findMany({
+      orderBy: { createdAt: 'desc' },
+      take,
+    });
+  }
+
+  async createOwnerAdvance(
+    userId: string,
+    body: { kind: 'IN' | 'OUT' | OwnerAdvanceKind; amount: number; note?: string },
+  ) {
+    const kindRaw = String(body.kind || '').toUpperCase();
+    const kind =
+      kindRaw === 'OUT' ? OwnerAdvanceKind.OUT : OwnerAdvanceKind.IN;
+    const amount = Number(body.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException('المبلغ غير صالح');
+    }
+
+    const balances = await this.balances();
+    if (kind === OwnerAdvanceKind.OUT) {
+      if (amount > balances.ownerAdvanceOutstanding + 0.009) {
+        throw new BadRequestException(
+          `المستحق للاستلاف ${Math.round(balances.ownerAdvanceOutstanding)} ج.م فقط`,
+        );
+      }
+      if (amount > balances.safeBalance + 0.009) {
+        throw new BadRequestException(
+          `رصيد الخزنة ${Math.round(balances.safeBalance)} ج.م — مش مكفي`,
+        );
+      }
+    }
+
+    const row = await this.prisma.ownerAdvance.create({
+      data: {
+        kind,
+        amount,
+        note: body.note?.trim() || null,
+        createdByUserId: userId,
+      },
+    });
+    await this.writeAudit({
+      userId,
+      action:
+        kind === OwnerAdvanceKind.IN
+          ? 'OWNER_ADVANCE_IN'
+          : 'OWNER_ADVANCE_OUT',
+      entityType: 'OwnerAdvance',
+      entityId: row.id,
+      details: { amount, note: row.note },
+    });
+    const after = await this.balances();
+    return {
+      advance: row,
+      safeBalance: after.safeBalance,
+      ownerAdvanceOutstanding: after.ownerAdvanceOutstanding,
+    };
+  }
+
+  listOwnerAdvances(take = 40) {
+    return this.prisma.ownerAdvance.findMany({
       orderBy: { createdAt: 'desc' },
       take,
     });

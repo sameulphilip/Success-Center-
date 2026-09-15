@@ -253,4 +253,21 @@ export class FinanceController {
   listOnlineWalletClaims() {
     return this.cash.listOnlineWalletClaims();
   }
+
+  @Post('cash/owner-advance')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  @RequirePerms('finance.safe')
+  createOwnerAdvance(
+    @CurrentUser() user: { userId: string },
+    @Body() body: { kind: 'IN' | 'OUT'; amount: number; note?: string },
+  ) {
+    return this.cash.createOwnerAdvance(user.userId, body || ({} as any));
+  }
+
+  @Get('cash/owner-advances')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  @RequirePerms('finance.safe')
+  listOwnerAdvances(@Query('limit') limit?: string) {
+    return this.cash.listOwnerAdvances(limit ? Number(limit) : 40);
+  }
 }
