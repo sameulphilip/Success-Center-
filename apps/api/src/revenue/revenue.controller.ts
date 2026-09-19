@@ -303,7 +303,10 @@ export class RevenueController {
       title?: string;
       startsAt: string;
       endsAt: string;
-      amount: number;
+      amount?: number;
+      billingMode?: 'FLAT' | 'PER_STUDENT';
+      headcount?: number;
+      centerPerStudent?: number;
       method?: SessionPayMethod;
       vodafoneTxn?: string;
       notes?: string;

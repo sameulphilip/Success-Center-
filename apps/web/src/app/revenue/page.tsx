@@ -110,6 +110,9 @@ type Rental = {
   startsAt: string;
   endsAt: string;
   amount: string | number;
+  billingMode?: 'FLAT' | 'PER_STUDENT';
+  headcount?: number | null;
+  centerPerStudent?: string | number | null;
   method: string;
   payStatus: string;
   cashTo?: 'DRAWER' | 'OWNER' | 'TEACHER_HOLD' | 'SAFE';
@@ -254,7 +257,10 @@ export default function RevenuePage() {
     title: '',
     startsAt: '',
     endsAt: '',
+    billingMode: 'FLAT' as 'FLAT' | 'PER_STUDENT',
     amount: 0,
+    headcount: 1,
+    centerPerStudent: 0,
     method: 'CASH',
     vodafoneTxn: '',
   });
@@ -716,10 +722,22 @@ export default function RevenuePage() {
     e.preventDefault();
     setBusy('rental');
     try {
+      const perStudent = rentalForm.billingMode === 'PER_STUDENT';
       const rental = await api<Rental>('/revenue/rentals', {
         method: 'POST',
         body: JSON.stringify({
-          ...rentalForm,
+          classroomId: rentalForm.classroomId,
+          renterName: rentalForm.renterName,
+          renterPhone: rentalForm.renterPhone || undefined,
+          title: rentalForm.title || undefined,
+          startsAt: rentalForm.startsAt,
+          endsAt: rentalForm.endsAt,
+          billingMode: rentalForm.billingMode,
+          amount: perStudent ? undefined : rentalForm.amount,
+          headcount: perStudent ? rentalForm.headcount : undefined,
+          centerPerStudent: perStudent
+            ? rentalForm.centerPerStudent
+            : undefined,
           method: rentalForm.method,
           vodafoneTxn:
             rentalForm.method === 'VODAFONE_CASH'
@@ -727,7 +745,23 @@ export default function RevenuePage() {
               : undefined,
         }),
       });
-      setMsg(`تم حجز القاعة · الفلوس على ${cashToLabel(rental.cashTo)}`);
+      const headNote =
+        rental.billingMode === 'PER_STUDENT' && rental.headcount
+          ? ` · ${rental.headcount} طالب`
+          : '';
+      setMsg(
+        `تم حجز القاعة${headNote} · الفلوس على ${cashToLabel(rental.cashTo)}`,
+      );
+      setRentalForm((f) => ({
+        ...f,
+        renterName: '',
+        renterPhone: '',
+        title: '',
+        amount: 0,
+        headcount: 1,
+        centerPerStudent: 0,
+        vodafoneTxn: '',
+      }));
       await load();
     } catch (err: any) {
       setError(err.message);
@@ -2089,7 +2123,56 @@ export default function RevenuePage() {
                   />
                 </FieldLabel>
               </div>
-              <div className="grid grid-cols-2 gap-2">
+              <FieldLabel label="طريقة الحساب">
+                <select
+                  className="field"
+                  value={rentalForm.billingMode}
+                  onChange={(e) =>
+                    setRentalForm({
+                      ...rentalForm,
+                      billingMode: e.target.value as 'FLAT' | 'PER_STUDENT',
+                    })
+                  }
+                >
+                  <option value="FLAT">إيجار ثابت</option>
+                  <option value="PER_STUDENT">حجز قاعة بالطالب</option>
+                </select>
+              </FieldLabel>
+              {rentalForm.billingMode === 'PER_STUDENT' ? (
+                <div className="grid grid-cols-2 gap-2">
+                  <FieldLabel label="عدد الطلاب">
+                    <input
+                      className="field"
+                      type="number"
+                      min={1}
+                      required
+                      value={rentalForm.headcount}
+                      onChange={(e) =>
+                        setRentalForm({
+                          ...rentalForm,
+                          headcount: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </FieldLabel>
+                  <FieldLabel label="نصيب السنتر / طالب">
+                    <input
+                      className="field"
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      required
+                      value={rentalForm.centerPerStudent}
+                      onChange={(e) =>
+                        setRentalForm({
+                          ...rentalForm,
+                          centerPerStudent: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </FieldLabel>
+                </div>
+              ) : (
                 <FieldLabel label="المبلغ">
                   <input
                     className="field"
@@ -2105,19 +2188,29 @@ export default function RevenuePage() {
                     }
                   />
                 </FieldLabel>
-                <FieldLabel label="الدفع">
-                  <select
-                    className="field"
-                    value={rentalForm.method}
-                    onChange={(e) =>
-                      setRentalForm({ ...rentalForm, method: e.target.value })
-                    }
-                  >
-                    <option value="CASH">كاش</option>
-                    <option value="VODAFONE_CASH">فودافون كاش</option>
-                  </select>
-                </FieldLabel>
-              </div>
+              )}
+              {rentalForm.billingMode === 'PER_STUDENT' ? (
+                <p className="text-xs text-navy/55">
+                  الإجمالي:{' '}
+                  {(
+                    Math.max(0, Number(rentalForm.headcount) || 0) *
+                    Math.max(0, Number(rentalForm.centerPerStudent) || 0)
+                  ).toLocaleString('en-EG')}{' '}
+                  ج.م (بدون أسماء طلاب)
+                </p>
+              ) : null}
+              <FieldLabel label="الدفع">
+                <select
+                  className="field"
+                  value={rentalForm.method}
+                  onChange={(e) =>
+                    setRentalForm({ ...rentalForm, method: e.target.value })
+                  }
+                >
+                  <option value="CASH">كاش</option>
+                  <option value="VODAFONE_CASH">فودافون كاش</option>
+                </select>
+              </FieldLabel>
               {rentalForm.method === 'VODAFONE_CASH' ? (
                 <FieldLabel label="رقم العملية">
                   <input
@@ -2174,8 +2267,11 @@ export default function RevenuePage() {
                     {new Date(r.endsAt).toLocaleString('ar-EG')}
                   </p>
                   <p className="text-[11px] text-navy/45">
-                    {Number(r.amount).toLocaleString('en-EG')} ج.م ·{' '}
-                    {cashToLabel(r.cashTo)} · {r.status} · {r.payStatus}
+                    {Number(r.amount).toLocaleString('en-EG')} ج.م
+                    {r.billingMode === 'PER_STUDENT' && r.headcount
+                      ? ` · ${r.headcount} طالب × ${Number(r.centerPerStudent || 0).toLocaleString('en-EG')}`
+                      : ''}{' '}
+                    · {cashToLabel(r.cashTo)} · {r.status} · {r.payStatus}
                   </p>
                   <div className="mt-2 flex gap-2">
                     {r.payStatus === 'PENDING_CONFIRM' ? (

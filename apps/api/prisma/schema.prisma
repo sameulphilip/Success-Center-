@@ -111,6 +111,12 @@ enum RentalStatus {
   COMPLETED
 }
 
+/** Flat fee vs center cut × student headcount (no student names). */
+enum RoomRentalBillingMode {
+  FLAT
+  PER_STUDENT
+}
+
 enum CashExpenseFrom {
   DRAWER
   SAFE
@@ -795,6 +801,11 @@ model RoomRental {
   startsAt          DateTime
   endsAt            DateTime
   amount            Decimal          @db.Decimal(12, 2)
+  /** FLAT = fixed amount; PER_STUDENT = headcount × centerPerStudent */
+  billingMode       RoomRentalBillingMode @default(FLAT)
+  /** Students counted for PER_STUDENT billing (no named roster). */
+  headcount         Int?
+  centerPerStudent  Decimal?         @db.Decimal(12, 2)
   method            SessionPayMethod @default(CASH)
   vodafoneTxn       String?
   payStatus         SessionPayStatus @default(PENDING_CONFIRM)

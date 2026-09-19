@@ -9,6 +9,7 @@ import {
   Prisma,
   RentalStatus,
   RoleCode,
+  RoomRentalBillingMode,
   SessionPayMethod,
   SessionPayStatus,
 } from '@prisma/client';
@@ -1020,7 +1021,10 @@ export class RevenueService {
       title?: string;
       startsAt: string;
       endsAt: string;
-      amount: number;
+      amount?: number;
+      billingMode?: 'FLAT' | 'PER_STUDENT';
+      headcount?: number;
+      centerPerStudent?: number;
       method?: SessionPayMethod;
       vodafoneTxn?: string;
       notes?: string;
@@ -1033,7 +1037,30 @@ export class RevenueService {
     if (!(endsAt > startsAt)) {
       throw new BadRequestException('وقت النهاية لازم بعد البداية');
     }
-    if (data.amount < 0) throw new BadRequestException('المبلغ غير صالح');
+
+    const mode =
+      String(data.billingMode || 'FLAT').toUpperCase() === 'PER_STUDENT'
+        ? RoomRentalBillingMode.PER_STUDENT
+        : RoomRentalBillingMode.FLAT;
+
+    let amount = Number(data.amount);
+    let headcount: number | null = null;
+    let centerPerStudent: number | null = null;
+
+    if (mode === RoomRentalBillingMode.PER_STUDENT) {
+      headcount = Math.floor(Number(data.headcount));
+      centerPerStudent = Number(data.centerPerStudent);
+      if (!Number.isFinite(headcount) || headcount < 1) {
+        throw new BadRequestException('عدد الطلاب غير صالح');
+      }
+      if (!Number.isFinite(centerPerStudent) || centerPerStudent < 0) {
+        throw new BadRequestException('نصيب السنتر للطالب غير صالح');
+      }
+      amount =
+        Math.round(headcount * centerPerStudent * 100) / 100;
+    } else if (!Number.isFinite(amount) || amount < 0) {
+      throw new BadRequestException('المبلغ غير صالح');
+    }
 
     const method = data.method || SessionPayMethod.CASH;
     if (method === SessionPayMethod.VODAFONE_CASH && !data.vodafoneTxn?.trim()) {
@@ -1063,7 +1090,10 @@ export class RevenueService {
         title: data.title,
         startsAt,
         endsAt,
-        amount: data.amount,
+        amount,
+        billingMode: mode,
+        headcount,
+        centerPerStudent,
         method,
         vodafoneTxn: data.vodafoneTxn?.trim() || null,
         payStatus: isCash

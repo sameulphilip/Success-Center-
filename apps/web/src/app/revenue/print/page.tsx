@@ -506,6 +506,7 @@ function RevenuePrintContent() {
                 'إلى',
                 'القاعة',
                 'المستأجر',
+                'الحساب',
                 'المبلغ',
                 'الدفع',
                 'الوجهة',
@@ -517,6 +518,9 @@ function RevenuePrintContent() {
                 ymdOf(r.endsAt),
                 r.classroom?.name || '—',
                 `${r.renterName}${r.renterPhone ? ` · ${r.renterPhone}` : ''}`,
+                r.billingMode === 'PER_STUDENT' && r.headcount
+                  ? `${r.headcount} طالب × ${money(r.centerPerStudent || 0)}`
+                  : 'ثابت',
                 money(r.amount),
                 payMethodLabel(r.method),
                 cashToLabel(r.cashTo),
