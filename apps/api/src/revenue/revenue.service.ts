@@ -1138,6 +1138,134 @@ export class RevenueService {
     });
   }
 
+  async updateRental(
+    id: string,
+    data: {
+      classroomId?: string;
+      renterName?: string;
+      renterPhone?: string;
+      title?: string;
+      startsAt?: string;
+      endsAt?: string;
+      amount?: number;
+      billingMode?: 'FLAT' | 'PER_STUDENT';
+      headcount?: number;
+      centerPerStudent?: number;
+      method?: SessionPayMethod;
+      vodafoneTxn?: string;
+      notes?: string;
+    },
+  ) {
+    const rental = await this.prisma.roomRental.findUnique({ where: { id } });
+    if (!rental) throw new NotFoundException('الحجز غير موجود');
+    if (rental.status === RentalStatus.CANCELLED) {
+      throw new BadRequestException('لا يمكن تعديل حجز ملغي');
+    }
+
+    const classroomId = data.classroomId || rental.classroomId;
+    const startsAt = data.startsAt
+      ? new Date(data.startsAt)
+      : rental.startsAt;
+    const endsAt = data.endsAt ? new Date(data.endsAt) : rental.endsAt;
+    if (!(endsAt > startsAt)) {
+      throw new BadRequestException('وقت النهاية لازم بعد البداية');
+    }
+
+    const modeRaw =
+      data.billingMode != null
+        ? String(data.billingMode).toUpperCase()
+        : rental.billingMode;
+    const mode =
+      modeRaw === 'PER_STUDENT' || modeRaw === RoomRentalBillingMode.PER_STUDENT
+        ? RoomRentalBillingMode.PER_STUDENT
+        : RoomRentalBillingMode.FLAT;
+
+    let amount = Number(
+      data.amount != null ? data.amount : rental.amount,
+    );
+    let headcount: number | null =
+      data.headcount != null
+        ? Math.floor(Number(data.headcount))
+        : rental.headcount;
+    let centerPerStudent: number | null =
+      data.centerPerStudent != null
+        ? Number(data.centerPerStudent)
+        : rental.centerPerStudent != null
+          ? Number(rental.centerPerStudent)
+          : null;
+
+    if (mode === RoomRentalBillingMode.PER_STUDENT) {
+      if (!Number.isFinite(headcount as number) || (headcount as number) < 1) {
+        throw new BadRequestException('عدد الطلاب غير صالح');
+      }
+      if (
+        !Number.isFinite(centerPerStudent as number) ||
+        (centerPerStudent as number) < 0
+      ) {
+        throw new BadRequestException('نصيب السنتر للطالب غير صالح');
+      }
+      amount =
+        Math.round((headcount as number) * (centerPerStudent as number) * 100) /
+        100;
+    } else {
+      headcount = null;
+      centerPerStudent = null;
+      if (!Number.isFinite(amount) || amount < 0) {
+        throw new BadRequestException('المبلغ غير صالح');
+      }
+    }
+
+    const method = data.method || rental.method;
+    const vodafoneTxn =
+      data.vodafoneTxn !== undefined
+        ? data.vodafoneTxn.trim() || null
+        : rental.vodafoneTxn;
+    if (method === SessionPayMethod.VODAFONE_CASH && !vodafoneTxn) {
+      throw new BadRequestException('رقم عملية فودافون مطلوب');
+    }
+
+    const overlap = await this.prisma.roomRental.findFirst({
+      where: {
+        id: { not: id },
+        classroomId,
+        status: { in: [RentalStatus.BOOKED, RentalStatus.PAID] },
+        startsAt: { lt: endsAt },
+        endsAt: { gt: startsAt },
+      },
+    });
+    if (overlap) {
+      throw new BadRequestException('القاعة محجوزة في هذا الوقت');
+    }
+
+    return this.prisma.roomRental.update({
+      where: { id },
+      data: {
+        classroomId,
+        renterName:
+          data.renterName != null
+            ? data.renterName.trim()
+            : rental.renterName,
+        renterPhone:
+          data.renterPhone !== undefined
+            ? data.renterPhone
+              ? normalizePhone(data.renterPhone)
+              : null
+            : rental.renterPhone,
+        title: data.title !== undefined ? data.title || null : rental.title,
+        startsAt,
+        endsAt,
+        amount,
+        billingMode: mode,
+        headcount,
+        centerPerStudent,
+        method,
+        vodafoneTxn,
+        notes: data.notes !== undefined ? data.notes || null : rental.notes,
+      },
+      include: { classroom: true },
+    });
+  }
+
   /** Inventory snapshot: codes & handouts per teacher (totals + per offer/product). */
   async inventoryByTeacher() {
     const [offers, handouts, codeGroups, handoutSold] = await Promise.all([

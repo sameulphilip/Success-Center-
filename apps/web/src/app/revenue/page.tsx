@@ -104,6 +104,7 @@ type HandoutSale = {
 
 type Rental = {
   id: string;
+  classroomId: string;
   renterName: string;
   renterPhone?: string | null;
   title?: string | null;
@@ -114,11 +115,34 @@ type Rental = {
   headcount?: number | null;
   centerPerStudent?: string | number | null;
   method: string;
+  vodafoneTxn?: string | null;
   payStatus: string;
   cashTo?: 'DRAWER' | 'OWNER' | 'TEACHER_HOLD' | 'SAFE';
   status: string;
   receiptNumber?: string | null;
   classroom: Classroom;
+};
+
+function toDatetimeLocal(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+const emptyRentalForm = {
+  classroomId: '',
+  renterName: '',
+  renterPhone: '',
+  title: '',
+  startsAt: '',
+  endsAt: '',
+  billingMode: 'FLAT' as 'FLAT' | 'PER_STUDENT',
+  amount: 0,
+  headcount: 1,
+  centerPerStudent: 0,
+  method: 'CASH',
+  vodafoneTxn: '',
 };
 
 function cashToLabel(to?: string) {
@@ -250,20 +274,8 @@ export default function RevenuePage() {
     qty: 1,
     note: '',
   });
-  const [rentalForm, setRentalForm] = useState({
-    classroomId: '',
-    renterName: '',
-    renterPhone: '',
-    title: '',
-    startsAt: '',
-    endsAt: '',
-    billingMode: 'FLAT' as 'FLAT' | 'PER_STUDENT',
-    amount: 0,
-    headcount: 1,
-    centerPerStudent: 0,
-    method: 'CASH',
-    vodafoneTxn: '',
-  });
+  const [rentalForm, setRentalForm] = useState({ ...emptyRentalForm });
+  const [editingRentalId, setEditingRentalId] = useState('');
 
   const [printOpen, setPrintOpen] = useState(false);
   const [printTab, setPrintTab] = useState<RevenueTab>('online');
@@ -723,44 +735,47 @@ export default function RevenuePage() {
     setBusy('rental');
     try {
       const perStudent = rentalForm.billingMode === 'PER_STUDENT';
-      const rental = await api<Rental>('/revenue/rentals', {
-        method: 'POST',
-        body: JSON.stringify({
-          classroomId: rentalForm.classroomId,
-          renterName: rentalForm.renterName,
-          renterPhone: rentalForm.renterPhone || undefined,
-          title: rentalForm.title || undefined,
-          startsAt: rentalForm.startsAt,
-          endsAt: rentalForm.endsAt,
-          billingMode: rentalForm.billingMode,
-          amount: perStudent ? undefined : rentalForm.amount,
-          headcount: perStudent ? rentalForm.headcount : undefined,
-          centerPerStudent: perStudent
-            ? rentalForm.centerPerStudent
+      const payload = {
+        classroomId: rentalForm.classroomId,
+        renterName: rentalForm.renterName,
+        renterPhone: rentalForm.renterPhone || undefined,
+        title: rentalForm.title || undefined,
+        startsAt: rentalForm.startsAt,
+        endsAt: rentalForm.endsAt,
+        billingMode: rentalForm.billingMode,
+        amount: perStudent ? undefined : rentalForm.amount,
+        headcount: perStudent ? rentalForm.headcount : undefined,
+        centerPerStudent: perStudent
+          ? rentalForm.centerPerStudent
+          : undefined,
+        method: rentalForm.method,
+        vodafoneTxn:
+          rentalForm.method === 'VODAFONE_CASH'
+            ? rentalForm.vodafoneTxn
             : undefined,
-          method: rentalForm.method,
-          vodafoneTxn:
-            rentalForm.method === 'VODAFONE_CASH'
-              ? rentalForm.vodafoneTxn
-              : undefined,
-        }),
-      });
+      };
+      const rental = editingRentalId
+        ? await api<Rental>(`/revenue/rentals/${editingRentalId}`, {
+            method: 'PATCH',
+            body: JSON.stringify(payload),
+          })
+        : await api<Rental>('/revenue/rentals', {
+            method: 'POST',
+            body: JSON.stringify(payload),
+          });
       const headNote =
         rental.billingMode === 'PER_STUDENT' && rental.headcount
           ? ` · ${rental.headcount} طالب`
           : '';
       setMsg(
-        `تم حجز القاعة${headNote} · الفلوس على ${cashToLabel(rental.cashTo)}`,
+        editingRentalId
+          ? `تم تعديل حجز القاعة${headNote}`
+          : `تم حجز القاعة${headNote} · الفلوس على ${cashToLabel(rental.cashTo)}`,
       );
+      setEditingRentalId('');
       setRentalForm((f) => ({
-        ...f,
-        renterName: '',
-        renterPhone: '',
-        title: '',
-        amount: 0,
-        headcount: 1,
-        centerPerStudent: 0,
-        vodafoneTxn: '',
+        ...emptyRentalForm,
+        classroomId: f.classroomId || rooms[0]?.id || '',
       }));
       await load();
     } catch (err: any) {
@@ -768,6 +783,35 @@ export default function RevenuePage() {
     } finally {
       setBusy('');
     }
+  }
+
+  function startEditRental(r: Rental) {
+    setEditingRentalId(r.id);
+    setRentalForm({
+      classroomId: r.classroomId || r.classroom?.id || '',
+      renterName: r.renterName || '',
+      renterPhone: r.renterPhone || '',
+      title: r.title || '',
+      startsAt: toDatetimeLocal(r.startsAt),
+      endsAt: toDatetimeLocal(r.endsAt),
+      billingMode:
+        r.billingMode === 'PER_STUDENT' ? 'PER_STUDENT' : 'FLAT',
+      amount: Number(r.amount) || 0,
+      headcount: r.headcount || 1,
+      centerPerStudent: Number(r.centerPerStudent) || 0,
+      method: r.method || 'CASH',
+      vodafoneTxn: r.vodafoneTxn || '',
+    });
+    setError('');
+    setMsg('');
+  }
+
+  function cancelEditRental() {
+    setEditingRentalId('');
+    setRentalForm((f) => ({
+      ...emptyRentalForm,
+      classroomId: f.classroomId || rooms[0]?.id || '',
+    }));
   }
 
   async function confirmRental(id: string) {
@@ -778,6 +822,7 @@ export default function RevenuePage() {
 
   async function cancelRental(id: string) {
     await api(`/revenue/rentals/${id}/cancel`, { method: 'POST' });
+    if (editingRentalId === id) cancelEditRental();
     await load();
   }
 
@@ -2039,7 +2084,9 @@ export default function RevenuePage() {
 
       {tab === 'rooms' ? (
         <div className="grid gap-4 xl:grid-cols-2">
-          <SectionCard title="تأجير قاعة">
+          <SectionCard
+            title={editingRentalId ? 'تعديل حجز قاعة' : 'تأجير قاعة'}
+          >
             <form onSubmit={createRental} className="space-y-2">
               <FieldLabel label="القاعة">
                 <select
@@ -2231,8 +2278,17 @@ export default function RevenuePage() {
                 className="btn-primary w-full"
                 disabled={busy === 'rental' || !rooms.length}
               >
-                حفظ التأجير
+                {editingRentalId ? 'حفظ التعديل' : 'حفظ التأجير'}
               </button>
+              {editingRentalId ? (
+                <button
+                  type="button"
+                  className="btn-ghost w-full"
+                  onClick={cancelEditRental}
+                >
+                  إلغاء التعديل
+                </button>
+              ) : null}
               {!rooms.length ? (
                 <p className="text-xs text-navy/45">
                   أضف قاعات من صفحة الإعدادات أولًا
@@ -2257,7 +2313,9 @@ export default function RevenuePage() {
               {pRentals.slice.map((r) => (
                 <li
                   key={r.id}
-                  className="rounded-xl border border-mist px-3 py-2"
+                  className={`rounded-xl border border-mist px-3 py-2 ${
+                    editingRentalId === r.id ? 'ring-2 ring-navy/25' : ''
+                  }`}
                 >
                   <p className="font-semibold">
                     {r.classroom.name} · {r.renterName}
@@ -2273,7 +2331,16 @@ export default function RevenuePage() {
                       : ''}{' '}
                     · {cashToLabel(r.cashTo)} · {r.status} · {r.payStatus}
                   </p>
-                  <div className="mt-2 flex gap-2">
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {toOwner && r.status !== 'CANCELLED' ? (
+                      <button
+                        type="button"
+                        className="btn-ghost text-xs"
+                        onClick={() => startEditRental(r)}
+                      >
+                        تعديل
+                      </button>
+                    ) : null}
                     {r.payStatus === 'PENDING_CONFIRM' ? (
                       <button
                         type="button"

@@ -325,6 +325,30 @@ export class RevenueController {
     return this.revenue.confirmRental(id, user?.userId);
   }
 
+  @Patch('rentals/:id')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  updateRental(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      classroomId?: string;
+      renterName?: string;
+      renterPhone?: string;
+      title?: string;
+      startsAt?: string;
+      endsAt?: string;
+      amount?: number;
+      billingMode?: 'FLAT' | 'PER_STUDENT';
+      headcount?: number;
+      centerPerStudent?: number;
+      method?: SessionPayMethod;
+      vodafoneTxn?: string;
+      notes?: string;
+    },
+  ) {
+    return this.revenue.updateRental(id, body);
+  }
+
   @Post('rentals/:id/cancel')
   @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER, RoleCode.RECEPTION)
   cancelRental(@Param('id') id: string) {
