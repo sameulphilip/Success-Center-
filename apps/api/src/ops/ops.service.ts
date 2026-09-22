@@ -24,6 +24,13 @@ import {
 
 const PHONE_CHECKIN_LIMIT = 2;
 
+/** Secondary grades that require a paid form after the first visit to a teacher. */
+const FORM_REQUIRED_SECONDARY_GRADES = new Set([
+  'الأول الثانوي',
+  'الثاني الثانوي',
+  'الثالث الثانوي',
+]);
+
 function isPaidStatus(status?: SessionPayStatus | null) {
   return (
     status === SessionPayStatus.CONFIRMED ||
@@ -563,6 +570,75 @@ export class OpsService {
     }
   }
 
+  /**
+   * Secondary students may attend only one session with the same teacher
+   * without a PAID booking form, unless the teacher is exempt (Palestine).
+   * Prior confirmed visits (including history) count toward the limit.
+   */
+  private async assertSecondaryFormGate(args: {
+    studentId: string;
+    studentPhone?: string | null;
+    gradeLevelId?: string | null;
+    teacherId: string;
+    sessionId: string;
+  }) {
+    const teacher = await this.prisma.teacher.findUnique({
+      where: { id: args.teacherId },
+      select: {
+        firstName: true,
+        lastName: true,
+        allowWalkInWithoutForm: true,
+      },
+    });
+    if (!teacher) throw new NotFoundException('المدرس غير موجود');
+    if (teacher.allowWalkInWithoutForm) return;
+
+    if (!args.gradeLevelId) return;
+    const grade = await this.prisma.gradeLevel.findUnique({
+      where: { id: args.gradeLevelId },
+      select: { nameAr: true },
+    });
+    if (!grade || !FORM_REQUIRED_SECONDARY_GRADES.has(grade.nameAr)) return;
+
+    const phoneVariants = args.studentPhone
+      ? phoneLookupVariants(args.studentPhone)
+      : [];
+    const paidForm = await this.prisma.bookingSubmission.findFirst({
+      where: {
+        status: 'PAID',
+        OR: [
+          { studentId: args.studentId },
+          ...(phoneVariants.length
+            ? [{ studentPhone: { in: phoneVariants } }]
+            : []),
+        ],
+      },
+      select: { id: true },
+    });
+    if (paidForm) return;
+
+    const priorVisits = await this.prisma.sessionEntry.count({
+      where: {
+        studentId: args.studentId,
+        sessionId: { not: args.sessionId },
+        payStatus: {
+          in: [
+            SessionPayStatus.CONFIRMED,
+            SessionPayStatus.PARTIALLY_REFUNDED,
+          ],
+        },
+        session: { teacherId: args.teacherId },
+      },
+    });
+    if (priorVisits < 1) return;
+
+    const teacherName =
+      `${teacher.firstName} ${teacher.lastName === '-' ? '' : teacher.lastName}`.trim();
+    throw new BadRequestException(
+      `طالب ثانوي حضر قبل كده عند ${teacherName} من غير استمارة مدفوعة. سجّل الاستمارة وادفعها الأول، أو استخدم مدرس مستثنى (فلسطين).`,
+    );
+  }
+
   async findStudent(query: {
     phone?: string;
     studentUid?: string;
@@ -763,6 +839,13 @@ export class OpsService {
     if (!student.isActive) throw new BadRequestException('حساب الطالب غير نشط');
 
     await this.assertNotBlocked(student.id, session.teacherId);
+    await this.assertSecondaryFormGate({
+      studentId: student.id,
+      studentPhone: student.phone,
+      gradeLevelId: student.gradeLevelId,
+      teacherId: session.teacherId,
+      sessionId,
+    });
 
     const existing = await this.prisma.sessionEntry.findUnique({
       where: {

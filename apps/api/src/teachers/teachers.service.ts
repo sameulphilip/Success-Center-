@@ -69,6 +69,7 @@ export class TeachersService {
     phone?: string;
     email?: string;
     hourlyRate?: number;
+    allowWalkInWithoutForm?: boolean;
     subjectIds?: string[];
     gradeLevelIds?: string[];
   }) {
@@ -79,6 +80,7 @@ export class TeachersService {
         phone: data.phone,
         email: data.email || null,
         hourlyRate: data.hourlyRate ?? 0,
+        allowWalkInWithoutForm: Boolean(data.allowWalkInWithoutForm),
         subjects: data.subjectIds?.length
           ? {
               create: data.subjectIds.map((subjectId) => ({ subjectId })),
@@ -108,6 +110,7 @@ export class TeachersService {
       email?: string;
       hourlyRate?: number;
       isActive?: boolean;
+      allowWalkInWithoutForm?: boolean;
       subjectIds?: string[];
       gradeLevelIds?: string[];
     },

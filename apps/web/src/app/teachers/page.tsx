@@ -18,6 +18,7 @@ type TeacherForm = {
   lastName: string;
   phone: string;
   hourlyRate: number;
+  allowWalkInWithoutForm: boolean;
   subjectIds: string[];
   gradeLevelIds: string[];
 };
@@ -27,6 +28,7 @@ const emptyForm = (): TeacherForm => ({
   lastName: '',
   phone: '',
   hourlyRate: 200,
+  allowWalkInWithoutForm: false,
   subjectIds: [],
   gradeLevelIds: [],
 });
@@ -75,6 +77,7 @@ export default function TeachersPage() {
       lastName: t.lastName === '-' ? '' : t.lastName || '',
       phone: t.phone || '',
       hourlyRate: Number(t.hourlyRate || 0),
+      allowWalkInWithoutForm: Boolean(t.allowWalkInWithoutForm),
       subjectIds: (t.subjects || [])
         .map((s: any) => s.subjectId || s.subject?.id)
         .filter(Boolean),
@@ -244,6 +247,11 @@ export default function TeachersPage() {
                   >
                     <td className="font-semibold text-navy">
                       {t.firstName} {t.lastName === '-' ? '' : t.lastName}
+                      {t.allowWalkInWithoutForm ? (
+                        <span className="badge-gold ms-2 text-[10px] font-normal">
+                          بدون استمارة
+                        </span>
+                      ) : null}
                       {t.phone ? (
                         <p className="text-xs text-navy/40 font-normal mt-0.5">
                           {t.phone}
@@ -366,6 +374,26 @@ export default function TeachersPage() {
                 }
               />
             </FieldLabel>
+            <label className="flex items-start gap-2 rounded-xl border border-mist px-3 py-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={form.allowWalkInWithoutForm}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    allowWalkInWithoutForm: e.target.checked,
+                  })
+                }
+              />
+              <span>
+                <span className="font-semibold">يسمح بدخول بدون استمارة</span>
+                <span className="mt-0.5 block text-xs text-navy/55">
+                  للمدرسين المستثنين (فلسطين) — طلاب الثانوي يقدروا يحضروا أكتر
+                  من مرة من غير استمارة مدفوعة
+                </span>
+              </span>
+            </label>
             <FieldLabel label="الصف الدراسي (اختيار متعدد)">
               <select
                 multiple

@@ -258,6 +258,11 @@ model Teacher {
   email       String?
   hourlyRate  Decimal          @default(0) @db.Decimal(12, 2)
   isActive    Boolean          @default(true)
+  /**
+   * Palestine / exempt teachers: secondary students may attend repeatedly
+   * without a paid booking form.
+   */
+  allowWalkInWithoutForm Boolean @default(false)
   subjects    TeacherSubject[]
   gradeLevels TeacherGradeLevel[]
   groups      Group[]

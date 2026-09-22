@@ -63,6 +63,7 @@ export class TeachersController {
       phone?: string;
       email?: string;
       hourlyRate?: number;
+      allowWalkInWithoutForm?: boolean;
       subjectIds?: string[];
       gradeLevelIds?: string[];
     },
