@@ -452,10 +452,13 @@ export default function OpsPage() {
       } catch (err: any) {
         setScanned(null);
         setScanOpen(false);
+        const msg = String(err?.message || 'QR غير معروف');
+        const formGate =
+          msg.includes('استمارة') || msg.includes('طالب ثانوي');
         setScanNotice({
           tone: 'error',
-          title: 'مرفوض',
-          message: err.message || 'QR غير معروف',
+          title: formGate ? 'الاستمارة مطلوبة' : 'مرفوض',
+          message: msg,
         });
       }
     },
@@ -665,7 +668,16 @@ export default function OpsPage() {
       await loadLists();
       setMsg('تم تسجيل الدفع والحضور');
     } catch (err: any) {
-      setError(err.message);
+      const msg = String(err?.message || 'تعذّر تسجيل الدفع');
+      if (msg.includes('استمارة') || msg.includes('طالب ثانوي')) {
+        setScanNotice({
+          tone: 'error',
+          title: 'الاستمارة مطلوبة',
+          message: msg,
+        });
+      } else {
+        setError(msg);
+      }
     } finally {
       setBusy('');
     }
@@ -1617,7 +1629,8 @@ export default function OpsPage() {
                     {!scanned && payMatch.status === 'missing' ? (
                       <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
                         <p className="text-xs font-semibold text-amber-900">
-                          مش موجود في الطلاب — كمّل البيانات دي عشان نفتح له ملف
+                          مش موجود في الطلاب — تقدر تفتح ملف لإعدادي / IG فقط.
+                          طلاب الثانوي من الاستمارة المدفوعة بس.
                         </p>
                         <FieldLabel label="الصف">
                           <select
@@ -1632,11 +1645,18 @@ export default function OpsPage() {
                             }
                           >
                             <option value="">اختَر الصف</option>
-                            {grades.map((g) => (
-                              <option key={g.id} value={g.id}>
-                                {g.nameAr}
-                              </option>
-                            ))}
+                            {grades
+                              .filter(
+                                (g) =>
+                                  !['الأول الثانوي', 'الثاني الثانوي', 'الثالث الثانوي'].includes(
+                                    g.nameAr,
+                                  ),
+                              )
+                              .map((g) => (
+                                <option key={g.id} value={g.id}>
+                                  {g.nameAr}
+                                </option>
+                              ))}
                           </select>
                         </FieldLabel>
                         <FieldLabel label="موبايل ولي الأمر">

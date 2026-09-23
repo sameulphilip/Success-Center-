@@ -19,6 +19,11 @@ function cairoBounds(ymd: string) {
   return { start, end };
 }
 
+function money(v: unknown) {
+  const n = Number(v || 0);
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0;
+}
+
 @Injectable()
 export class FinanceService {
   constructor(
@@ -43,6 +48,7 @@ export class FinanceService {
       invoiceCount,
       paymentCount,
       drawer,
+      collectedAllBreakdown,
     ] = await Promise.all([
       this.prisma.payment.aggregate({
         where: { paidAt: { gte: start, lte: end } },
@@ -100,6 +106,7 @@ export class FinanceService {
       this.prisma.invoice.count(),
       this.prisma.payment.count(),
       this.cash.collectionsForDay(ymd),
+      this.collectedAllBreakdown(),
     ]);
 
     const outstandingAmount = outstandingInvoices.reduce((sum, inv) => {
@@ -120,6 +127,7 @@ export class FinanceService {
       collectedAll:
         Number(paymentsAllAgg._sum.amount || 0) +
         Number(sessionsAllAgg._sum.amount || 0),
+      collectedAllBreakdown,
       paymentsTodayCount: paymentsTodayAgg._count + sessionsTodayAgg._count,
       paymentsMonthCount: paymentsMonthAgg._count + sessionsMonthAgg._count,
       paymentCount: paymentCount + sessionsAllAgg._count,
@@ -127,6 +135,136 @@ export class FinanceService {
       outstandingAmount,
       outstandingStudents: new Set(outstandingInvoices.map((i) => i.studentId))
         .size,
+    };
+  }
+
+  /**
+   * Breakdown of «إجمالي المتحصل» (= Payment amounts + confirmed SessionEntry amounts)
+   * with estimated center share per bucket.
+   */
+  async collectedAllBreakdown() {
+    const payments = await this.prisma.payment.findMany({
+      select: {
+        amount: true,
+        receiptNumber: true,
+        note: true,
+        invoice: { select: { note: true, groupId: true } },
+      },
+    });
+
+    const isBookingPay = (p: {
+      receiptNumber?: string | null;
+      note?: string | null;
+      invoice?: { note?: string | null } | null;
+    }) => {
+      const blob = `${p.receiptNumber || ''} ${p.note || ''} ${p.invoice?.note || ''}`.toLowerCase();
+      return (p.receiptNumber || '').startsWith('BK-') || blob.includes('حجز');
+    };
+
+    let bookingGross = 0;
+    let bookingCount = 0;
+    let groupsGross = 0;
+    let groupsCount = 0;
+    let otherGross = 0;
+    let otherCount = 0;
+    for (const p of payments) {
+      const amt = money(p.amount);
+      if (isBookingPay(p)) {
+        bookingGross += amt;
+        bookingCount += 1;
+      } else if (p.invoice?.groupId) {
+        groupsGross += amt;
+        groupsCount += 1;
+      } else {
+        otherGross += amt;
+        otherCount += 1;
+      }
+    }
+
+    const sessions = await this.prisma.classSession.findMany({
+      where: { entries: { some: { payStatus: 'CONFIRMED' } } },
+      select: {
+        feeAmount: true,
+        centerAmount: true,
+        teacherPercent: true,
+        settledTeacherAmount: true,
+        settledCenterAmount: true,
+        entries: {
+          where: { payStatus: 'CONFIRMED' },
+          select: {
+            amount: true,
+            refundedAmount: true,
+            centerKeepsAll: true,
+          },
+        },
+      },
+    });
+
+    const sessionsAgg = await this.prisma.sessionEntry.aggregate({
+      where: { payStatus: 'CONFIRMED' },
+      _sum: { amount: true },
+      _count: true,
+    });
+    const sessionsGross = money(sessionsAgg._sum.amount);
+    const sessionsCount = sessionsAgg._count;
+
+    let sessionsCenter = 0;
+    for (const s of sessions) {
+      const split = splitSessionFromEntries({
+        entries: s.entries,
+        feeAmount: s.feeAmount,
+        centerAmount: s.centerAmount,
+        teacherPercent: s.teacherPercent,
+        settledTeacherAmount: s.settledTeacherAmount,
+        settledCenterAmount: s.settledCenterAmount,
+      });
+      sessionsCenter += money(split.centerShare);
+    }
+
+    const round = (n: number) => Math.round(n * 100) / 100;
+    const rows = [
+      {
+        key: 'booking',
+        label: 'استمارات حجز',
+        amount: round(bookingGross),
+        centerShare: round(bookingGross),
+        centerNote: '١٠٠٪ للسنتر',
+        count: bookingCount,
+      },
+      {
+        key: 'groups',
+        label: 'اشتراكات مجموعات',
+        amount: round(groupsGross),
+        centerShare: round(groupsGross),
+        centerNote: '١٠٠٪ للسنتر',
+        count: groupsCount,
+      },
+      {
+        key: 'other',
+        label: 'إيصالات أخرى',
+        amount: round(otherGross),
+        centerShare: round(otherGross),
+        centerNote: '١٠٠٪ للسنتر',
+        count: otherCount,
+      },
+      {
+        key: 'sessions',
+        label: 'حضور حصص',
+        amount: round(sessionsGross),
+        centerShare: round(sessionsCenter),
+        centerNote: 'نصيب السنتر بعد القسمة مع المدرس',
+        count: sessionsCount,
+      },
+    ].filter((r) => r.amount > 0.009 || r.count > 0);
+
+    return {
+      total: round(
+        bookingGross + groupsGross + otherGross + sessionsGross,
+      ),
+      centerTotal: round(
+        bookingGross + groupsGross + otherGross + sessionsCenter,
+      ),
+      rows,
     };
   }
 

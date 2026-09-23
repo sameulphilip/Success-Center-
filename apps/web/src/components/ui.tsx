@@ -18,7 +18,13 @@ export function PageHero({
   eyebrow?: string;
   title: string;
   subtitle?: string;
-  metrics?: { label: string; value: string | number; highlight?: boolean }[];
+  metrics?: {
+    label: string;
+    value: string | number;
+    highlight?: boolean;
+    onClick?: () => void;
+    hint?: string;
+  }[];
   actions?: ReactNode;
 }) {
   return (
@@ -67,11 +73,13 @@ export function PageHero({
                 'from-emerald-400/25 to-emerald-400/5',
                 'from-amber-300/25 to-amber-300/5',
               ];
-              return (
-                <div
-                  key={m.label}
-                  className={`rounded-xl bg-gradient-to-b ${tones[i % tones.length]} border border-white/10 px-2 py-2 sm:px-3 backdrop-blur-[2px] min-w-0`}
-                >
+              const className = `rounded-xl bg-gradient-to-b ${tones[i % tones.length]} border border-white/10 px-2 py-2 sm:px-3 backdrop-blur-[2px] min-w-0 ${
+                m.onClick
+                  ? 'cursor-pointer transition hover:border-gold/40 hover:bg-white/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/50'
+                  : ''
+              }`;
+              const body = (
+                <>
                   <p className="text-[10px] sm:text-[11px] text-white/60 truncate">
                     {m.label}
                   </p>
@@ -82,6 +90,25 @@ export function PageHero({
                   >
                     {m.value}
                   </p>
+                  {m.onClick || m.hint ? (
+                    <p className="mt-0.5 text-[9px] text-gold/80">
+                      {m.hint || 'اضغط للتفاصيل'}
+                    </p>
+                  ) : null}
+                </>
+              );
+              return m.onClick ? (
+                <button
+                  key={m.label}
+                  type="button"
+                  className={className}
+                  onClick={m.onClick}
+                >
+                  {body}
+                </button>
+              ) : (
+                <div key={m.label} className={className}>
+                  {body}
                 </div>
               );
             })}

@@ -24,7 +24,7 @@ import {
 
 const PHONE_CHECKIN_LIMIT = 2;
 
-/** Secondary grades that require a paid form after the first visit to a teacher. */
+/** Secondary grades: accounts via paid form only; session walk-in create blocked. */
 const FORM_REQUIRED_SECONDARY_GRADES = new Set([
   'الأول الثانوي',
   'الثاني الثانوي',
@@ -571,22 +571,18 @@ export class OpsService {
   }
 
   /**
-   * Secondary students may attend only one session with the same teacher
-   * without a PAID booking form, unless the teacher is exempt (Palestine).
-   * Prior confirmed visits (including history) count toward the limit.
+   * Secondary students must have a PAID booking form before any session
+   * attendance, unless the teacher is exempt (Palestine).
    */
   private async assertSecondaryFormGate(args: {
     studentId: string;
     studentPhone?: string | null;
     gradeLevelId?: string | null;
     teacherId: string;
-    sessionId: string;
   }) {
     const teacher = await this.prisma.teacher.findUnique({
       where: { id: args.teacherId },
       select: {
-        firstName: true,
-        lastName: true,
         allowWalkInWithoutForm: true,
       },
     });
@@ -617,25 +613,8 @@ export class OpsService {
     });
     if (paidForm) return;
 
-    const priorVisits = await this.prisma.sessionEntry.count({
-      where: {
-        studentId: args.studentId,
-        sessionId: { not: args.sessionId },
-        payStatus: {
-          in: [
-            SessionPayStatus.CONFIRMED,
-            SessionPayStatus.PARTIALLY_REFUNDED,
-          ],
-        },
-        session: { teacherId: args.teacherId },
-      },
-    });
-    if (priorVisits < 1) return;
-
-    const teacherName =
-      `${teacher.firstName} ${teacher.lastName === '-' ? '' : teacher.lastName}`.trim();
     throw new BadRequestException(
-      `طالب ثانوي حضر قبل كده عند ${teacherName} من غير استمارة مدفوعة. سجّل الاستمارة وادفعها الأول، أو استخدم مدرس مستثنى (فلسطين).`,
+      'طالب ثانوي لازم يكون معاه استمارة مدفوعة قبل الحضور. سجّل الاستمارة وادفعها الأول، أو استخدم مدرس مستثنى (فلسطين).',
     );
   }
 
@@ -759,6 +738,11 @@ export class OpsService {
       where: { id: gradeLevelId },
     });
     if (!grade) throw new BadRequestException('الصف غير موجود');
+    if (FORM_REQUIRED_SECONDARY_GRADES.has(grade.nameAr)) {
+      throw new BadRequestException(
+        'طلاب الثانوي بيتسجلوا من الاستمارة المدفوعة فقط — مش من الحصة. سجّل الاستمارة وادفعها الأول، وبعدين الحضور.',
+      );
+    }
 
     const already = await this.findStudent({ phone });
     if (already) return already;
@@ -844,7 +828,6 @@ export class OpsService {
       studentPhone: student.phone,
       gradeLevelId: student.gradeLevelId,
       teacherId: session.teacherId,
-      sessionId,
     });
 
     const existing = await this.prisma.sessionEntry.findUnique({

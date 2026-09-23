@@ -389,8 +389,8 @@ export default function TeachersPage() {
               <span>
                 <span className="font-semibold">يسمح بدخول بدون استمارة</span>
                 <span className="mt-0.5 block text-xs text-navy/55">
-                  للمدرسين المستثنين (فلسطين) — طلاب الثانوي يقدروا يحضروا أكتر
-                  من مرة من غير استمارة مدفوعة
+                  للمدرسين المستثنين (فلسطين) — طلاب الثانوي يقدروا يحضروا من
+                  غير استمارة مدفوعة
                 </span>
               </span>
             </label>

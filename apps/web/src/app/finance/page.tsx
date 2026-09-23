@@ -65,6 +65,18 @@ type FinanceSummary = {
   drawerCollectedToday?: number;
   collectedMonth: number;
   collectedAll: number;
+  collectedAllBreakdown?: {
+    total: number;
+    centerTotal: number;
+    rows: Array<{
+      key: string;
+      label: string;
+      amount: number;
+      centerShare: number;
+      centerNote?: string;
+      count: number;
+    }>;
+  };
   paymentsTodayCount: number;
   paymentsMonthCount: number;
   paymentCount: number;
@@ -425,6 +437,7 @@ export default function FinancePage() {
   const [advanceNote, setAdvanceNote] = useState('');
   const [showExtraSales, setShowExtraSales] = useState(false);
   const [safeDetailOpen, setSafeDetailOpen] = useState(false);
+  const [collectedAllOpen, setCollectedAllOpen] = useState(false);
   const [auditLogs, setAuditLogs] = useState<
     Array<{
       id: string;
@@ -2221,6 +2234,8 @@ export default function FinancePage() {
           {
             label: 'إجمالي المتحصل',
             value: money(summary?.collectedAll ?? 0),
+            onClick: () => setCollectedAllOpen(true),
+            hint: 'اضغط للتفاصيل',
           },
           {
             label: 'عدد الإيصالات',
@@ -2419,6 +2434,75 @@ export default function FinancePage() {
       </>
       ) : null}
 
+      <AppDialog
+        open={collectedAllOpen}
+        tone="info"
+        title="تفصيل إجمالي المتحصل"
+        message="الرقم = مجموع إيصالات الدفع (استمارات / اشتراكات / أخرى) + حضور الحصص المؤكد. نصيب السنتر في الحصص بعد القسمة مع المدرس."
+        confirmLabel="حسناً"
+        onConfirm={() => setCollectedAllOpen(false)}
+        onClose={() => setCollectedAllOpen(false)}
+      >
+        {summary?.collectedAllBreakdown ? (
+          <div className="mt-4 max-h-[60vh] space-y-3 overflow-auto overscroll-contain text-sm">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="rounded-xl border border-navy/10 bg-sand/40 px-3 py-3">
+                <p className="text-[11px] font-bold text-navy/55">
+                  إجمالي المتحصل
+                </p>
+                <p className="text-xl font-black tabular-nums text-navy">
+                  {money(summary.collectedAllBreakdown.total)}
+                </p>
+              </div>
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 px-3 py-3">
+                <p className="text-[11px] font-bold text-emerald-900">
+                  إجمالي نصيب السنتر
+                </p>
+                <p className="text-xl font-black tabular-nums text-navy">
+                  {money(summary.collectedAllBreakdown.centerTotal)}
+                </p>
+              </div>
+            </div>
+            <div className="overflow-hidden rounded-xl border border-navy/10">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-sand text-[11px] text-navy/45">
+                    <th className="px-3 py-2 text-right font-medium">المصدر</th>
+                    <th className="px-3 py-2 text-left font-medium">عدد</th>
+                    <th className="px-3 py-2 text-left font-medium">المبلغ</th>
+                    <th className="px-3 py-2 text-left font-medium">نصيب السنتر</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {summary.collectedAllBreakdown.rows.map((row) => (
+                    <tr key={row.key} className="border-t border-navy/5">
+                      <td className="px-3 py-2">
+                        <p className="font-semibold text-navy">{row.label}</p>
+                        {row.centerNote ? (
+                          <p className="text-[10px] text-navy/45">
+                            {row.centerNote}
+                          </p>
+                        ) : null}
+                      </td>
+                      <td className="px-3 py-2 tabular-nums text-left">
+                        {row.count}
+                      </td>
+                      <td className="px-3 py-2 tabular-nums text-left font-semibold">
+                        {money(row.amount)}
+                      </td>
+                      <td className="px-3 py-2 tabular-nums text-left font-bold text-emerald-800">
+                        {money(row.centerShare)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
+          <p className="mt-3 text-sm text-navy/55">لا تفاصيل متاحة حالياً</p>
+        )}
+      </AppDialog>
       <AppDialog
         open={safeDetailOpen}
         tone="info"
