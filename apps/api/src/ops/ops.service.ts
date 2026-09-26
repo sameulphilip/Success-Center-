@@ -27,7 +27,7 @@ import {
 import { buildTeacherSettlementWhatsAppMessage } from './ops-whatsapp.util';
 const PHONE_CHECKIN_LIMIT = 2;
 
-/** Secondary grades: accounts via paid form only; session walk-in create blocked. */
+/** Secondary grades: after first free visit per teacher, paid form required. */
 const FORM_REQUIRED_SECONDARY_GRADES = new Set([
   'الأول الثانوي',
   'الثاني الثانوي',
@@ -1332,7 +1332,6 @@ export class OpsService {
       title: session.title,
       attendanceCount,
       teacherShare,
-      centerShare,
       centerName: process.env.CENTER_NAME || 'Success Center',
     });
 

@@ -5,7 +5,6 @@ export type TeacherSettlementWhatsAppParams = {
   title?: string | null;
   attendanceCount: number;
   teacherShare: number;
-  centerShare?: number;
   centerName?: string;
 };
 
@@ -26,7 +25,7 @@ export function buildTeacherSettlementWhatsAppMessage(
     params.subjectName?.trim() || params.title?.trim() || 'حصة';
   const date = params.sessionDate || '—';
 
-  const lines = [
+  return [
     `مرحباً أ/ ${name}،`,
     '',
     `شكراً لحضرتك — تم تقفيل وتسوية الحصة في ${center} ✅`,
@@ -34,14 +33,8 @@ export function buildTeacherSettlementWhatsAppMessage(
     `المادة: ${subject}`,
     `تاريخ الحصة: ${date}`,
     `عدد الحضور: ${params.attendanceCount}`,
-    `نصيب حضرتك: ${money(params.teacherShare)} ج.م`,
-  ];
-
-  if (params.centerShare != null && Number.isFinite(params.centerShare)) {
-    lines.push(`نصيب السنتر: ${money(params.centerShare)} ج.م`);
-  }
-
-  lines.push('', 'مع تحيات إدارة السنتر 🌟');
-
-  return lines.join('\n');
+    `إجمال المستحق لسيادتكم : ${money(params.teacherShare)} ج.م`,
+    '',
+    'مع تحيات إدارة السنتر 🌟',
+  ].join('\n');
 }
