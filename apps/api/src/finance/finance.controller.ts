@@ -39,6 +39,12 @@ export class FinanceController {
     return this.finance.summary();
   }
 
+  @Get('collected-all-breakdown')
+  @RequirePerms('finance.receipts')
+  collectedAllBreakdown() {
+    return this.finance.collectedAllBreakdown();
+  }
+
   @Get('invoices')
   @RequirePerms('finance.receipts')
   invoices(@Query('status') status?: PaymentStatus) {
@@ -53,8 +59,11 @@ export class FinanceController {
 
   @Get('payments')
   @RequirePerms('finance.receipts')
-  payments() {
-    return this.finance.listPayments();
+  payments(
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.finance.listPayments({ from, to });
   }
 
   @Post('payments')
@@ -229,6 +238,7 @@ export class FinanceController {
   }
 
   @Post('cash/handover')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
   @RequirePerms('finance.safe')
   handover(
     @CurrentUser() user: { userId: string },

@@ -87,13 +87,13 @@ type FinanceSummary = {
 
 type ReceiptRow = {
   id: string;
-  source: 'PAYMENT' | 'SESSION';
+  source: 'PAYMENT' | 'SESSION' | 'ONLINE' | 'HANDOUT' | 'RENTAL';
   student?: {
     firstName?: string;
     lastName?: string;
     phone?: string | null;
     studentUid?: string | null;
-  };
+  } | null;
   receiptNumber: string;
   amount: string | number;
   method?: string;
@@ -349,7 +349,11 @@ type CashSnapshot = {
 const reasonBadge: Record<string, string> = {
   'استمارة حجز': 'badge-navy',
   'حضور حصة': 'badge-ok',
+  'حضور حصة (ضيف)': 'badge-ok',
   'اشتراك مجموعة': 'badge-gold',
+  'كود أونلاين': 'badge-gold',
+  ملزمة: 'badge-warn',
+  'تأجير قاعة': 'badge-navy',
   تحصيل: 'badge-warn',
 };
 
@@ -420,6 +424,7 @@ export default function FinancePage() {
   const [expForm, setExpForm] = useState({
     amount: '',
     category: 'مستلزمات',
+    newCategory: '',
     paidFrom: (me?.role === 'RECEPTION' ? 'DRAWER' : 'OWNER') as
       | 'DRAWER'
       | 'SAFE'
@@ -438,6 +443,10 @@ export default function FinancePage() {
   const [showExtraSales, setShowExtraSales] = useState(false);
   const [safeDetailOpen, setSafeDetailOpen] = useState(false);
   const [collectedAllOpen, setCollectedAllOpen] = useState(false);
+  const [collectedAllBreakdown, setCollectedAllBreakdown] = useState<
+    FinanceSummary['collectedAllBreakdown'] | null
+  >(null);
+  const [collectedAllLoading, setCollectedAllLoading] = useState(false);
   const [auditLogs, setAuditLogs] = useState<
     Array<{
       id: string;
@@ -453,9 +462,22 @@ export default function FinancePage() {
     canReceipts ? 'receipts' : canSafe ? 'safe' : 'close',
   );
   const [reasonFilter, setReasonFilter] = useState<
-    'all' | 'booking' | 'session' | 'other'
+    | 'all'
+    | 'booking'
+    | 'session'
+    | 'online'
+    | 'handout'
+    | 'rental'
+    | 'other'
   >('all');
   const [receiptSearch, setReceiptSearch] = useState('');
+  const todayYmd = cairoYmd();
+  const [receiptFrom, setReceiptFrom] = useState(
+    () => `${todayYmd.slice(0, 7)}-01`,
+  );
+  const [receiptTo, setReceiptTo] = useState(() => todayYmd);
+  const [receiptRangeAll, setReceiptRangeAll] = useState(false);
+  const [receiptsBusy, setReceiptsBusy] = useState(false);
   const [confirm, setConfirm] = useState<null | {
     kind:
       | 'close'
@@ -469,7 +491,7 @@ export default function FinancePage() {
       | 'settle-hold';
     id?: string;
     date?: string;
-    source?: 'PAYMENT' | 'SESSION';
+    source?: 'PAYMENT' | 'SESSION' | 'ONLINE' | 'HANDOUT' | 'RENTAL';
     extraKind?: 'online' | 'handout' | 'rental';
     teacherId?: string;
     teacherName?: string;
@@ -479,13 +501,22 @@ export default function FinancePage() {
   }>(null);
 
   const receiptCounts = useMemo(() => {
+    const isSession = (r: string) =>
+      r === 'حضور حصة' || r === 'حضور حصة (ضيف)';
     const booking = payments.filter((p) => p.reason === 'استمارة حجز').length;
-    const session = payments.filter((p) => p.reason === 'حضور حصة').length;
+    const session = payments.filter((p) => isSession(p.reason)).length;
+    const online = payments.filter((p) => p.reason === 'كود أونلاين').length;
+    const handout = payments.filter((p) => p.reason === 'ملزمة').length;
+    const rental = payments.filter((p) => p.reason === 'تأجير قاعة').length;
+    const known = booking + session + online + handout + rental;
     return {
       total: payments.length,
       booking,
       session,
-      other: Math.max(0, payments.length - booking - session),
+      online,
+      handout,
+      rental,
+      other: Math.max(0, payments.length - known),
     };
   }, [payments]);
 
@@ -494,10 +525,26 @@ export default function FinancePage() {
     if (reasonFilter === 'booking') {
       rows = rows.filter((p) => p.reason === 'استمارة حجز');
     } else if (reasonFilter === 'session') {
-      rows = rows.filter((p) => p.reason === 'حضور حصة');
+      rows = rows.filter(
+        (p) => p.reason === 'حضور حصة' || p.reason === 'حضور حصة (ضيف)',
+      );
+    } else if (reasonFilter === 'online') {
+      rows = rows.filter((p) => p.reason === 'كود أونلاين');
+    } else if (reasonFilter === 'handout') {
+      rows = rows.filter((p) => p.reason === 'ملزمة');
+    } else if (reasonFilter === 'rental') {
+      rows = rows.filter((p) => p.reason === 'تأجير قاعة');
     } else if (reasonFilter === 'other') {
       rows = rows.filter(
-        (p) => p.reason !== 'استمارة حجز' && p.reason !== 'حضور حصة',
+        (p) =>
+          ![
+            'استمارة حجز',
+            'حضور حصة',
+            'حضور حصة (ضيف)',
+            'كود أونلاين',
+            'ملزمة',
+            'تأجير قاعة',
+          ].includes(p.reason),
       );
     }
     const q = receiptSearch.trim().toLowerCase();
@@ -524,14 +571,40 @@ export default function FinancePage() {
 
   const pagedReceipts = usePaged(
     visiblePayments,
-    `${reasonFilter}:${receiptSearch}`,
+    `${reasonFilter}:${receiptSearch}:${receiptRangeAll}:${receiptFrom}:${receiptTo}`,
   );
+
+  async function loadPayments(opts?: {
+    from?: string;
+    to?: string;
+    all?: boolean;
+  }) {
+    if (!canReceipts) return;
+    const all = opts?.all ?? receiptRangeAll;
+    const from = opts?.from ?? receiptFrom;
+    const to = opts?.to ?? receiptTo;
+    const qs = new URLSearchParams();
+    if (!all) {
+      if (from) qs.set('from', from);
+      if (to) qs.set('to', to);
+    }
+    const q = qs.toString();
+    setReceiptsBusy(true);
+    try {
+      const rows = await api<ReceiptRow[]>(
+        `/finance/payments${q ? `?${q}` : ''}`,
+      );
+      setPayments(rows);
+    } finally {
+      setReceiptsBusy(false);
+    }
+  }
 
   async function load() {
     const jobs: Promise<unknown>[] = [];
     if (canReceipts) {
       jobs.push(
-        api<ReceiptRow[]>('/finance/payments').then(setPayments),
+        loadPayments(),
         api<FinanceSummary>('/finance/summary').then(setSummary),
       );
     }
@@ -611,6 +684,14 @@ export default function FinancePage() {
 
   async function submitExpense(e: FormEvent) {
     e.preventDefault();
+    const category =
+      expForm.category === '__new__'
+        ? expForm.newCategory.trim()
+        : expForm.category.trim();
+    if (category.length < 2) {
+      setError('اكتب اسم البند');
+      return;
+    }
     setBusy('expense');
     setError('');
     try {
@@ -618,13 +699,19 @@ export default function FinancePage() {
         method: 'POST',
         body: JSON.stringify({
           amount: Number(expForm.amount),
-          category: expForm.category,
+          category,
           paidFrom: expForm.paidFrom,
           note: expForm.note || undefined,
           businessDate: expForm.businessDate || undefined,
         }),
       });
-      setExpForm((f) => ({ ...f, amount: '', note: '' }));
+      setExpForm((f) => ({
+        ...f,
+        amount: '',
+        note: '',
+        category,
+        newCategory: '',
+      }));
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'فشل تسجيل المصروف');
@@ -695,7 +782,7 @@ export default function FinancePage() {
       setHandNote('');
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'فشل التسليم');
+      setError(err instanceof Error ? err.message : 'فشل تسجيل الاستلام');
     } finally {
       setBusy('');
     }
@@ -797,7 +884,7 @@ export default function FinancePage() {
     <AppShell>
       <PageHeader
         title="الحسابات والخزنة"
-        subtitle="الإيصالات · قفل اليوم · الخزنة · تسليم صاحب السنتر"
+        subtitle="الإيصالات · قفل اليوم · الخزنة · استلام صاحب السنتر"
       />
 
       {error ? (
@@ -940,7 +1027,7 @@ export default function FinancePage() {
               onClick={() => setSafeDetailOpen(true)}
               className="rounded-xl border border-navy/10 bg-white p-3 text-right transition hover:border-navy/30 hover:bg-sand/40"
             >
-              <p className="text-[11px] text-navy/50">في الخزنة (جاهز للتسليم)</p>
+              <p className="text-[11px] text-navy/50">في الخزنة (جاهز للاستلام)</p>
               <p className="text-lg font-black tabular-nums text-navy">
                 {money(cash.ownerNotReceived.inSafe)}
               </p>
@@ -1874,17 +1961,40 @@ export default function FinancePage() {
             <FieldLabel label="البند">
               <select
                 className="field"
-                value={expForm.category}
+                value={
+                  expForm.category === '__new__' ||
+                  (cash?.categories || []).includes(expForm.category)
+                    ? expForm.category
+                    : expForm.category || 'مستلزمات'
+                }
                 onChange={(e) =>
-                  setExpForm({ ...expForm, category: e.target.value })
+                  setExpForm({
+                    ...expForm,
+                    category: e.target.value,
+                    newCategory:
+                      e.target.value === '__new__' ? expForm.newCategory : '',
+                  })
                 }
               >
-                {(cash?.categories || ['أخرى']).map((c) => (
+                {(cash?.categories || ['مستلزمات']).map((c) => (
                   <option key={c} value={c}>
                     {c}
                   </option>
                 ))}
+                <option value="__new__">إضافة بند…</option>
               </select>
+              {expForm.category === '__new__' ? (
+                <input
+                  className="field mt-2"
+                  value={expForm.newCategory}
+                  onChange={(e) =>
+                    setExpForm({ ...expForm, newCategory: e.target.value })
+                  }
+                  placeholder="اسم البند الجديد"
+                  required
+                  autoFocus
+                />
+              ) : null}
             </FieldLabel>
             <FieldLabel label="منين">
               <select
@@ -1933,10 +2043,10 @@ export default function FinancePage() {
         </SectionCard>
         ) : null}
 
-        {tab === 'safe' ? (
+        {tab === 'safe' && canOwnerAdvance ? (
         <SectionCard
-          title="تسليم لصاحب السنتر"
-          subtitle="فلوس الخزنة اللي بتديها لصاحب السنتر (عادة مرة في الأسبوع)"
+          title="استلام من الخزنة"
+          subtitle="صاحب السنتر / المدير بس — تسجيل إنك استلمت فلوس من الخزنة (عادة مرة في الأسبوع)"
         >
           <div className="space-y-3">
             <p className="rounded-xl bg-sand px-3 py-2 text-sm text-navy/70">
@@ -1945,7 +2055,7 @@ export default function FinancePage() {
                 {money(cash?.safeBalance ?? 0)}
               </span>
             </p>
-            <FieldLabel label="المبلغ">
+            <FieldLabel label="المبلغ المستلَم">
               <input
                 className="field"
                 type="number"
@@ -1959,7 +2069,7 @@ export default function FinancePage() {
                 className="field"
                 value={handNote}
                 onChange={(e) => setHandNote(e.target.value)}
-                placeholder="تسليم أسبوعي"
+                placeholder="استلام أسبوعي"
               />
             </FieldLabel>
             <button
@@ -1968,9 +2078,26 @@ export default function FinancePage() {
               disabled={busy === 'handover' || (cash?.safeBalance ?? 0) <= 0}
               onClick={() => setConfirm({ kind: 'handover' })}
             >
-              تسليم من الخزنة
+              تأكيد الاستلام
             </button>
           </div>
+        </SectionCard>
+        ) : null}
+
+        {tab === 'safe' && isReception ? (
+        <SectionCard
+          title="الخزنة"
+          subtitle="رصيد الخزنة ظاهر للاستقبال — استلام الفلوس لصاحب السنتر / المدير فقط"
+        >
+          <p className="rounded-xl bg-sand px-3 py-2 text-sm text-navy/70">
+            المتاح في الخزنة{' '}
+            <span className="font-extrabold tabular-nums text-navy">
+              {money(cash?.safeBalance ?? 0)}
+            </span>
+            <span className="mt-1 block text-xs text-navy/50">
+              مفيش تسليم من الاستقبال — صاحب السنتر يسجّل الاستلام بنفسه.
+            </span>
+          </p>
         </SectionCard>
         ) : null}
 
@@ -2141,7 +2268,7 @@ export default function FinancePage() {
           )}
         </SectionCard>
         <SectionCard
-          title="التسليمات وقفل الأيام"
+          title="الاستلامات وقفل الأيام"
           badge={
             (cash?.handovers?.length || 0) + (cash?.closes?.length || 0) ? (
               <span className="badge-navy">
@@ -2158,7 +2285,7 @@ export default function FinancePage() {
                   className="flex justify-between gap-2 rounded-lg bg-sand px-3 py-1.5"
                 >
                   <div className="min-w-0">
-                    <p className="font-semibold">تسليم لصاحب السنتر</p>
+                    <p className="font-semibold">استلام صاحب السنتر من الخزنة</p>
                     <p className="truncate text-[11px] text-navy/45">
                       {new Date(h.createdAt).toLocaleString('ar-EG')}
                       {h.createdByName ? ` · ${h.createdByName}` : ''}
@@ -2234,7 +2361,16 @@ export default function FinancePage() {
           {
             label: 'إجمالي المتحصل',
             value: money(summary?.collectedAll ?? 0),
-            onClick: () => setCollectedAllOpen(true),
+            onClick: () => {
+              setCollectedAllOpen(true);
+              setCollectedAllLoading(true);
+              api<NonNullable<FinanceSummary['collectedAllBreakdown']>>(
+                '/finance/collected-all-breakdown',
+              )
+                .then(setCollectedAllBreakdown)
+                .catch(() => setCollectedAllBreakdown(null))
+                .finally(() => setCollectedAllLoading(false));
+            },
             hint: 'اضغط للتفاصيل',
           },
           {
@@ -2249,7 +2385,11 @@ export default function FinancePage() {
       />
       <SectionCard
         title="الإيصالات"
-        subtitle={`استمارات ${receiptCounts.booking} · حصص ${receiptCounts.session} · أخرى ${receiptCounts.other}`}
+        subtitle={
+          receiptRangeAll
+            ? `كل الإيصالات · استمارات ${receiptCounts.booking} · حصص ${receiptCounts.session} · أكواد ${receiptCounts.online} · ملازم ${receiptCounts.handout} · قاعات ${receiptCounts.rental}`
+            : `${receiptFrom} ← ${receiptTo} · استمارات ${receiptCounts.booking} · حصص ${receiptCounts.session} · أكواد ${receiptCounts.online} · ملازم ${receiptCounts.handout} · قاعات ${receiptCounts.rental}`
+        }
         badge={
           <span className="badge-ok">
             {receiptSearch.trim()
@@ -2258,6 +2398,85 @@ export default function FinancePage() {
           </span>
         }
       >
+        <div className="mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <FieldLabel label="من تاريخ">
+            <input
+              className="field"
+              type="date"
+              disabled={receiptRangeAll || receiptsBusy}
+              value={receiptFrom}
+              max={receiptTo || todayYmd}
+              onChange={(e) => setReceiptFrom(e.target.value)}
+            />
+          </FieldLabel>
+          <FieldLabel label="إلى تاريخ">
+            <input
+              className="field"
+              type="date"
+              disabled={receiptRangeAll || receiptsBusy}
+              value={receiptTo}
+              min={receiptFrom || undefined}
+              max={todayYmd}
+              onChange={(e) => setReceiptTo(e.target.value)}
+            />
+          </FieldLabel>
+          <div className="flex items-end gap-2 sm:col-span-2">
+            <button
+              type="button"
+              className="btn-accent"
+              disabled={receiptsBusy || (!receiptRangeAll && (!receiptFrom || !receiptTo))}
+              onClick={() => {
+                setReceiptRangeAll(false);
+                void loadPayments({
+                  all: false,
+                  from: receiptFrom,
+                  to: receiptTo,
+                }).catch((e) =>
+                  setError(e instanceof Error ? e.message : 'فشل تحميل الإيصالات'),
+                );
+              }}
+            >
+              {receiptsBusy ? 'جاري التحميل…' : 'تطبيق التاريخ'}
+            </button>
+            <button
+              type="button"
+              className={`btn-ghost ${receiptRangeAll ? 'ring-2 ring-[#0B2545]/40' : ''}`}
+              disabled={receiptsBusy}
+              onClick={() => {
+                setReceiptRangeAll(true);
+                void loadPayments({ all: true }).catch((e) =>
+                  setError(e instanceof Error ? e.message : 'فشل تحميل الإيصالات'),
+                );
+              }}
+            >
+              كل الإيصالات
+            </button>
+            <button
+              type="button"
+              className="btn-ghost"
+              disabled={receiptsBusy}
+              onClick={() => {
+                const from = `${todayYmd.slice(0, 7)}-01`;
+                setReceiptRangeAll(false);
+                setReceiptFrom(from);
+                setReceiptTo(todayYmd);
+                void loadPayments({ all: false, from, to: todayYmd }).catch(
+                  (e) =>
+                    setError(
+                      e instanceof Error ? e.message : 'فشل تحميل الإيصالات',
+                    ),
+                );
+              }}
+            >
+              الشهر الحالي
+            </button>
+          </div>
+        </div>
+        <p className="mb-3 text-[11px] text-navy/45">
+          {receiptRangeAll
+            ? 'عرض كل الإيصالات بدون حد زمني.'
+            : `الفترة المعروضة: ${receiptFrom || '—'} ← ${receiptTo || '—'}`}
+        </p>
         <div className="mb-3">
           <FieldLabel label="بحث في الإيصالات">
             <input
@@ -2278,6 +2497,21 @@ export default function FinancePage() {
                 n: receiptCounts.booking,
               },
               { id: 'session' as const, label: 'حصص', n: receiptCounts.session },
+              {
+                id: 'online' as const,
+                label: 'أكواد',
+                n: receiptCounts.online,
+              },
+              {
+                id: 'handout' as const,
+                label: 'ملازم',
+                n: receiptCounts.handout,
+              },
+              {
+                id: 'rental' as const,
+                label: 'قاعات',
+                n: receiptCounts.rental,
+              },
               { id: 'other' as const, label: 'أخرى', n: receiptCounts.other },
             ] as const
           ).map((f) => (
@@ -2323,7 +2557,8 @@ export default function FinancePage() {
                 <p className="font-extrabold tabular-nums text-navy">
                   {Number(p.amount).toLocaleString('en-EG')} ج.م
                 </p>
-                {canDelete ? (
+                {canDelete &&
+                (p.source === 'PAYMENT' || p.source === 'SESSION') ? (
                   <button
                     type="button"
                     className="text-xs font-bold text-rose-700"
@@ -2392,21 +2627,25 @@ export default function FinancePage() {
                   </td>
                   {canDelete ? (
                     <td>
-                      <button
-                        type="button"
-                        className="text-xs font-bold text-rose-700 hover:underline"
-                        disabled={busy === `del-r-${p.id}`}
-                        onClick={() =>
-                          setConfirm({
-                            kind: 'del-receipt',
-                            id: p.id,
-                            source: p.source,
-                            label: `${p.receiptNumber} · ${p.reason}`,
-                          })
-                        }
-                      >
-                        مسح
-                      </button>
+                      {p.source === 'PAYMENT' || p.source === 'SESSION' ? (
+                        <button
+                          type="button"
+                          className="text-xs font-bold text-rose-700 hover:underline"
+                          disabled={busy === `del-r-${p.id}`}
+                          onClick={() =>
+                            setConfirm({
+                              kind: 'del-receipt',
+                              id: p.id,
+                              source: p.source,
+                              label: `${p.receiptNumber} · ${p.reason}`,
+                            })
+                          }
+                        >
+                          مسح
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-navy/35">—</span>
+                      )}
                     </td>
                   ) : null}
                 </tr>
@@ -2438,12 +2677,14 @@ export default function FinancePage() {
         open={collectedAllOpen}
         tone="info"
         title="تفصيل إجمالي المتحصل"
-        message="الرقم = مجموع إيصالات الدفع (استمارات / اشتراكات / أخرى) + حضور الحصص المؤكد. نصيب السنتر في الحصص بعد القسمة مع المدرس."
+        message="الرقم = استمارات + اشتراكات + حضور حصص + أكواد أونلاين + ملازم + تأجير قاعات (+ إيصالات أخرى). نصيب السنتر في الحصص/الأكواد/الملازم بعد القسمة مع المدرس."
         confirmLabel="حسناً"
         onConfirm={() => setCollectedAllOpen(false)}
         onClose={() => setCollectedAllOpen(false)}
       >
-        {summary?.collectedAllBreakdown ? (
+        {collectedAllLoading ? (
+          <p className="mt-4 text-sm text-navy/55">جاري تحميل التفصيل…</p>
+        ) : collectedAllBreakdown ? (
           <div className="mt-4 max-h-[60vh] space-y-3 overflow-auto overscroll-contain text-sm">
             <div className="grid gap-2 sm:grid-cols-2">
               <div className="rounded-xl border border-navy/10 bg-sand/40 px-3 py-3">
@@ -2451,7 +2692,7 @@ export default function FinancePage() {
                   إجمالي المتحصل
                 </p>
                 <p className="text-xl font-black tabular-nums text-navy">
-                  {money(summary.collectedAllBreakdown.total)}
+                  {money(collectedAllBreakdown.total)}
                 </p>
               </div>
               <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 px-3 py-3">
@@ -2459,7 +2700,7 @@ export default function FinancePage() {
                   إجمالي نصيب السنتر
                 </p>
                 <p className="text-xl font-black tabular-nums text-navy">
-                  {money(summary.collectedAllBreakdown.centerTotal)}
+                  {money(collectedAllBreakdown.centerTotal)}
                 </p>
               </div>
             </div>
@@ -2474,7 +2715,7 @@ export default function FinancePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {summary.collectedAllBreakdown.rows.map((row) => (
+                  {collectedAllBreakdown.rows.map((row) => (
                     <tr key={row.key} className="border-t border-navy/5">
                       <td className="px-3 py-2">
                         <p className="font-semibold text-navy">{row.label}</p>
@@ -2507,7 +2748,7 @@ export default function FinancePage() {
         open={safeDetailOpen}
         tone="info"
         title="تفصيل رصيد الخزنة"
-        message="الرصيد = دخل الخزنة (قفل + استلاف) − المصروفات − التسليمات − سداد الاستلاف"
+        message="الرصيد = دخل الخزنة (قفل + استلاف) − المصروفات − استلامات صاحب السنتر − سداد الاستلاف"
         confirmLabel="حسناً"
         onConfirm={() => setSafeDetailOpen(false)}
         onClose={() => setSafeDetailOpen(false)}
@@ -2516,7 +2757,7 @@ export default function FinancePage() {
           <div className="mt-4 max-h-[60vh] space-y-4 overflow-auto overscroll-contain text-sm">
             <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 px-3 py-3">
               <p className="text-[11px] font-bold text-emerald-900">
-                المتاح للتسليم الآن
+                المتاح للاستلام الآن
               </p>
               <p className="text-2xl font-black tabular-nums text-navy">
                 {money(cash.safeBreakdown.balance)}
@@ -2691,7 +2932,7 @@ export default function FinancePage() {
                 </span>
               </div>
               <div className="flex justify-between gap-2">
-                <span>تسليمات لصاحب السنتر</span>
+                <span>استلامات صاحب السنتر</span>
                 <span className="font-bold tabular-nums text-rose-700">
                   − {money(cash.safeBreakdown.handedToOwner)}
                 </span>
@@ -2759,9 +3000,9 @@ export default function FinancePage() {
       <AppDialog
         open={confirm?.kind === 'handover'}
         tone="info"
-        title="تسليم لصاحب السنتر"
-        message={`تسليم ${money(Number(handAmount) || 0)} من الخزنة لصاحب السنتر؟`}
-        confirmLabel={busy === 'handover' ? 'جاري التسليم...' : 'تأكيد التسليم'}
+        title="استلام من الخزنة"
+        message={`تأكيد إن صاحب السنتر استلم ${money(Number(handAmount) || 0)} من الخزنة؟`}
+        confirmLabel={busy === 'handover' ? 'جاري التسجيل...' : 'تأكيد الاستلام'}
         cancelLabel="رجوع"
         onConfirm={doHandover}
         onClose={() => setConfirm(null)}

@@ -109,10 +109,11 @@ export class OpsController {
       teacherPercent?: number;
       notes?: string;
       sessionDate?: string;
+      allowWithoutForm?: boolean;
     },
-    @CurrentUser() user: { userId: string },
+    @CurrentUser() user: { userId: string; role?: string },
   ) {
-    return this.ops.openSession(body, user?.userId);
+    return this.ops.openSession(body, user?.userId, user?.role);
   }
 
   @Patch('sessions/:id')
@@ -128,6 +129,7 @@ export class OpsController {
       feeAmount?: number;
       centerAmount?: number;
       notes?: string | null;
+      allowWithoutForm?: boolean;
     },
     @CurrentUser() user: { userId: string; role: string },
   ) {

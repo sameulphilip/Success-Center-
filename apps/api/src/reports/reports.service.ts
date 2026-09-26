@@ -200,12 +200,24 @@ export class ReportsService {
             listedFee: true,
             refundedAmount: true,
             discountReason: true,
-            student: { select: { firstName: true, lastName: true } },
+            guestName: true,
+            centerKeepsAll: true,
+            student: {
+              select: {
+                firstName: true,
+                lastName: true,
+                gradeLevel: { select: { nameAr: true, sortOrder: true } },
+              },
+            },
           },
         },
       },
       orderBy: [{ sessionDate: 'desc' }, { createdAt: 'desc' }],
     });
+
+    const RECEPTION_PER_PRESENT = 7;
+    const SYSTEM_PER_PRESENT = 2;
+    const round2 = (n: number) => Math.round(n * 100) / 100;
 
     const isActivePay = (status: string) =>
       status === 'CONFIRMED' || status === 'PARTIALLY_REFUNDED';
@@ -217,9 +229,19 @@ export class ReportsService {
       subject: string;
       status: string;
       feeAmount: number;
+      centerAmount: number;
+      teacherAmount: number;
+      teacherPercent: number;
+      centerPercent: number;
       registered: number;
       present: number;
       collected: number;
+      teacherShare: number;
+      centerShare: number;
+      receptionShare: number;
+      systemShare: number;
+      netCenterShare: number;
+      grades: string[];
       attendees: Array<{
         name: string;
         amount: number;
@@ -229,6 +251,18 @@ export class ReportsService {
       }>;
     };
 
+    type PriceRow = {
+      feeAmount: number;
+      centerAmount: number;
+      teacherAmount: number;
+      teacherPercent: number;
+      centerPercent: number;
+      sessionsCount: number;
+      lastDate: string;
+      subjects: string[];
+      grades: string[];
+    };
+
     type TeacherRow = {
       teacherId: string;
       name: string;
@@ -236,13 +270,36 @@ export class ReportsService {
       presentCount: number;
       registeredCount: number;
       collected: number;
+      teacherShare: number;
+      centerShare: number;
+      receptionShare: number;
+      systemShare: number;
+      netCenterShare: number;
       sessions: SessionRow[];
+      prices: PriceRow[];
     };
 
     const byTeacher = new Map<string, TeacherRow>();
+    const priceKeys = new Map<
+      string,
+      Map<
+        string,
+        PriceRow & {
+          subjectSet: Set<string>;
+          gradeSet: Set<string>;
+          gradeSort: Map<string, number>;
+        }
+      >
+    >();
     let totalPresent = 0;
     let totalRegistered = 0;
     let totalCollected = 0;
+    let totalTeacherShare = 0;
+    let totalCenterShare = 0;
+    let totalReceptionShare = 0;
+    let totalSystemShare = 0;
+    let totalNetCenterShare = 0;
+    let distinctPriceConfigs = 0;
 
     for (const s of sessions) {
       const active = s.entries.filter((e) => isActivePay(e.payStatus));
@@ -252,12 +309,39 @@ export class ReportsService {
         (sum, e) => sum + Number(e.amount) - Number(e.refundedAmount || 0),
         0,
       );
+      const { teacherShare, centerShare } = splitSessionFromEntries({
+        entries: active.map((e) => ({
+          amount: e.amount,
+          refundedAmount: e.refundedAmount,
+          centerKeepsAll: e.centerKeepsAll,
+        })),
+        feeAmount: s.feeAmount,
+        teacherPercent: s.teacherPercent,
+        centerAmount: s.centerAmount,
+        settledTeacherAmount: s.settledTeacherAmount,
+        settledCenterAmount: s.settledCenterAmount,
+      });
+      const receptionShare = round2(present * RECEPTION_PER_PRESENT);
+      const systemShare = round2(present * SYSTEM_PER_PRESENT);
+      const netCenterShare = round2(centerShare - receptionShare - systemShare);
+      const sessionGrades = new Map<string, number>();
       const attendees = active.map((e) => {
-        const name =
-          `${e.student.firstName} ${e.student.lastName === '-' ? '' : e.student.lastName}`.trim();
+        const name = e.student
+          ? `${e.student.firstName} ${e.student.lastName === '-' ? '' : e.student.lastName}`.trim()
+          : (e.guestName || 'ضيف').trim();
         const amount = Number(e.amount);
         const listed =
           e.listedFee != null ? Number(e.listedFee) : Number(s.feeAmount);
+        const gradeName = e.student?.gradeLevel?.nameAr?.trim();
+        if (gradeName) {
+          sessionGrades.set(
+            gradeName,
+            Math.min(
+              sessionGrades.get(gradeName) ?? 999,
+              Number(e.student?.gradeLevel?.sortOrder ?? 999),
+            ),
+          );
+        }
         return {
           name,
           amount,
@@ -269,6 +353,39 @@ export class ReportsService {
       totalPresent += present;
       totalRegistered += registered;
       totalCollected += collected;
+      totalTeacherShare += teacherShare;
+      totalCenterShare += centerShare;
+      totalReceptionShare += receptionShare;
+      totalSystemShare += systemShare;
+      totalNetCenterShare += netCenterShare;
+
+      const feeAmount = Math.round(Number(s.feeAmount) * 100) / 100;
+      const centerAmount =
+        s.centerAmount != null && Number.isFinite(Number(s.centerAmount))
+          ? Math.round(Number(s.centerAmount) * 100) / 100
+          : Math.round(
+              feeAmount *
+                (1 - Number(s.teacherPercent || 0) / 100) *
+                100,
+            ) / 100;
+      const teacherAmount = Math.round((feeAmount - centerAmount) * 100) / 100;
+      const teacherPercent =
+        feeAmount > 0
+          ? Math.round((teacherAmount / feeAmount) * 10000) / 100
+          : 0;
+      const centerPercent =
+        feeAmount > 0
+          ? Math.round((centerAmount / feeAmount) * 10000) / 100
+          : 0;
+      const subject =
+        s.subject?.nameAr || s.subject?.nameEn || s.title || 'حصة';
+      const sessionDate = String(s.sessionDate).slice(0, 10);
+      const gradesForSession =
+        sessionGrades.size > 0
+          ? Array.from(sessionGrades.entries())
+              .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0], 'ar'))
+              .map(([g]) => g)
+          : ['غير محدد'];
 
       const teacherId = s.teacherId;
       const name = `${s.teacher.firstName} ${s.teacher.lastName === '-' ? '' : s.teacher.lastName}`.trim();
@@ -279,40 +396,141 @@ export class ReportsService {
         presentCount: 0,
         registeredCount: 0,
         collected: 0,
+        teacherShare: 0,
+        centerShare: 0,
+        receptionShare: 0,
+        systemShare: 0,
+        netCenterShare: 0,
         sessions: [],
+        prices: [],
       };
       row.sessionsCount += 1;
       row.presentCount += present;
       row.registeredCount += registered;
       row.collected += collected;
+      row.teacherShare = round2(row.teacherShare + teacherShare);
+      row.centerShare = round2(row.centerShare + centerShare);
+      row.receptionShare = round2(row.receptionShare + receptionShare);
+      row.systemShare = round2(row.systemShare + systemShare);
+      row.netCenterShare = round2(row.netCenterShare + netCenterShare);
       row.sessions.push({
         id: s.id,
-        sessionDate: String(s.sessionDate).slice(0, 10),
+        sessionDate,
         title: s.title,
-        subject: s.subject?.nameAr || s.subject?.nameEn || s.title || 'حصة',
+        subject,
         status: s.status,
-        feeAmount: Number(s.feeAmount),
+        feeAmount,
+        centerAmount,
+        teacherAmount,
+        teacherPercent,
+        centerPercent,
         registered,
         present,
         collected,
+        teacherShare,
+        centerShare,
+        receptionShare,
+        systemShare,
+        netCenterShare,
         attendees,
+        grades: gradesForSession.filter((g) => g !== 'غير محدد'),
       });
       byTeacher.set(teacherId, row);
+
+      let teacherPrices = priceKeys.get(teacherId);
+      if (!teacherPrices) {
+        teacherPrices = new Map();
+        priceKeys.set(teacherId, teacherPrices);
+      }
+
+      // صف واحد لكل سعر×صف عشان يبان «السعر للصف الكام»
+      for (const gradeLabel of gradesForSession) {
+        const priceKey = `${feeAmount}|${centerAmount}|${gradeLabel}`;
+        const existing = teacherPrices.get(priceKey);
+        if (existing) {
+          existing.sessionsCount += 1;
+          if (sessionDate > existing.lastDate) existing.lastDate = sessionDate;
+          existing.subjectSet.add(subject);
+          existing.gradeSet.add(gradeLabel);
+          existing.gradeSort.set(
+            gradeLabel,
+            Math.min(
+              existing.gradeSort.get(gradeLabel) ?? 999,
+              sessionGrades.get(gradeLabel) ?? 999,
+            ),
+          );
+        } else {
+          const gradeSort = new Map<string, number>();
+          gradeSort.set(gradeLabel, sessionGrades.get(gradeLabel) ?? 999);
+          teacherPrices.set(priceKey, {
+            feeAmount,
+            centerAmount,
+            teacherAmount,
+            teacherPercent,
+            centerPercent,
+            sessionsCount: 1,
+            lastDate: sessionDate,
+            subjects: [],
+            grades: [],
+            subjectSet: new Set([subject]),
+            gradeSet: new Set([gradeLabel]),
+            gradeSort,
+          });
+        }
+      }
+    }
+
+    for (const [teacherId, row] of byTeacher) {
+      const map = priceKeys.get(teacherId);
+      if (!map) continue;
+      row.prices = Array.from(map.values())
+        .map(({ subjectSet, gradeSet, gradeSort, ...p }) => ({
+          ...p,
+          subjects: Array.from(subjectSet).sort((a, b) =>
+            a.localeCompare(b, 'ar'),
+          ),
+          grades: Array.from(gradeSet).sort(
+            (a, b) =>
+              (gradeSort.get(a) ?? 999) - (gradeSort.get(b) ?? 999) ||
+              a.localeCompare(b, 'ar'),
+          ),
+        }))
+        .sort(
+          (a, b) =>
+            (a.grades[0] || '').localeCompare(b.grades[0] || '', 'ar') ||
+            b.feeAmount - a.feeAmount ||
+            b.sessionsCount - a.sessionsCount ||
+            b.lastDate.localeCompare(a.lastDate),
+        );
+      distinctPriceConfigs += row.prices.length;
     }
 
     const teachers = Array.from(byTeacher.values()).sort(
-      (a, b) => b.sessionsCount - a.sessionsCount || b.presentCount - a.presentCount,
+      (a, b) =>
+        b.sessionsCount - a.sessionsCount ||
+        b.presentCount - a.presentCount ||
+        b.netCenterShare - a.netCenterShare,
     );
 
     return {
       from: fromDate,
       to: toDate,
+      rates: {
+        receptionPerPresent: RECEPTION_PER_PRESENT,
+        systemPerPresent: SYSTEM_PER_PRESENT,
+      },
       summary: {
         teachers: teachers.length,
         sessions: sessions.length,
         present: totalPresent,
         registered: totalRegistered,
-        collected: totalCollected,
+        collected: round2(totalCollected),
+        teacherShare: round2(totalTeacherShare),
+        centerShare: round2(totalCenterShare),
+        receptionShare: round2(totalReceptionShare),
+        systemShare: round2(totalSystemShare),
+        netCenterShare: round2(totalNetCenterShare),
+        priceConfigs: distinctPriceConfigs,
       },
       byTeacher: teachers,
     };

@@ -594,13 +594,115 @@ function TeachersReport({
                 value={String(s.registered)}
               />
             )}
+            <ReportStat
+              label="أسعار مستخدمة"
+              value={String(s.priceConfigs || 0)}
+            />
+            <ReportStat label="نصيب المدرسين" value={money(s.teacherShare)} />
+            <ReportStat
+              label="نصيب السنتر"
+              value={money(s.centerShare)}
+              tone="emerald"
+            />
+            <ReportStat label="نصيب الاستقبال" value={money(s.receptionShare)} />
+            <ReportStat label="نصيب السيستم" value={money(s.systemShare)} />
+            <ReportStat
+              label="صافي السنتر"
+              value={money(s.netCenterShare)}
+              tone="gold"
+            />
           </ReportStatsGrid>
           {hideCollected ? null : (
             <p className="mt-2 text-[11px] text-[#0B2545]/50">
               مسجّل في الجلسات: {s.registered}
+              {data.rates
+                ? ` · استقبال ${data.rates.receptionPerPresent} ج + سيستم ${data.rates.systemPerPresent} ج لكل حضور`
+                : ''}
             </p>
           )}
         </ReportPrintBlock>
+      ) : null}
+
+      {showSection(selected, 'teachers-earnings') ? (
+        <ReportPrintBlock title="أنصبة المدرسين">
+          <ReportTable
+            headers={[
+              'المدرس',
+              'جلسات',
+              'حضور',
+              'نصيب المدرس',
+              'نصيب السنتر',
+              'الاستقبال',
+              'السيستم',
+              'صافي السنتر',
+            ]}
+            rows={(data.byTeacher || []).map((t: any) => [
+              t.name,
+              String(t.sessionsCount),
+              String(t.presentCount),
+              money(t.teacherShare),
+              money(t.centerShare),
+              money(t.receptionShare),
+              money(t.systemShare),
+              money(t.netCenterShare),
+            ])}
+            empty="لا مدرسين في الفترة"
+          />
+          {(data.byTeacher || []).length ? (
+            <p className="mt-2 text-[11px] text-[#0B2545]/55">
+              الإجمالي · جلسات {s.sessions} · حضور {s.present} · مدرسين{' '}
+              {money(s.teacherShare)} · سنتر {money(s.centerShare)} · استقبال{' '}
+              {money(s.receptionShare)} · سيستم {money(s.systemShare)} · صافي{' '}
+              {money(s.netCenterShare)}
+            </p>
+          ) : null}
+        </ReportPrintBlock>
+      ) : null}
+
+      {showSection(selected, 'session-prices') ? (
+        <>
+          {(data.byTeacher || [])
+            .filter((t: any) => (t.prices || []).length)
+            .map((t: any) => (
+              <ReportPrintBlock
+                key={`prices-${t.teacherId}`}
+                title={`أسعار · ${t.name} · ${(t.prices || []).length} سعر`}
+              >
+                <ReportTable
+                  headers={[
+                    'الصف',
+                    'سعر الحصة',
+                    'نصيب المدرس',
+                    'نسبة المدرس',
+                    'نصيب السنتر',
+                    'نسبة السنتر',
+                    'جلسات',
+                    'آخر مرة',
+                    'مواد',
+                  ]}
+                  rows={(t.prices || []).map((p: any) => [
+                    (p.grades || []).join(' · ') || 'غير محدد',
+                    money(p.feeAmount),
+                    money(p.teacherAmount),
+                    `${Number(p.teacherPercent).toLocaleString('en-EG')}%`,
+                    money(p.centerAmount),
+                    `${Number(p.centerPercent).toLocaleString('en-EG')}%`,
+                    String(p.sessionsCount),
+                    p.lastDate,
+                    (p.subjects || []).join(' · ') || '—',
+                  ])}
+                  empty="لا أسعار"
+                />
+              </ReportPrintBlock>
+            ))}
+          {!(data.byTeacher || []).some((t: any) => (t.prices || []).length) ? (
+            <ReportPrintBlock title="أسعار الحصص">
+              <p className="px-4 py-6 text-center text-sm text-[#0B2545]/40">
+                لا توجد أسعار جلسات في الفترة
+              </p>
+            </ReportPrintBlock>
+          ) : null}
+        </>
       ) : null}
 
       {showSection(selected, 'teachers-sessions') ? (

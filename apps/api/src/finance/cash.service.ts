@@ -25,8 +25,18 @@ export const EXPENSE_CATEGORIES = [
   'مشروبات',
   'انتقالات',
   'حصة مدرس',
-  'أخرى',
 ] as const;
+
+/** Defaults + any category ever used on an expense (custom bands persist). */
+export function mergeExpenseCategories(used: string[]): string[] {
+  const set = new Set<string>();
+  for (const c of EXPENSE_CATEGORIES) set.add(c);
+  for (const raw of used) {
+    const name = String(raw || '').trim();
+    if (name && name !== 'أخرى') set.add(name);
+  }
+  return [...set].sort((a, b) => a.localeCompare(b, 'ar'));
+}
 
 function cairoYmd(d = new Date()) {
   return new Intl.DateTimeFormat('en-CA', {
@@ -440,16 +450,22 @@ export class CashService {
     }
     if (!candidates.length) return [];
 
-    const figures = await Promise.all(candidates.map((ymd) => this.dayFigures(ymd)));
+    // Sequential: parallel dayFigures saturates Prisma's small pool and hangs the API.
+    const figures: OpenDayFigures[] = [];
+    for (const ymd of candidates) {
+      figures.push(await this.dayFigures(ymd));
+    }
     const active = figures.filter(
       (f) => f.collectedTotal > 0.009 || f.drawerExpenses > 0.009,
     );
-    const withWarnings = await Promise.all(
-      active.map(async (f) => ({
+    const withWarnings: Array<OpenDayFigures & { warnings: CloseDayWarnings }> =
+      [];
+    for (const f of active) {
+      withWarnings.push({
         ...f,
         warnings: await this.closeDayWarnings(f.date),
-      })),
-    );
+      });
+    }
     return withWarnings;
   }
 
@@ -1653,6 +1669,15 @@ export class CashService {
             }),
       ]);
 
+    const usedCategoryRows = await this.prisma.cashExpense.findMany({
+      distinct: ['category'],
+      select: { category: true },
+      orderBy: { category: 'asc' },
+    });
+    const categories = mergeExpenseCategories(
+      usedCategoryRows.map((r) => r.category),
+    );
+
     const drawerExpenses = money(drawerExpAgg._sum.amount);
     const carriedForward = unclosedPrevious.reduce((s, d) => s + d.expected, 0);
     const todayExpected = close ? 0 : collected.total - drawerExpenses;
@@ -1746,7 +1771,7 @@ export class CashService {
       closeWarnings,
       viewerScope: isReception ? 'reception' : 'owner',
       canOwnerExpense: !isReception,
-      categories: EXPENSE_CATEGORIES,
+      categories,
       expenses: expenses.map((e) => ({
         ...e,
         createdByName: e.createdByUserId
@@ -1803,7 +1828,13 @@ export class CashService {
     if (role === 'RECEPTION' && paidFrom !== CashExpenseFrom.DRAWER && paidFrom !== CashExpenseFrom.SAFE) {
       throw new BadRequestException('الاستقبال يصرف من الدرج أو الخزنة فقط');
     }
-    const category = (body.category || 'أخرى').trim() || 'أخرى';
+    const category = (body.category || '').trim();
+    if (category.length < 2) {
+      throw new BadRequestException('اكتب بند المصروف');
+    }
+    if (category.length > 60) {
+      throw new BadRequestException('اسم البند طويل أوي');
+    }
     const today = cairoYmd();
     const ymd = String(body.businessDate || '').trim() || today;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
@@ -2605,6 +2636,7 @@ export class CashService {
         `رصيد الخزنة غير كافٍ. المتاح ${Math.round(safeBalance)} ج.م`,
       );
     }
+    /** Owner/manager acknowledges receiving cash from the safe (not reception delivery). */
     return this.prisma.cashHandover.create({
       data: {
         amount,

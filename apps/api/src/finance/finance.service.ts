@@ -37,6 +37,7 @@ export class FinanceService {
     const { start, end } = cairoBounds(ymd);
     const monthStart = cairoBounds(`${ymd.slice(0, 7)}-01`).start;
 
+    const confirmed = { payStatus: 'CONFIRMED' as const };
     const [
       paymentsTodayAgg,
       paymentsMonthAgg,
@@ -44,11 +45,16 @@ export class FinanceService {
       sessionsTodayAgg,
       sessionsMonthAgg,
       sessionsAllAgg,
+      onlineMonthAgg,
+      onlineAllAgg,
+      handoutMonthAgg,
+      handoutAllAgg,
+      rentalMonthAgg,
+      rentalAllAgg,
       outstandingInvoices,
       invoiceCount,
       paymentCount,
       drawer,
-      collectedAllBreakdown,
     ] = await Promise.all([
       this.prisma.payment.aggregate({
         where: { paidAt: { gte: start, lte: end } },
@@ -66,7 +72,7 @@ export class FinanceService {
       }),
       this.prisma.sessionEntry.aggregate({
         where: {
-          payStatus: 'CONFIRMED',
+          ...confirmed,
           confirmedAt: { gte: start, lte: end },
         },
         _sum: { amount: true },
@@ -74,14 +80,53 @@ export class FinanceService {
       }),
       this.prisma.sessionEntry.aggregate({
         where: {
-          payStatus: 'CONFIRMED',
+          ...confirmed,
           confirmedAt: { gte: monthStart, lte: end },
         },
         _sum: { amount: true },
         _count: true,
       }),
       this.prisma.sessionEntry.aggregate({
-        where: { payStatus: 'CONFIRMED' },
+        where: confirmed,
+        _sum: { amount: true },
+        _count: true,
+      }),
+      this.prisma.onlineCodeSale.aggregate({
+        where: {
+          ...confirmed,
+          confirmedAt: { gte: monthStart, lte: end },
+        },
+        _sum: { amount: true },
+        _count: true,
+      }),
+      this.prisma.onlineCodeSale.aggregate({
+        where: confirmed,
+        _sum: { amount: true },
+        _count: true,
+      }),
+      this.prisma.handoutSale.aggregate({
+        where: {
+          ...confirmed,
+          confirmedAt: { gte: monthStart, lte: end },
+        },
+        _sum: { amount: true },
+        _count: true,
+      }),
+      this.prisma.handoutSale.aggregate({
+        where: confirmed,
+        _sum: { amount: true },
+        _count: true,
+      }),
+      this.prisma.roomRental.aggregate({
+        where: {
+          ...confirmed,
+          confirmedAt: { gte: monthStart, lte: end },
+        },
+        _sum: { amount: true },
+        _count: true,
+      }),
+      this.prisma.roomRental.aggregate({
+        where: confirmed,
         _sum: { amount: true },
         _count: true,
       }),
@@ -106,7 +151,6 @@ export class FinanceService {
       this.prisma.invoice.count(),
       this.prisma.payment.count(),
       this.cash.collectionsForDay(ymd),
-      this.collectedAllBreakdown(),
     ]);
 
     const outstandingAmount = outstandingInvoices.reduce((sum, inv) => {
@@ -118,19 +162,37 @@ export class FinanceService {
       return sum + Math.max(due, 0);
     }, 0);
 
+    const extrasMonth =
+      Number(onlineMonthAgg._sum.amount || 0) +
+      Number(handoutMonthAgg._sum.amount || 0) +
+      Number(rentalMonthAgg._sum.amount || 0);
+    const extrasAll =
+      Number(onlineAllAgg._sum.amount || 0) +
+      Number(handoutAllAgg._sum.amount || 0) +
+      Number(rentalAllAgg._sum.amount || 0);
+    const extrasCountAll =
+      onlineAllAgg._count + handoutAllAgg._count + rentalAllAgg._count;
+    const extrasCountMonth =
+      onlineMonthAgg._count +
+      handoutMonthAgg._count +
+      rentalMonthAgg._count;
+
     return {
       collectedToday: drawer.total,
       drawerCollectedToday: drawer.total,
       collectedMonth:
         Number(paymentsMonthAgg._sum.amount || 0) +
-        Number(sessionsMonthAgg._sum.amount || 0),
+        Number(sessionsMonthAgg._sum.amount || 0) +
+        extrasMonth,
       collectedAll:
         Number(paymentsAllAgg._sum.amount || 0) +
-        Number(sessionsAllAgg._sum.amount || 0),
-      collectedAllBreakdown,
+        Number(sessionsAllAgg._sum.amount || 0) +
+        extrasAll,
       paymentsTodayCount: paymentsTodayAgg._count + sessionsTodayAgg._count,
-      paymentsMonthCount: paymentsMonthAgg._count + sessionsMonthAgg._count,
-      paymentCount: paymentCount + sessionsAllAgg._count,
+      paymentsMonthCount:
+        paymentsMonthAgg._count + sessionsMonthAgg._count + extrasCountMonth,
+      paymentCount:
+        paymentCount + sessionsAllAgg._count + extrasCountAll,
       invoiceCount,
       outstandingAmount,
       outstandingStudents: new Set(outstandingInvoices.map((i) => i.studentId))
@@ -139,18 +201,78 @@ export class FinanceService {
   }
 
   /**
-   * Breakdown of «إجمالي المتحصل» (= Payment amounts + confirmed SessionEntry amounts)
+   * Breakdown of «إجمالي المتحصل»
+   * (= payments + sessions + online codes + handouts + room rentals)
    * with estimated center share per bucket.
    */
   async collectedAllBreakdown() {
-    const payments = await this.prisma.payment.findMany({
-      select: {
-        amount: true,
-        receiptNumber: true,
-        note: true,
-        invoice: { select: { note: true, groupId: true } },
-      },
-    });
+    const confirmed = { payStatus: 'CONFIRMED' as const };
+
+    const [
+      payments,
+      sessions,
+      sessionsAgg,
+      onlineAgg,
+      onlineCenterAgg,
+      handoutAgg,
+      handoutCenterAgg,
+      rentalAgg,
+    ] = await Promise.all([
+      this.prisma.payment.findMany({
+        select: {
+          amount: true,
+          receiptNumber: true,
+          note: true,
+          invoice: { select: { note: true, groupId: true } },
+        },
+      }),
+      this.prisma.classSession.findMany({
+        where: { entries: { some: confirmed } },
+        select: {
+          feeAmount: true,
+          centerAmount: true,
+          teacherPercent: true,
+          settledTeacherAmount: true,
+          settledCenterAmount: true,
+          entries: {
+            where: confirmed,
+            select: {
+              amount: true,
+              refundedAmount: true,
+              centerKeepsAll: true,
+            },
+          },
+        },
+      }),
+      this.prisma.sessionEntry.aggregate({
+        where: confirmed,
+        _sum: { amount: true },
+        _count: true,
+      }),
+      this.prisma.onlineCodeSale.aggregate({
+        where: confirmed,
+        _sum: { amount: true },
+        _count: true,
+      }),
+      this.prisma.onlineCodeSale.aggregate({
+        where: confirmed,
+        _sum: { centerShare: true },
+      }),
+      this.prisma.handoutSale.aggregate({
+        where: confirmed,
+        _sum: { amount: true },
+        _count: true,
+      }),
+      this.prisma.handoutSale.aggregate({
+        where: confirmed,
+        _sum: { centerShare: true },
+      }),
+      this.prisma.roomRental.aggregate({
+        where: confirmed,
+        _sum: { amount: true },
+        _count: true,
+      }),
+    ]);
 
     const isBookingPay = (p: {
       receiptNumber?: string | null;
@@ -181,30 +303,6 @@ export class FinanceService {
       }
     }
 
-    const sessions = await this.prisma.classSession.findMany({
-      where: { entries: { some: { payStatus: 'CONFIRMED' } } },
-      select: {
-        feeAmount: true,
-        centerAmount: true,
-        teacherPercent: true,
-        settledTeacherAmount: true,
-        settledCenterAmount: true,
-        entries: {
-          where: { payStatus: 'CONFIRMED' },
-          select: {
-            amount: true,
-            refundedAmount: true,
-            centerKeepsAll: true,
-          },
-        },
-      },
-    });
-
-    const sessionsAgg = await this.prisma.sessionEntry.aggregate({
-      where: { payStatus: 'CONFIRMED' },
-      _sum: { amount: true },
-      _count: true,
-    });
     const sessionsGross = money(sessionsAgg._sum.amount);
     const sessionsCount = sessionsAgg._count;
 
@@ -220,6 +318,19 @@ export class FinanceService {
       });
       sessionsCenter += money(split.centerShare);
     }
+
+    const onlineGross = money(onlineAgg._sum.amount);
+    const onlineCount = onlineAgg._count;
+    const onlineCenter = money(onlineCenterAgg._sum.centerShare);
+
+    const handoutGross = money(handoutAgg._sum.amount);
+    const handoutCount = handoutAgg._count;
+    const handoutCenter = money(handoutCenterAgg._sum.centerShare);
+
+    const rentalGross = money(rentalAgg._sum.amount);
+    const rentalCount = rentalAgg._count;
+    /** Room rentals are center revenue (no teacher split). */
+    const rentalCenter = rentalGross;
 
     const round = (n: number) => Math.round(n * 100) / 100;
     const rows = [
@@ -240,14 +351,6 @@ export class FinanceService {
         count: groupsCount,
       },
       {
-        key: 'other',
-        label: 'إيصالات أخرى',
-        amount: round(otherGross),
-        centerShare: round(otherGross),
-        centerNote: '١٠٠٪ للسنتر',
-        count: otherCount,
-      },
-      {
         key: 'sessions',
         label: 'حضور حصص',
         amount: round(sessionsGross),
@@ -255,14 +358,58 @@ export class FinanceService {
         centerNote: 'نصيب السنتر بعد القسمة مع المدرس',
         count: sessionsCount,
       },
+      {
+        key: 'online',
+        label: 'أكواد أونلاين',
+        amount: round(onlineGross),
+        centerShare: round(onlineCenter),
+        centerNote: 'نصيب السنتر من بيع الأكواد',
+        count: onlineCount,
+      },
+      {
+        key: 'handout',
+        label: 'ملازم',
+        amount: round(handoutGross),
+        centerShare: round(handoutCenter),
+        centerNote: 'نصيب السنتر من الملازم',
+        count: handoutCount,
+      },
+      {
+        key: 'rental',
+        label: 'تأجير قاعات',
+        amount: round(rentalGross),
+        centerShare: round(rentalCenter),
+        centerNote: '١٠٠٪ للسنتر',
+        count: rentalCount,
+      },
+      {
+        key: 'other',
+        label: 'إيصالات أخرى',
+        amount: round(otherGross),
+        centerShare: round(otherGross),
+        centerNote: '١٠٠٪ للسنتر',
+        count: otherCount,
+      },
     ].filter((r) => r.amount > 0.009 || r.count > 0);
 
     return {
       total: round(
-        bookingGross + groupsGross + otherGross + sessionsGross,
+        bookingGross +
+          groupsGross +
+          otherGross +
+          sessionsGross +
+          onlineGross +
+          handoutGross +
+          rentalGross,
       ),
       centerTotal: round(
-        bookingGross + groupsGross + otherGross + sessionsCenter,
+        bookingGross +
+          groupsGross +
+          otherGross +
+          sessionsCenter +
+          onlineCenter +
+          handoutCenter +
+          rentalCenter,
       ),
       rows,
     };
@@ -342,19 +489,46 @@ export class FinanceService {
   /**
    * Unified receipts ledger with Arabic reason labels
    * (booking forms, class attendance, general collection).
+   * Optional Cairo `from`/`to` (YYYY-MM-DD). Omit both = all receipts.
    */
-  async listPayments() {
-    const [payments, sessions] = await Promise.all([
+  async listPayments(opts?: { from?: string; to?: string }) {
+    const from = String(opts?.from || '').trim();
+    const to = String(opts?.to || '').trim();
+    const ymdRe = /^\d{4}-\d{2}-\d{2}$/;
+    if (from && !ymdRe.test(from)) {
+      throw new BadRequestException('تاريخ البداية غير صالح');
+    }
+    if (to && !ymdRe.test(to)) {
+      throw new BadRequestException('تاريخ النهاية غير صالح');
+    }
+    if (from && to && from > to) {
+      throw new BadRequestException('تاريخ البداية بعد النهاية');
+    }
+
+    const paidAt =
+      from || to
+        ? {
+            ...(from ? { gte: cairoBounds(from).start } : {}),
+            ...(to ? { lte: cairoBounds(to).end } : {}),
+          }
+        : undefined;
+    const confirmedAt = paidAt;
+
+    const [payments, sessions, onlineSales, handoutSales, rentals] =
+      await Promise.all([
       this.prisma.payment.findMany({
+        where: paidAt ? { paidAt } : undefined,
         include: {
           student: true,
           invoice: { include: { group: { include: { subject: true } } } },
         },
         orderBy: { paidAt: 'desc' },
-        take: 2000,
       }),
       this.prisma.sessionEntry.findMany({
-        where: { payStatus: 'CONFIRMED' },
+        where: {
+          payStatus: 'CONFIRMED',
+          ...(confirmedAt ? { confirmedAt } : {}),
+        },
         include: {
           student: true,
           session: {
@@ -365,7 +539,39 @@ export class FinanceService {
           },
         },
         orderBy: { confirmedAt: 'desc' },
-        take: 1000,
+      }),
+      this.prisma.onlineCodeSale.findMany({
+        where: {
+          payStatus: 'CONFIRMED',
+          ...(confirmedAt ? { confirmedAt } : {}),
+        },
+        include: {
+          student: true,
+          offer: { include: { teacher: true, subject: true } },
+          code: { select: { code: true } },
+        },
+        orderBy: { confirmedAt: 'desc' },
+      }),
+      this.prisma.handoutSale.findMany({
+        where: {
+          payStatus: 'CONFIRMED',
+          ...(confirmedAt ? { confirmedAt } : {}),
+        },
+        include: {
+          student: true,
+          product: { include: { teacher: true } },
+        },
+        orderBy: { confirmedAt: 'desc' },
+      }),
+      this.prisma.roomRental.findMany({
+        where: {
+          payStatus: 'CONFIRMED',
+          ...(confirmedAt ? { confirmedAt } : {}),
+        },
+        include: {
+          classroom: true,
+        },
+        orderBy: { confirmedAt: 'desc' },
       }),
     ]);
 
@@ -424,22 +630,140 @@ export class FinanceService {
       return {
         id: e.id,
         source: 'SESSION' as const,
-        student: e.student,
+        student: e.student
+          ? e.student
+          : e.guestName
+            ? {
+                id: null,
+                firstName: e.guestName,
+                lastName: '-',
+                phone: e.guestPhone,
+                studentUid: null,
+              }
+            : null,
         receiptNumber: e.receiptNumber,
         amount: e.amount,
         method: e.method,
         paidAt: e.confirmedAt || e.createdAt,
         note: e.note,
-        reason: 'حضور حصة',
+        reason: e.student ? 'حضور حصة' : 'حضور حصة (ضيف)',
         reasonDetail: detail || e.note || '—',
       };
     });
 
-    return [...paymentRows, ...sessionRows]
-      .sort(
-        (a, b) =>
-          new Date(b.paidAt).getTime() - new Date(a.paidAt).getTime(),
-      );
+    const onlineRows = onlineSales.map((s) => {
+      const teacher = s.offer.teacher
+        ? `${s.offer.teacher.firstName} ${
+            s.offer.teacher.lastName === '-' ? '' : s.offer.teacher.lastName
+          }`.trim()
+        : '';
+      const subject =
+        s.offer.subject?.nameAr || s.offer.subject?.nameEn || '';
+      const detail = [s.offer.title, subject, teacher, s.code?.code]
+        .filter(Boolean)
+        .join(' · ');
+      const name =
+        s.student
+          ? null
+          : (s.buyerName || 'مشتري كود').trim();
+      return {
+        id: s.id,
+        source: 'ONLINE' as const,
+        student: s.student
+          ? s.student
+          : {
+              id: null,
+              firstName: name || 'مشتري كود',
+              lastName: '-',
+              phone: s.buyerPhone,
+              studentUid: null,
+            },
+        receiptNumber: s.receiptNumber,
+        amount: s.amount,
+        method: s.method,
+        paidAt: s.confirmedAt || s.createdAt,
+        note: s.note,
+        reason: 'كود أونلاين',
+        reasonDetail: detail || s.note || '—',
+      };
+    });
+
+    const handoutRows = handoutSales.map((s) => {
+      const teacher = s.product.teacher
+        ? `${s.product.teacher.firstName} ${
+            s.product.teacher.lastName === '-'
+              ? ''
+              : s.product.teacher.lastName
+          }`.trim()
+        : '';
+      const qty = Number(s.qty || 1);
+      const detail = [
+        s.product.title,
+        teacher,
+        qty > 1 ? `×${qty}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      return {
+        id: s.id,
+        source: 'HANDOUT' as const,
+        student: s.student
+          ? s.student
+          : {
+              id: null,
+              firstName: 'مشتري ملزمة',
+              lastName: '-',
+              phone: s.buyerPhone,
+              studentUid: null,
+            },
+        receiptNumber: s.receiptNumber,
+        amount: s.amount,
+        method: s.method,
+        paidAt: s.confirmedAt || s.createdAt,
+        note: s.note,
+        reason: 'ملزمة',
+        reasonDetail: detail || s.note || '—',
+      };
+    });
+
+    const rentalRows = rentals.map((r) => {
+      const room = r.classroom?.name || 'قاعة';
+      const title = r.title?.trim();
+      const head =
+        r.billingMode === 'PER_STUDENT' && r.headcount
+          ? `${r.headcount} طالب`
+          : '';
+      const detail = [room, title, head].filter(Boolean).join(' · ');
+      return {
+        id: r.id,
+        source: 'RENTAL' as const,
+        student: {
+          id: null,
+          firstName: r.renterName || 'مستأجر',
+          lastName: '-',
+          phone: r.renterPhone,
+          studentUid: null,
+        },
+        receiptNumber: r.receiptNumber || `RR-${r.id.slice(-8)}`,
+        amount: r.amount,
+        method: r.method,
+        paidAt: r.confirmedAt || r.createdAt,
+        note: r.notes,
+        reason: 'تأجير قاعة',
+        reasonDetail: detail || r.notes || '—',
+      };
+    });
+
+    return [
+      ...paymentRows,
+      ...sessionRows,
+      ...onlineRows,
+      ...handoutRows,
+      ...rentalRows,
+    ].sort(
+      (a, b) =>
+        new Date(b.paidAt).getTime() - new Date(a.paidAt).getTime(),
+    );
   }
 
   private describePaymentReason(

@@ -2,11 +2,13 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import {
   BlockScope,
   ClassSessionStatus,
+  MessageChannel,
   OpsCheckInSource,
   Prisma,
   RefundReason,
@@ -17,11 +19,12 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizePhone, isValidMobile, phoneLookupVariants } from '../common/phone.util';
 import { CashService } from '../finance/cash.service';
+import { MessagingService } from '../messaging/messaging.service';
 import {
   splitSessionFromEntries,
   teacherPercentFromCenter,
 } from './session-split';
-
+import { buildTeacherSettlementWhatsAppMessage } from './ops-whatsapp.util';
 const PHONE_CHECKIN_LIMIT = 2;
 
 /** Secondary grades: accounts via paid form only; session walk-in create blocked. */
@@ -109,9 +112,12 @@ function teacherPayoutNote(session: {
 
 @Injectable()
 export class OpsService {
+  private readonly logger = new Logger(OpsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly cash: CashService,
+    private readonly messaging: MessagingService,
   ) {}
 
   private async actorTeacherId(userId?: string, role?: string) {
@@ -317,8 +323,10 @@ export class OpsService {
       teacherPercent?: number;
       notes?: string;
       sessionDate?: string;
+      allowWithoutForm?: boolean;
     },
     userId?: string,
+    role?: string,
   ) {
     const { centerAmount, teacherPercent } = this.resolveShare(
       data.feeAmount,
@@ -333,6 +341,10 @@ export class OpsService {
       throw new BadRequestException('المدرس غير متاح');
     }
 
+    const allowWithoutForm =
+      (role === RoleCode.SUPER_ADMIN || role === RoleCode.CENTER_MANAGER) &&
+      Boolean(data.allowWithoutForm);
+
     return this.prisma.classSession.create({
       data: {
         teacherId: teacherId,
@@ -342,6 +354,7 @@ export class OpsService {
         centerAmount,
         teacherPercent,
         notes: data.notes,
+        allowWithoutForm,
         sessionDate: data.sessionDate
           ? new Date(data.sessionDate)
           : new Date(),
@@ -362,6 +375,7 @@ export class OpsService {
       feeAmount?: number;
       centerAmount?: number;
       notes?: string | null;
+      allowWithoutForm?: boolean;
     },
     role?: string,
     userId?: string,
@@ -451,6 +465,9 @@ export class OpsService {
         centerAmount,
         teacherPercent,
         notes: data.notes === undefined ? session.notes : data.notes,
+        ...(data.allowWithoutForm !== undefined
+          ? { allowWithoutForm: Boolean(data.allowWithoutForm) }
+          : {}),
       },
     });
 
@@ -571,18 +588,25 @@ export class OpsService {
   }
 
   /**
-   * Secondary students must have a PAID booking form before any session
-   * attendance, unless the teacher is exempt (Palestine).
+   * Secondary students: one free attendance per teacher without a PAID form,
+   * then form required — unless teacher is exempt (Palestine) or this session
+   * was marked allowWithoutForm by admin.
    */
   private async assertSecondaryFormGate(args: {
     studentId: string;
     studentPhone?: string | null;
     gradeLevelId?: string | null;
     teacherId: string;
+    sessionId?: string;
+    allowWithoutForm?: boolean;
   }) {
+    if (args.allowWithoutForm) return;
+
     const teacher = await this.prisma.teacher.findUnique({
       where: { id: args.teacherId },
       select: {
+        firstName: true,
+        lastName: true,
         allowWalkInWithoutForm: true,
       },
     });
@@ -613,8 +637,25 @@ export class OpsService {
     });
     if (paidForm) return;
 
+    const priorVisits = await this.prisma.sessionEntry.count({
+      where: {
+        studentId: args.studentId,
+        ...(args.sessionId ? { sessionId: { not: args.sessionId } } : {}),
+        payStatus: {
+          in: [
+            SessionPayStatus.CONFIRMED,
+            SessionPayStatus.PARTIALLY_REFUNDED,
+          ],
+        },
+        session: { teacherId: args.teacherId },
+      },
+    });
+    if (priorVisits < 1) return;
+
+    const teacherName =
+      `${teacher.firstName} ${teacher.lastName === '-' ? '' : teacher.lastName}`.trim();
     throw new BadRequestException(
-      'طالب ثانوي لازم يكون معاه استمارة مدفوعة قبل الحضور. سجّل الاستمارة وادفعها الأول، أو استخدم مدرس مستثنى (فلسطين).',
+      `طالب ثانوي حضر قبل كده عند ${teacherName} من غير استمارة مدفوعة. سجّل الاستمارة وادفعها الأول، أو استخدم مدرس مستثنى (فلسطين)، أو فعّل «سماح بدون استمارة» على الجلسة دي (أدمن).`,
     );
   }
 
@@ -738,11 +779,6 @@ export class OpsService {
       where: { id: gradeLevelId },
     });
     if (!grade) throw new BadRequestException('الصف غير موجود');
-    if (FORM_REQUIRED_SECONDARY_GRADES.has(grade.nameAr)) {
-      throw new BadRequestException(
-        'طلاب الثانوي بيتسجلوا من الاستمارة المدفوعة فقط — مش من الحصة. سجّل الاستمارة وادفعها الأول، وبعدين الحضور.',
-      );
-    }
 
     const already = await this.findStudent({ phone });
     if (already) return already;
@@ -793,10 +829,22 @@ export class OpsService {
     },
     userId?: string,
   ) {
-    const session = await this.getSession(sessionId);
+    const session = await this.prisma.classSession.findUnique({
+      where: { id: sessionId },
+      select: {
+        id: true,
+        status: true,
+        feeAmount: true,
+        teacherId: true,
+        allowWithoutForm: true,
+      },
+    });
+    if (!session) throw new NotFoundException('الجلسة غير موجودة');
     if (session.status !== ClassSessionStatus.OPEN) {
       throw new BadRequestException('الجلسة مقفولة — لا يمكن التحصيل');
     }
+
+    const allowWithoutForm = Boolean(session.allowWithoutForm);
 
     let student =
       (await this.findStudent({
@@ -805,43 +853,94 @@ export class OpsService {
         studentUid: data.studentUid,
         name: data.studentName,
       })) || null;
+
+    /** Guest: name-only attendance on exception sessions — no student file. */
+    let guestName: string | null = null;
+    let guestPhone: string | null = null;
+
     if (!student) {
-      student = await this.ensureWalkInStudent({
-        nameRaw: data.studentName || '',
-        phoneRaw: data.phone || '',
-        parentPhoneRaw: data.parentPhone || '',
-        gradeLevelId: data.gradeLevelId || '',
-      });
+      if (allowWithoutForm) {
+        guestName = (data.studentName || '').trim();
+        if (guestName.length < 2) {
+          throw new BadRequestException('اكتب اسم الطالب');
+        }
+        const rawPhone = (data.phone || '').trim();
+        if (rawPhone) {
+          guestPhone = normalizePhone(rawPhone);
+          if (!isValidMobile(guestPhone)) {
+            throw new BadRequestException('موبايل الطالب غير صالح');
+          }
+        }
+      } else {
+        student = await this.ensureWalkInStudent({
+          nameRaw: data.studentName || '',
+          phoneRaw: data.phone || '',
+          parentPhoneRaw: data.parentPhone || '',
+          gradeLevelId: data.gradeLevelId || '',
+        });
+      }
     }
-    const payPhone = data.phone ? normalizePhone(data.phone) : '';
-    if (payPhone && isValidMobile(payPhone) && !student.phone) {
-      student = await this.prisma.student.update({
-        where: { id: student.id },
-        data: { phone: payPhone },
+
+    if (student) {
+      const payPhone = data.phone ? normalizePhone(data.phone) : '';
+      if (payPhone && isValidMobile(payPhone) && !student.phone) {
+        student = await this.prisma.student.update({
+          where: { id: student.id },
+          data: { phone: payPhone },
+        });
+      }
+      if (!student.isActive) {
+        throw new BadRequestException('حساب الطالب غير نشط');
+      }
+
+      await this.assertNotBlocked(student.id, session.teacherId);
+      await this.assertSecondaryFormGate({
+        studentId: student.id,
+        studentPhone: student.phone,
+        gradeLevelId: student.gradeLevelId,
+        teacherId: session.teacherId,
+        sessionId,
+        allowWithoutForm,
       });
-    }
-    if (!student.isActive) throw new BadRequestException('حساب الطالب غير نشط');
 
-    await this.assertNotBlocked(student.id, session.teacherId);
-    await this.assertSecondaryFormGate({
-      studentId: student.id,
-      studentPhone: student.phone,
-      gradeLevelId: student.gradeLevelId,
-      teacherId: session.teacherId,
-    });
-
-    const existing = await this.prisma.sessionEntry.findUnique({
-      where: {
-        sessionId_studentId: { sessionId, studentId: student.id },
-      },
-    });
-    if (existing && existing.payStatus !== SessionPayStatus.REFUNDED) {
-      const name = `${student.firstName} ${student.lastName === '-' ? '' : student.lastName}`.trim();
-      throw new BadRequestException(
-        existing.checkedInAt
-          ? `${name} داخل الجلسة بالفعل — مش هيتسجل تاني`
-          : `${name} مسجّل في الجلسة بالفعل — مش هيتسجل تاني`,
-      );
+      const existing = await this.prisma.sessionEntry.findUnique({
+        where: {
+          sessionId_studentId: { sessionId, studentId: student.id },
+        },
+      });
+      if (existing && existing.payStatus !== SessionPayStatus.REFUNDED) {
+        const name = `${student.firstName} ${student.lastName === '-' ? '' : student.lastName}`.trim();
+        throw new BadRequestException(
+          existing.checkedInAt
+            ? `${name} داخل الجلسة بالفعل — مش هيتسجل تاني`
+            : `${name} مسجّل في الجلسة بالفعل — مش هيتسجل تاني`,
+        );
+      }
+    } else {
+      const guestDup = await this.prisma.sessionEntry.findFirst({
+        where: {
+          sessionId,
+          studentId: null,
+          payStatus: { not: SessionPayStatus.REFUNDED },
+          OR: [
+            ...(guestPhone
+              ? [{ guestPhone: { in: phoneLookupVariants(guestPhone) } }]
+              : []),
+            {
+              guestName: {
+                equals: guestName!,
+                mode: 'insensitive',
+              },
+              ...(guestPhone ? {} : { guestPhone: null }),
+            },
+          ],
+        },
+      });
+      if (guestDup) {
+        throw new BadRequestException(
+          `${guestName} مسجّل في الجلسة بالفعل — مش هيتسجل تاني`,
+        );
+      }
     }
 
     if (data.method === SessionPayMethod.VODAFONE_CASH && !data.vodafoneTxn?.trim()) {
@@ -874,7 +973,9 @@ export class OpsService {
     return this.prisma.sessionEntry.create({
       data: {
         sessionId,
-        studentId: student.id,
+        studentId: student?.id ?? null,
+        guestName: student ? null : guestName,
+        guestPhone: student ? null : guestPhone,
         amount,
         listedFee,
         discountReason: isDiscount ? discountReason : null,
@@ -1162,13 +1263,92 @@ export class OpsService {
         note: teacherPayoutNote(session),
       });
     }
-    return this.prisma.classSession.update({
+    const paid = await this.prisma.classSession.update({
       where: { id: sessionId },
       data: {
         teacherPaidAt: new Date(),
         teacherPaidByUserId: userId || null,
       },
       include: { teacher: true, subject: true, entries: true },
+    });
+
+    void this.queueTeacherSettlementWhatsApp(paid).catch((err) => {
+      this.logger.warn(
+        `Teacher settlement WhatsApp failed session=${sessionId}: ${
+          err instanceof Error ? err.message : err
+        }`,
+      );
+    });
+
+    return paid;
+  }
+
+  /** Auto WhatsApp thank-you to teacher after payout. */
+  private async queueTeacherSettlementWhatsApp(session: {
+    id: string;
+    sessionDate: Date | string;
+    title?: string | null;
+    settledTeacherAmount?: unknown;
+    settledCenterAmount?: unknown;
+    teacherId: string;
+    teacher?: {
+      firstName?: string | null;
+      lastName?: string | null;
+      phone?: string | null;
+    } | null;
+    subject?: { nameAr?: string | null; nameEn?: string | null } | null;
+    entries?: Array<{ payStatus: SessionPayStatus }>;
+  }) {
+    if (process.env.SESSION_TEACHER_WHATSAPP_AUTO === 'false') return;
+
+    const provider = (process.env.WHATSAPP_PROVIDER || 'console').toLowerCase();
+    if (provider === 'console') return;
+
+    const rawPhone = session.teacher?.phone?.trim() || '';
+    if (!rawPhone) {
+      this.logger.warn(
+        `Skip teacher WhatsApp: no phone on teacherId=${session.teacherId} session=${session.id}`,
+      );
+      return;
+    }
+    const phone = normalizePhone(rawPhone);
+    if (!isValidMobile(phone)) {
+      this.logger.warn(
+        `Skip teacher WhatsApp: invalid phone teacherId=${session.teacherId}`,
+      );
+      return;
+    }
+
+    const attendanceCount = (session.entries || []).filter((e) =>
+      isPaidStatus(e.payStatus),
+    ).length;
+    const teacherShare = Number(session.settledTeacherAmount || 0);
+    const centerShare = Number(session.settledCenterAmount || 0);
+
+    const body = buildTeacherSettlementWhatsAppMessage({
+      teacherName: teacherLabel(session.teacher),
+      sessionDate: sessionDayYmd(session.sessionDate),
+      subjectName: session.subject?.nameAr || session.subject?.nameEn,
+      title: session.title,
+      attendanceCount,
+      teacherShare,
+      centerShare,
+      centerName: process.env.CENTER_NAME || 'Success Center',
+    });
+
+    await this.messaging.enqueue({
+      channel: MessageChannel.WHATSAPP,
+      toPhone: phone,
+      title: 'تسوية حصة',
+      body,
+      meta: {
+        kind: 'session_teacher_settle',
+        sessionId: session.id,
+        teacherId: session.teacherId,
+        attendanceCount,
+        teacherShare,
+        centerShare,
+      },
     });
   }
 
@@ -1260,7 +1440,11 @@ export class OpsService {
         details: {
           sessionId: entry.sessionId,
           studentId: entry.studentId,
-          studentName: `${entry.student.firstName} ${entry.student.lastName === '-' ? '' : entry.student.lastName}`.trim(),
+          studentName: entry.student
+            ? `${entry.student.firstName} ${entry.student.lastName === '-' ? '' : entry.student.lastName}`.trim()
+            : entry.guestName || 'ضيف',
+          guestName: entry.guestName,
+          guestPhone: entry.guestPhone,
           amount: Number(entry.amount),
           receiptNumber: entry.receiptNumber,
           sessionDate: sessionDayYmd(entry.session.sessionDate),

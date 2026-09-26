@@ -47,6 +47,7 @@ type Session = {
   settledTeacherAmount?: string | number | null;
   settledCenterAmount?: string | number | null;
   teacherPaidAt?: string | null;
+  allowWithoutForm?: boolean;
   sessionDate: string;
   teacher: Teacher;
   subject?: Subject | null;
@@ -91,8 +92,22 @@ type Entry = {
   receiptNumber: string;
   checkedInAt?: string | null;
   refundedAmount?: string | number;
-  student: Student;
+  studentId?: string | null;
+  guestName?: string | null;
+  guestPhone?: string | null;
+  student?: Student | null;
 };
+
+function entryDisplayName(e: Entry): string {
+  if (e.student) {
+    return `${e.student.firstName} ${e.student.lastName === '-' ? '' : e.student.lastName}`.trim();
+  }
+  return (e.guestName || 'ضيف').trim();
+}
+
+function entryDisplayPhone(e: Entry): string {
+  return e.student?.phone || e.guestPhone || '';
+}
 
 type PayMode = 'full' | 'half' | 'free' | 'custom';
 
@@ -214,6 +229,7 @@ export default function OpsPage() {
     centerAmount: 0,
     notes: '',
     teacherName: '',
+    allowWithoutForm: false,
   });
   const [editForm, setEditForm] = useState({
     teacherId: '',
@@ -222,6 +238,7 @@ export default function OpsPage() {
     feeAmount: 0,
     centerAmount: 0,
     teacherName: '',
+    allowWithoutForm: false,
   });
 
   const [payForm, setPayForm] = useState({
@@ -260,27 +277,15 @@ export default function OpsPage() {
     reason: '',
   });
 
-  async function loadLists() {
-    const params = new URLSearchParams();
-    if (sessionDate) params.set('date', sessionDate);
-    if (listFilter === 'open') params.set('status', 'OPEN');
-    if (listFilter === 'closed') params.set('status', 'CLOSED');
-    if (listFilter === 'unsettled') params.set('unsettled', '1');
-    const qs = params.toString() ? `?${params.toString()}` : '';
-    const [s, t, b, g] = await Promise.all([
-      api<Session[]>(`/ops/sessions${qs}`),
+  async function loadCatalog() {
+    const [t, b, g] = await Promise.all([
       api<Teacher[]>('/teachers'),
       api<Block[]>('/ops/blocks'),
       api<GradeLevel[]>('/catalog/grade-levels'),
     ]);
-    setSessions(s);
     setTeachers(t);
     setBlocks(b);
     setGrades(g);
-    if (s.length && (!selectedId || !s.some((x) => x.id === selectedId))) {
-      setSelectedId(s[0].id);
-    }
-    if (!s.length) setSelectedId('');
     setOpenForm((f) => {
       if (f.teacherId === OTHER_TEACHER) return f;
       const teacherId = f.teacherId || t[0]?.id || '';
@@ -294,6 +299,35 @@ export default function OpsPage() {
     });
   }
 
+  async function loadSessions() {
+    const params = new URLSearchParams();
+    if (sessionDate) params.set('date', sessionDate);
+    if (listFilter === 'open') params.set('status', 'OPEN');
+    if (listFilter === 'closed') params.set('status', 'CLOSED');
+    if (listFilter === 'unsettled') params.set('unsettled', '1');
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const s = await api<Session[]>(`/ops/sessions${qs}`);
+    setSessions(s);
+    if (s.length && (!selectedId || !s.some((x) => x.id === selectedId))) {
+      setSelectedId(s[0].id);
+    }
+    if (!s.length) setSelectedId('');
+    return s;
+  }
+
+  async function loadLists() {
+    await Promise.all([loadCatalog(), loadSessions()]);
+  }
+
+  /** After pay/entry changes: refresh session list + open detail only (skip teachers/grades). */
+  async function refreshAfterEntry(sessionId?: string | null) {
+    const id = sessionId || selectedId;
+    await Promise.all([
+      loadSessions(),
+      id ? loadDetail(id) : Promise.resolve(),
+    ]);
+  }
+
   async function loadDetail(id: string) {
     if (!id) {
       setDetail(null);
@@ -303,7 +337,11 @@ export default function OpsPage() {
   }
 
   useEffect(() => {
-    loadLists().catch((e) => setError(e.message));
+    loadCatalog().catch((e) => setError(e.message));
+  }, []);
+
+  useEffect(() => {
+    loadSessions().catch((e) => setError(e.message));
   }, [sessionDate, listFilter]);
 
   useEffect(() => {
@@ -328,6 +366,7 @@ export default function OpsPage() {
       feeAmount: Number(detail.feeAmount || 0),
       centerAmount: centerCutOf(detail),
       teacherName: '',
+      allowWithoutForm: Boolean(detail.allowWithoutForm),
     });
   }, [detail, teachers]);
 
@@ -406,7 +445,7 @@ export default function OpsPage() {
           : 'الجلسة';
         const subjectName = detail?.subject?.nameAr || detail?.title || 'حصة';
         const already = (detail?.entries || []).find(
-          (e) => e.student.id === student.id && e.payStatus !== 'REFUNDED',
+          (e) => e.student?.id === student.id && e.payStatus !== 'REFUNDED',
         );
         if (already) {
           setScanOpen(false);
@@ -442,8 +481,7 @@ export default function OpsPage() {
         });
         setScanOpen(false);
         setScanned(null);
-        await loadDetail(selectedId);
-        await loadLists();
+        await refreshAfterEntry(selectedId);
         setScanNotice({
           tone: 'success',
           title: 'تم الدفع والحضور',
@@ -553,6 +591,9 @@ export default function OpsPage() {
               ? undefined
               : openForm.subjectId || undefined,
           title: openForm.title || undefined,
+          allowWithoutForm: isManager
+            ? openForm.allowWithoutForm
+            : undefined,
         }),
       });
       await loadLists();
@@ -589,6 +630,7 @@ export default function OpsPage() {
           title: editForm.title || null,
           feeAmount: Number(editForm.feeAmount),
           centerAmount: Number(editForm.centerAmount),
+          allowWithoutForm: editForm.allowWithoutForm,
         }),
       });
       setDetail(updated);
@@ -634,11 +676,15 @@ export default function OpsPage() {
           studentUid: scanned?.studentUid,
           studentName: scanned ? undefined : payForm.studentName.trim() || undefined,
           parentPhone:
-            !scanned && payMatch.status === 'missing'
+            !scanned &&
+            payMatch.status === 'missing' &&
+            !detail?.allowWithoutForm
               ? payForm.parentPhone.trim() || undefined
               : undefined,
           gradeLevelId:
-            !scanned && payMatch.status === 'missing'
+            !scanned &&
+            payMatch.status === 'missing' &&
+            !detail?.allowWithoutForm
               ? payForm.gradeLevelId || undefined
               : undefined,
           method: payForm.method,
@@ -664,8 +710,7 @@ export default function OpsPage() {
         centerKeepsAll: false,
       });
       setScanned(null);
-      await loadDetail(selectedId);
-      await loadLists();
+      await refreshAfterEntry(selectedId);
       setMsg('تم تسجيل الدفع والحضور');
     } catch (err: any) {
       const msg = String(err?.message || 'تعذّر تسجيل الدفع');
@@ -687,7 +732,7 @@ export default function OpsPage() {
     setBusy(`c-${id}`);
     try {
       await api(`/ops/entries/${id}/confirm`, { method: 'POST' });
-      if (selectedId) await loadDetail(selectedId);
+      if (selectedId) await refreshAfterEntry(selectedId);
       setMsg('تم تأكيد فودافون كاش');
     } catch (err: any) {
       setError(err.message);
@@ -702,8 +747,7 @@ export default function OpsPage() {
     try {
       await api(`/ops/entries/${entryToDelete.id}`, { method: 'DELETE' });
       setEntryToDelete(null);
-      if (selectedId) await loadDetail(selectedId);
-      await loadLists();
+      await refreshAfterEntry(selectedId);
       setMsg('اتمسح تسجيل الطالب من الجلسة');
     } catch (err: any) {
       setError(err.message);
@@ -745,8 +789,7 @@ export default function OpsPage() {
       const closed = await api<Session>(`/ops/sessions/${selectedId}/close`, {
         method: 'POST',
       });
-      await loadLists();
-      await loadDetail(selectedId);
+      await Promise.all([loadSessions(), loadDetail(selectedId)]);
       setSettle(closed);
       setMsg('اتقفلت الجلسة — راجع التسوية');
     } catch (err: any) {
@@ -764,8 +807,7 @@ export default function OpsPage() {
         method: 'POST',
       });
       setSettle(paid);
-      await loadLists();
-      await loadDetail(sessionId);
+      await Promise.all([loadSessions(), loadDetail(sessionId)]);
       setMsg('اتدفع للمدرس · نصيب السنتر فضل في الدرج');
     } catch (err: any) {
       setError(err.message);
@@ -795,7 +837,7 @@ export default function OpsPage() {
         }),
       });
       setRefundForm({ entryId: '', amount: '', reason: 'CANCELLED', note: '' });
-      if (selectedId) await loadDetail(selectedId);
+      if (selectedId) await refreshAfterEntry(selectedId);
       setMsg('تم الاسترجاع');
     } catch (err: any) {
       setError(err.message);
@@ -1042,6 +1084,30 @@ export default function OpsPage() {
                       Number(openForm.centerAmount || 0)
                     ).toLocaleString('en-EG')} ج.م للطالب`}
               </p>
+              {isManager ? (
+                <label className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={openForm.allowWithoutForm}
+                    onChange={(e) =>
+                      setOpenForm({
+                        ...openForm,
+                        allowWithoutForm: e.target.checked,
+                      })
+                    }
+                  />
+                  <span>
+                    <span className="font-semibold text-amber-950">
+                      سماح بدون استمارة
+                    </span>
+                    <span className="mt-0.5 block text-xs text-navy/55">
+                      تجاوز لمرة الحصة دي: ثانوي يدخل من غير استمارة حتى لو حضر
+                      قبل كده عند نفس المدرس
+                    </span>
+                  </span>
+                </label>
+              ) : null}
               <button
                 type="submit"
                 className="btn-primary w-full"
@@ -1332,6 +1398,9 @@ export default function OpsPage() {
                           : 'لسه متتصفاش'}
                       </span>
                     ) : null}
+                    {detail.allowWithoutForm ? (
+                      <span className="badge-gold">بدون استمارة</span>
+                    ) : null}
                   </span>
                 }
                 action={
@@ -1527,6 +1596,28 @@ export default function OpsPage() {
                                 : ''
                           }`}
                     </p>
+                    <label className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-sm">
+                      <input
+                        type="checkbox"
+                        className="mt-1"
+                        checked={editForm.allowWithoutForm}
+                        onChange={(e) =>
+                          setEditForm({
+                            ...editForm,
+                            allowWithoutForm: e.target.checked,
+                          })
+                        }
+                      />
+                      <span>
+                        <span className="font-semibold text-amber-950">
+                          سماح بدون استمارة
+                        </span>
+                        <span className="mt-0.5 block text-xs text-navy/55">
+                          تجاوز لمرة الحصة دي: ثانوي يدخل من غير استمارة حتى لو
+                          حضر قبل كده عند نفس المدرس
+                        </span>
+                      </span>
+                    </label>
                     <button
                       type="submit"
                       className="btn-primary w-full"
@@ -1577,7 +1668,9 @@ export default function OpsPage() {
                       </div>
                     ) : (
                       <p className="text-[11px] text-navy/45">
-                        امسح الـ QR · أو اكتب الاسم والموبايل. لو مش في السجل هنطلب الصف وولي الأمر.
+                        {detail?.allowWithoutForm
+                          ? 'امسح الـ QR · أو اكتب الاسم (والموبايل اختياري). استثناء الجلسة: حضور بالاسم فقط بدون ملف.'
+                          : 'امسح الـ QR · أو اكتب الاسم والموبايل. ثانوي: أول مرة عند المدرس بدون استمارة، وبعدين لازم استمارة.'}
                       </p>
                     )}
                     <FieldLabel label="اسم الطالب">
@@ -1626,11 +1719,23 @@ export default function OpsPage() {
                         </p>
                       </div>
                     ) : null}
-                    {!scanned && payMatch.status === 'missing' ? (
+                    {!scanned &&
+                    payMatch.status === 'missing' &&
+                    detail?.allowWithoutForm ? (
+                      <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2">
+                        <p className="text-xs font-semibold text-sky-900">
+                          استثناء الجلسة: حضور بالاسم فقط — مفيش ملف طالب.
+                          هيتسجّل في الحصة دي بس.
+                        </p>
+                      </div>
+                    ) : null}
+                    {!scanned &&
+                    payMatch.status === 'missing' &&
+                    !detail?.allowWithoutForm ? (
                       <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
                         <p className="text-xs font-semibold text-amber-900">
-                          مش موجود في الطلاب — تقدر تفتح ملف لإعدادي / IG فقط.
-                          طلاب الثانوي من الاستمارة المدفوعة بس.
+                          مش موجود في الطلاب — هيتفتح له ملف. ثانوي: أول حضور عند
+                          المدرس من غير استمارة، والتاني لازم استمارة مدفوعة.
                         </p>
                         <FieldLabel label="الصف">
                           <select
@@ -1645,18 +1750,11 @@ export default function OpsPage() {
                             }
                           >
                             <option value="">اختَر الصف</option>
-                            {grades
-                              .filter(
-                                (g) =>
-                                  !['الأول الثانوي', 'الثاني الثانوي', 'الثالث الثانوي'].includes(
-                                    g.nameAr,
-                                  ),
-                              )
-                              .map((g) => (
-                                <option key={g.id} value={g.id}>
-                                  {g.nameAr}
-                                </option>
-                              ))}
+                            {grades.map((g) => (
+                              <option key={g.id} value={g.id}>
+                                {g.nameAr}
+                              </option>
+                            ))}
                           </select>
                         </FieldLabel>
                         <FieldLabel label="موبايل ولي الأمر">
@@ -1847,7 +1945,14 @@ export default function OpsPage() {
                         (!scanned &&
                           payMatch.status !== 'found' &&
                           !(
+                            detail?.allowWithoutForm &&
+                            payMatch.status !== 'loading' &&
+                            payMatch.status !== 'error' &&
+                            payForm.studentName.trim().length >= 2
+                          ) &&
+                          !(
                             payMatch.status === 'missing' &&
+                            !detail?.allowWithoutForm &&
                             payForm.studentName.trim() &&
                             payForm.phone.trim() &&
                             payForm.parentPhone.trim() &&
@@ -1875,10 +1980,16 @@ export default function OpsPage() {
                         <tr key={e.id}>
                           <td>
                             <p className="font-semibold">
-                              {e.student.firstName} {e.student.lastName}
+                              {entryDisplayName(e)}
+                              {!e.student ? (
+                                <span className="mr-1 text-[10px] font-semibold text-sky-700">
+                                  (ضيف)
+                                </span>
+                              ) : null}
                             </p>
                             <p className="text-[11px] text-navy/45">
-                              {e.student.phone}
+                              {entryDisplayPhone(e) ||
+                                (!e.student ? 'بدون ملف' : '')}
                             </p>
                           </td>
                           <td className="text-xs">
@@ -1955,7 +2066,7 @@ export default function OpsPage() {
                                 onClick={() =>
                                   setEntryToDelete({
                                     id: e.id,
-                                    name: `${e.student.firstName} ${e.student.lastName === '-' ? '' : e.student.lastName}`.trim(),
+                                    name: entryDisplayName(e),
                                   })
                                 }
                               >

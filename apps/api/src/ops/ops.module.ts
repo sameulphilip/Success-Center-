@@ -3,9 +3,10 @@ import { OpsController } from './ops.controller';
 import { OpsService } from './ops.service';
 import { AuthModule } from '../auth/auth.module';
 import { FinanceModule } from '../finance/finance.module';
+import { MessagingModule } from '../messaging/messaging.module';
 
 @Module({
-  imports: [AuthModule, FinanceModule],
+  imports: [AuthModule, FinanceModule, MessagingModule],
   controllers: [OpsController],
   providers: [OpsService],
   exports: [OpsService],

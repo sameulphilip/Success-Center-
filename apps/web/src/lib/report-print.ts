@@ -16,6 +16,8 @@ export type ReportSection =
   | 'by-form'
   | 'paid'
   | 'teachers-sessions'
+  | 'session-prices'
+  | 'teachers-earnings'
   | 'expense-list'
   | 'by-category'
   | 'streams'
@@ -46,6 +48,8 @@ export const SECTION_LABELS: Record<ReportSection, string> = {
   'by-form': 'حسب الاستمارة',
   paid: 'الاستمارات المدفوعة',
   'teachers-sessions': 'المدرسين والجلسات',
+  'session-prices': 'أسعار الحصص',
+  'teachers-earnings': 'أنصبة المدرسين',
   'expense-list': 'قائمة المصروفات',
   'by-category': 'المصروفات حسب البند',
   streams: 'مصادر الإيراد',
@@ -70,7 +74,7 @@ export const TAB_SECTIONS: Record<ReportTab, ReportSection[]> = {
   ],
   finance: ['summary', 'payments'],
   bookings: ['summary', 'by-form', 'paid'],
-  teachers: ['summary', 'teachers-sessions'],
+  teachers: ['summary', 'teachers-earnings', 'session-prices', 'teachers-sessions'],
   codes: [
     'summary',
     'stock',

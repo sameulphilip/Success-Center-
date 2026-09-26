@@ -61,7 +61,7 @@ export const ACCESS_CATALOG: {
   },
   {
     code: 'finance.safe',
-    labelAr: 'الحسابات: الخزنة والتسليم',
+    labelAr: 'الحسابات: الخزنة واستلام صاحب السنتر',
     labelEn: 'Finance safe',
     routes: ['/finance'],
   },

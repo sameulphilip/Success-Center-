@@ -1153,6 +1153,220 @@ export default function ReportsPage() {
               value={money(teachers.summary.collected)}
             />
           </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <KpiCard
+              label="نصيب المدرسين"
+              value={money(teachers.summary.teacherShare)}
+            />
+            <KpiCard
+              label="نصيب السنتر"
+              value={money(teachers.summary.centerShare)}
+              accent="green"
+            />
+            <KpiCard
+              label="نصيب الاستقبال"
+              value={money(teachers.summary.receptionShare)}
+              hint={`${teachers.rates?.receptionPerPresent ?? 7} ج × حضور`}
+            />
+            <KpiCard
+              label="نصيب السيستم"
+              value={money(teachers.summary.systemShare)}
+              hint={`${teachers.rates?.systemPerPresent ?? 2} ج × حضور`}
+            />
+            <KpiCard
+              label="صافي السنتر"
+              value={money(teachers.summary.netCenterShare)}
+              accent="gold"
+              hint="السنتر − استقبال − سيستم"
+            />
+          </div>
+
+          <div className="mt-4">
+            <SectionCard
+              title="أنصبة المدرسين"
+              action={
+                <button
+                  type="button"
+                  className="btn-ghost text-xs"
+                  onClick={() =>
+                    openPrintPicker('teachers', ['teachers-earnings'])
+                  }
+                >
+                  طباعة
+                </button>
+              }
+            >
+              <p className="mb-3 text-[12px] text-navy/50">
+                لكل مدرس: عدد الجلسات والحضور، ثم الأنصبة. الاستقبال{' '}
+                {teachers.rates?.receptionPerPresent ?? 7} ج والسيستم{' '}
+                {teachers.rates?.systemPerPresent ?? 2} ج على كل حضور. صافي
+                السنتر = نصيب السنتر − الاستقبال − السيستم.
+              </p>
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>المدرس</th>
+                      <th>جلسات</th>
+                      <th>حضور</th>
+                      <th>نصيب المدرس</th>
+                      <th>نصيب السنتر</th>
+                      <th>الاستقبال</th>
+                      <th>السيستم</th>
+                      <th>صافي السنتر</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(teachers.byTeacher || []).map((t: any) => (
+                      <tr key={`earn-${t.teacherId}`}>
+                        <td className="font-extrabold text-navy">{t.name}</td>
+                        <td className="tabular-nums">{t.sessionsCount}</td>
+                        <td className="tabular-nums font-bold">{t.presentCount}</td>
+                        <td className="tabular-nums">{money(t.teacherShare)}</td>
+                        <td className="tabular-nums text-emerald-800">
+                          {money(t.centerShare)}
+                        </td>
+                        <td className="tabular-nums text-xs">
+                          {money(t.receptionShare)}
+                        </td>
+                        <td className="tabular-nums text-xs">
+                          {money(t.systemShare)}
+                        </td>
+                        <td className="tabular-nums font-black text-navy">
+                          {money(t.netCenterShare)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  {(teachers.byTeacher || []).length ? (
+                    <tfoot>
+                      <tr className="font-bold bg-sand/50">
+                        <td>الإجمالي</td>
+                        <td className="tabular-nums">
+                          {teachers.summary.sessions}
+                        </td>
+                        <td className="tabular-nums">
+                          {teachers.summary.present}
+                        </td>
+                        <td className="tabular-nums">
+                          {money(teachers.summary.teacherShare)}
+                        </td>
+                        <td className="tabular-nums">
+                          {money(teachers.summary.centerShare)}
+                        </td>
+                        <td className="tabular-nums">
+                          {money(teachers.summary.receptionShare)}
+                        </td>
+                        <td className="tabular-nums">
+                          {money(teachers.summary.systemShare)}
+                        </td>
+                        <td className="tabular-nums font-black text-navy">
+                          {money(teachers.summary.netCenterShare)}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  ) : null}
+                </table>
+              </div>
+              {!teachers.byTeacher?.length ? (
+                <EmptyState>لا توجد جلسات في الفترة</EmptyState>
+              ) : null}
+            </SectionCard>
+          </div>
+
+          <div className="mt-4">
+            <SectionCard
+              title="أسعار الحصص حسب المدرس"
+              action={
+                <button
+                  type="button"
+                  className="btn-ghost text-xs"
+                  onClick={() =>
+                    openPrintPicker('teachers', ['session-prices'])
+                  }
+                >
+                  طباعة
+                </button>
+              }
+            >
+              <p className="mb-3 text-[12px] text-navy/50">
+                من الجلسات اللي اتفتحت في الفترة — كل صف = سعر حصة + قسمة
+                المدرس/السنتر استُخدمت مرة أو أكتر
+              </p>
+              <div className="space-y-3">
+                {(teachers.byTeacher || [])
+                  .filter((t: any) => (t.prices || []).length)
+                  .map((t: any) => (
+                    <div
+                      key={`price-${t.teacherId}`}
+                      className="rounded-xl border border-mist bg-white overflow-hidden"
+                    >
+                      <div className="px-4 py-2.5 border-b border-mist bg-sand/40">
+                        <p className="font-extrabold text-navy">{t.name}</p>
+                        <p className="text-[11px] text-navy/45 mt-0.5">
+                          {(t.prices || []).length} سعر · {t.sessionsCount} جلسة
+                        </p>
+                      </div>
+                      <div className="table-scroll">
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              <th>الصف</th>
+                              <th>سعر الحصة</th>
+                              <th>نصيب المدرس</th>
+                              <th>نسبة المدرس</th>
+                              <th>نصيب السنتر</th>
+                              <th>نسبة السنتر</th>
+                              <th>جلسات</th>
+                              <th>آخر مرة</th>
+                              <th>مواد</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(t.prices || []).map((p: any, i: number) => (
+                              <tr
+                                key={`${t.teacherId}-${p.feeAmount}-${p.centerAmount}-${(p.grades || []).join('-')}-${i}`}
+                              >
+                                <td className="font-extrabold text-navy">
+                                  {(p.grades || []).join(' · ') || 'غير محدد'}
+                                </td>
+                                <td className="tabular-nums font-black text-navy">
+                                  {money(p.feeAmount)}
+                                </td>
+                                <td className="tabular-nums font-bold">
+                                  {money(p.teacherAmount)}
+                                </td>
+                                <td className="tabular-nums text-navy">
+                                  {Number(p.teacherPercent).toLocaleString('en-EG')}%
+                                </td>
+                                <td className="tabular-nums font-semibold text-emerald-800">
+                                  {money(p.centerAmount)}
+                                </td>
+                                <td className="tabular-nums text-emerald-800">
+                                  {Number(p.centerPercent).toLocaleString('en-EG')}%
+                                </td>
+                                <td className="tabular-nums">{p.sessionsCount}</td>
+                                <td className="tabular-nums text-xs">
+                                  {p.lastDate}
+                                </td>
+                                <td className="text-xs text-navy/60">
+                                  {(p.subjects || []).join(' · ') || '—'}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ))}
+                {!(teachers.byTeacher || []).some(
+                  (t: any) => (t.prices || []).length,
+                ) ? (
+                  <EmptyState>لا توجد أسعار جلسات في الفترة</EmptyState>
+                ) : null}
+              </div>
+            </SectionCard>
+          </div>
 
           <div className="mt-4">
             <SectionCard
@@ -1190,6 +1404,9 @@ export default function ReportsPage() {
                             <p className="text-[12px] text-navy/50 mt-0.5">
                               {t.sessionsCount} جلسة · حضور {t.presentCount} ·
                               مسجّل {t.registeredCount}
+                              {(t.prices || []).length
+                                ? ` · ${(t.prices || []).length} سعر`
+                                : ''}
                             </p>
                           </div>
                           <div className="text-left">
@@ -1210,6 +1427,10 @@ export default function ReportsPage() {
                                 <tr>
                                   <th>التاريخ</th>
                                   <th>المادة</th>
+                                  <th>الصف</th>
+                                  <th>السعر</th>
+                                  <th>المدرس</th>
+                                  <th>السنتر</th>
                                   <th>الحالة</th>
                                   <th>حضور</th>
                                   <th>مسجّل</th>
@@ -1242,6 +1463,24 @@ export default function ReportsPage() {
                                             .join(' · ')}
                                         </p>
                                       ) : null}
+                                    </td>
+                                    <td className="text-xs font-semibold text-navy">
+                                      {(s.grades || []).join(' · ') || '—'}
+                                    </td>
+                                    <td className="tabular-nums font-bold text-navy">
+                                      {money(s.feeAmount)}
+                                    </td>
+                                    <td className="tabular-nums text-xs">
+                                      {money(s.teacherAmount)}
+                                      <span className="block text-navy/45">
+                                        {Number(s.teacherPercent || 0).toLocaleString('en-EG')}%
+                                      </span>
+                                    </td>
+                                    <td className="tabular-nums text-xs text-emerald-800">
+                                      {money(s.centerAmount)}
+                                      <span className="block text-emerald-700/60">
+                                        {Number(s.centerPercent || 0).toLocaleString('en-EG')}%
+                                      </span>
                                     </td>
                                     <td className="text-xs">
                                       {s.status === 'CLOSED' ? 'مقفولة' : 'مفتوحة'}
