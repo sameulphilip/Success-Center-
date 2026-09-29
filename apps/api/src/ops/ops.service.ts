@@ -837,6 +837,7 @@ export class OpsService {
         feeAmount: true,
         teacherId: true,
         allowWithoutForm: true,
+        sessionDate: true,
       },
     });
     if (!session) throw new NotFoundException('الجلسة غير موجودة');
@@ -968,6 +969,9 @@ export class OpsService {
     const centerKeepsAll = isDiscount && Boolean(data.centerKeepsAll);
 
     const isCash = data.method === SessionPayMethod.CASH;
+    const stamp = await this.cash.stampForOpenCashDay(
+      sessionDayYmd(session.sessionDate),
+    );
     const receiptNumber = `SP-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`;
 
     return this.prisma.sessionEntry.create({
@@ -987,9 +991,9 @@ export class OpsService {
         payStatus: isCash
           ? SessionPayStatus.CONFIRMED
           : SessionPayStatus.PENDING_CONFIRM,
-        confirmedAt: isCash ? new Date() : null,
+        confirmedAt: isCash ? stamp.at : null,
         confirmedByUserId: isCash ? userId : null,
-        checkedInAt: isCash ? new Date() : null,
+        checkedInAt: isCash ? stamp.at : null,
         checkInSource: isCash ? OpsCheckInSource.MANUAL : null,
       },
       include: {
@@ -1013,13 +1017,16 @@ export class OpsService {
       throw new BadRequestException('لا يمكن تأكيد هذه الدفعة');
     }
 
+    const stamp = await this.cash.stampForOpenCashDay(
+      sessionDayYmd(entry.session.sessionDate),
+    );
     return this.prisma.sessionEntry.update({
       where: { id: entryId },
       data: {
         payStatus: SessionPayStatus.CONFIRMED,
-        confirmedAt: new Date(),
+        confirmedAt: stamp.at,
         confirmedByUserId: userId,
-        checkedInAt: entry.checkedInAt || new Date(),
+        checkedInAt: entry.checkedInAt || stamp.at,
         checkInSource: entry.checkInSource || OpsCheckInSource.MANUAL,
       },
       include: { student: true, session: { include: { teacher: true, subject: true } } },
@@ -1257,10 +1264,14 @@ export class OpsService {
     }
     const teacherShare = Number(session.settledTeacherAmount || 0);
     if (teacherShare > 0.009) {
+      const stamp = await this.cash.stampForOpenCashDay(
+        sessionDayYmd(session.sessionDate),
+      );
       await this.cash.payFromDrawer(userId || 'system', {
         amount: teacherShare,
         category: 'حصة مدرس',
         note: teacherPayoutNote(session),
+        businessDate: stamp.ymd,
       });
     }
     const paid = await this.prisma.classSession.update({

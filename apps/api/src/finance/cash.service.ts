@@ -1898,10 +1898,29 @@ export class CashService {
     });
   }
 
+  /**
+   * While a cash day is still open, later-night work (after midnight) stays on
+   * that day instead of the new calendar date.
+   */
+  async stampForOpenCashDay(sessionYmd: string): Promise<{ ymd: string; at: Date }> {
+    const today = cairoYmd();
+    const ymd =
+      /^\d{4}-\d{2}-\d{2}$/.test(sessionYmd) && sessionYmd <= today
+        ? sessionYmd
+        : today;
+    if (ymd === today) return { ymd, at: new Date() };
+    const closed = await this.prisma.cashDayClose.findUnique({
+      where: { businessDate: dateOnly(ymd) },
+      select: { businessDate: true },
+    });
+    if (closed) return { ymd: today, at: new Date() };
+    return { ymd, at: new Date(`${ymd}T23:59:00+03:00`) };
+  }
+
   /** Pay a teacher's session share from the drawer (center share stays in till). */
   async payFromDrawer(
     userId: string,
-    body: { amount: number; category: string; note?: string },
+    body: { amount: number; category: string; note?: string; businessDate?: string },
   ) {
     return this.addExpense(
       userId,
@@ -1910,6 +1929,7 @@ export class CashService {
         category: body.category,
         paidFrom: CashExpenseFrom.DRAWER,
         note: body.note,
+        businessDate: body.businessDate,
       },
       'CENTER_MANAGER',
     );
