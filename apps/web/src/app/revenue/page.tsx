@@ -274,6 +274,7 @@ export default function RevenuePage() {
     qty: 1,
     note: '',
   });
+  const [addCounts, setAddCounts] = useState<Record<string, string>>({});
   const [rentalForm, setRentalForm] = useState({ ...emptyRentalForm });
   const [editingRentalId, setEditingRentalId] = useState('');
 
@@ -372,6 +373,54 @@ export default function RevenuePage() {
   async function loadCodes(offerId: string) {
     setSelectedOffer(offerId);
     setCodes(await api(`/revenue/online/offers/${offerId}/codes`));
+  }
+
+  function addCountOf(id: string) {
+    const n = Math.floor(Number(addCounts[id] || 1));
+    return Math.min(5000, Math.max(1, Number.isFinite(n) ? n : 1));
+  }
+
+  async function addOfferCodes(offerId: string) {
+    const count = addCountOf(offerId);
+    setBusy(`add-${offerId}`);
+    setError('');
+    try {
+      await api(`/revenue/online/offers/${offerId}/codes`, {
+        method: 'POST',
+        body: JSON.stringify({ count }),
+      });
+      const title = offers.find((o) => o.id === offerId)?.title || 'العرض';
+      setMsg(`اتضاف ${count} كود على «${title}»`);
+      if (selectedOffer === offerId) await loadCodes(offerId);
+      await load();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function addHandoutCopies(productId: string) {
+    const count = addCountOf(productId);
+    setBusy(`add-${productId}`);
+    setError('');
+    try {
+      const res = await api<{ stock: number; title: string }>(
+        `/revenue/handouts/${productId}/stock`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ count }),
+        },
+      );
+      setMsg(
+        `اتضاف ${count} على مخزون «${res.title}» · المخزون ${res.stock}`,
+      );
+      await load();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy('');
+    }
   }
 
   async function saveOffer(e: FormEvent) {
@@ -1128,6 +1177,27 @@ export default function RevenuePage() {
                       {!o.isActive ? ' · متوقف' : ''}
                     </span>
                   </button>
+                  <div className="mt-2 flex items-center gap-2">
+                    <input
+                      className="field w-20"
+                      type="number"
+                      min={1}
+                      max={5000}
+                      aria-label="عدد الأكواد"
+                      value={addCounts[o.id] ?? '1'}
+                      onChange={(e) =>
+                        setAddCounts((s) => ({ ...s, [o.id]: e.target.value }))
+                      }
+                    />
+                    <button
+                      type="button"
+                      className="text-xs font-bold text-navy hover:underline disabled:opacity-50"
+                      disabled={busy === `add-${o.id}`}
+                      onClick={() => addOfferCodes(o.id)}
+                    >
+                      أضف أكواد
+                    </button>
+                  </div>
                   {toOwner ? (
                     <div className="mt-1 flex gap-3">
                     <button
@@ -1506,20 +1576,30 @@ export default function RevenuePage() {
                   to={pCodes.to}
                   onPage={pCodes.setPage}
                 />
-                <button
-                  type="button"
-                  className="btn-ghost mt-2 text-xs"
-                  onClick={async () => {
-                    await api(`/revenue/online/offers/${selectedOffer}/codes`, {
-                      method: 'POST',
-                      body: JSON.stringify({ count: 10 }),
-                    });
-                    await loadCodes(selectedOffer);
-                    await load();
-                  }}
-                >
-                  إضافة 10 أكواد
-                </button>
+                <div className="mt-2 flex items-center gap-2">
+                  <input
+                    className="field w-20"
+                    type="number"
+                    min={1}
+                    max={5000}
+                    aria-label="عدد الأكواد"
+                    value={addCounts[selectedOffer] ?? '1'}
+                    onChange={(e) =>
+                      setAddCounts((s) => ({
+                        ...s,
+                        [selectedOffer]: e.target.value,
+                      }))
+                    }
+                  />
+                  <button
+                    type="button"
+                    className="btn-ghost text-xs"
+                    disabled={busy === `add-${selectedOffer}`}
+                    onClick={() => addOfferCodes(selectedOffer)}
+                  >
+                    أضف أكواد
+                  </button>
+                </div>
               </SectionCard>
             ) : null}
           </div>
@@ -1696,6 +1776,27 @@ export default function RevenuePage() {
                     {centerCutOf(h.price, h.teacherPercent, h.centerAmount)} ج.م
                     {h.isActive === false ? ' · متوقف' : ''}
                   </span>
+                  <div className="mt-2 flex items-center gap-2">
+                    <input
+                      className="field w-20"
+                      type="number"
+                      min={1}
+                      max={5000}
+                      aria-label="عدد الملازم"
+                      value={addCounts[h.id] ?? '1'}
+                      onChange={(e) =>
+                        setAddCounts((s) => ({ ...s, [h.id]: e.target.value }))
+                      }
+                    />
+                    <button
+                      type="button"
+                      className="text-xs font-bold text-navy hover:underline disabled:opacity-50"
+                      disabled={busy === `add-${h.id}`}
+                      onClick={() => addHandoutCopies(h.id)}
+                    >
+                      أضف للمخزون
+                    </button>
+                  </div>
                   {toOwner ? (
                     <div className="mt-1 flex gap-3">
                       <button

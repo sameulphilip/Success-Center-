@@ -248,7 +248,10 @@ export class RevenueService {
       where: { id: offerId },
     });
     if (!offer) throw new NotFoundException('العرض غير موجود');
-    const n = Math.min(Math.max(count, 1), MAX_OFFER_CODES);
+    const n = Math.min(
+      Math.max(Math.floor(Number(count) || 1), 1),
+      MAX_OFFER_CODES,
+    );
     await this.prisma.onlineAccessCode.createMany({
       data: Array.from({ length: n }, () => ({
         offerId,
@@ -942,6 +945,26 @@ export class RevenueService {
         include: { product: true, student: true, session: true },
       });
     });
+  }
+
+  /** Add copies onto an existing handout instead of creating a duplicate title. */
+  async addHandoutStock(productId: string, count = 1) {
+    const product = await this.prisma.handoutProduct.findUnique({
+      where: { id: productId },
+    });
+    if (!product) throw new NotFoundException('الملزمة غير موجودة');
+    const n = Math.min(Math.max(Math.floor(Number(count) || 1), 1), 5000);
+    const updated = await this.prisma.handoutProduct.update({
+      where: { id: productId },
+      data: { stock: { increment: n } },
+    });
+    return {
+      ok: true,
+      added: n,
+      stock: updated.stock,
+      productId,
+      title: product.title,
+    };
   }
 
   /** Reception returns unsold handout copies to the teacher — stock decreases. */

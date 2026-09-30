@@ -277,6 +277,15 @@ export class RevenueController {
     return this.revenue.sellHandout(id, body, user?.userId, user?.role);
   }
 
+  @Post('handouts/:id/stock')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER, RoleCode.RECEPTION)
+  addHandoutStock(
+    @Param('id') id: string,
+    @Body() body: { count?: number },
+  ) {
+    return this.revenue.addHandoutStock(id, body.count ?? 1);
+  }
+
   @Post('handouts/:id/return')
   @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER, RoleCode.RECEPTION)
   returnHandout(
