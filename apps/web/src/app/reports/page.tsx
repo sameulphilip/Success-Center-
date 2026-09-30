@@ -1197,8 +1197,9 @@ export default function ReportsPage() {
               }
             >
               <p className="mb-3 text-[12px] text-navy/50">
-                لكل مدرس: عدد الجلسات والحضور، ثم الأنصبة. الاستقبال{' '}
-                {teachers.rates?.receptionPerPresent ?? 7} ج والسيستم{' '}
+                لكل مدرس: عدد الجلسات والحضور، ثم الأنصبة. حضور حجز القاعة
+                بالطالب يتحسب بعدد الطلاب، ومبلغ الحجز يدخل نصيب السنتر.
+                الاستقبال {teachers.rates?.receptionPerPresent ?? 7} ج والسيستم{' '}
                 {teachers.rates?.systemPerPresent ?? 2} ج على كل حضور. صافي
                 السنتر = نصيب السنتر − الاستقبال − السيستم.
               </p>

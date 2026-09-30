@@ -616,7 +616,7 @@ function TeachersReport({
             <p className="mt-2 text-[11px] text-[#0B2545]/50">
               مسجّل في الجلسات: {s.registered}
               {data.rates
-                ? ` · استقبال ${data.rates.receptionPerPresent} ج + سيستم ${data.rates.systemPerPresent} ج لكل حضور`
+                ? ` · حضور حجز القاعة بالطالب داخل العدد · استقبال ${data.rates.receptionPerPresent} ج + سيستم ${data.rates.systemPerPresent} ج لكل حضور`
                 : ''}
             </p>
           )}

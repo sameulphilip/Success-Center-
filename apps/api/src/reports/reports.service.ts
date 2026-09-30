@@ -1,7 +1,37 @@
 import { Injectable } from '@nestjs/common';
-import { BookingStatus, OnlineCodeStatus } from '@prisma/client';
+import {
+  BookingStatus,
+  OnlineCodeStatus,
+  RentalStatus,
+  RoomRentalBillingMode,
+  SessionPayStatus,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { splitSessionFromEntries } from '../ops/session-split';
+
+function cairoYmd(d: Date) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Cairo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
+}
+
+function normAr(value: string) {
+  return value
+    .replace(/[أإآ]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
+    .replace(/[^\p{L}\p{N}\s+]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function teacherLabel(teacher: { firstName: string; lastName: string }) {
+  return `${teacher.firstName} ${teacher.lastName === '-' ? '' : teacher.lastName}`.trim();
+}
 
 @Injectable()
 export class ReportsService {
@@ -505,6 +535,151 @@ export class ReportsService {
       distinctPriceConfigs += row.prices.length;
     }
 
+    const fromYmd = /^\d{4}-\d{2}-\d{2}/.test(from || '')
+      ? String(from).slice(0, 10)
+      : cairoYmd(fromDate);
+    const toYmd = /^\d{4}-\d{2}-\d{2}/.test(to || '')
+      ? String(to).slice(0, 10)
+      : cairoYmd(toDate);
+    const roomRentals = await this.prisma.roomRental.findMany({
+      where: {
+        billingMode: RoomRentalBillingMode.PER_STUDENT,
+        status: { not: RentalStatus.CANCELLED },
+        payStatus: {
+          in: [SessionPayStatus.CONFIRMED, SessionPayStatus.PARTIALLY_REFUNDED],
+        },
+        startsAt: {
+          gte: new Date(`${fromYmd}T00:00:00+03:00`),
+          lte: new Date(`${toYmd}T23:59:59.999+03:00`),
+        },
+      },
+      include: { classroom: { select: { name: true } } },
+    });
+    const roster = await this.prisma.teacher.findMany({
+      where: { isActive: true },
+      select: { id: true, firstName: true, lastName: true },
+    });
+    const rosterNorm = roster.map((t) => ({
+      id: t.id,
+      name: teacherLabel(t),
+      norm: normAr(teacherLabel(t)),
+      last: normAr(t.lastName === '-' ? '' : t.lastName || ''),
+    }));
+
+    const matchRenter = (renterName: string) => {
+      const parts = normAr(renterName)
+        .split(/\s*\+\s*|\s+و\s+/)
+        .map((p) => p.trim())
+        .filter((p) => p.length >= 2);
+      const hits = new Map<string, (typeof rosterNorm)[number]>();
+      for (const part of parts) {
+        const exact = rosterNorm.filter((t) => t.norm === part);
+        if (exact.length === 1) {
+          hits.set(exact[0].id, exact[0]);
+          continue;
+        }
+        const lastHits = rosterNorm.filter(
+          (t) => t.last.length >= 3 && t.last === part,
+        );
+        if (lastHits.length === 1) {
+          hits.set(lastHits[0].id, lastHits[0]);
+          continue;
+        }
+        const contains = rosterNorm.filter((t) => {
+          if (part.length < 4 || t.norm.length < 4) return false;
+          return t.norm.includes(part) || part.includes(t.norm);
+        });
+        if (contains.length === 1) hits.set(contains[0].id, contains[0]);
+      }
+      return Array.from(hits.values());
+    };
+
+    let roomBookings = 0;
+    for (const rental of roomRentals) {
+      const headcount = Math.max(0, Math.floor(Number(rental.headcount) || 0));
+      if (headcount < 1) continue;
+      const amount = round2(Number(rental.amount) || 0);
+      const perStudent =
+        rental.centerPerStudent != null
+          ? round2(Number(rental.centerPerStudent))
+          : round2(amount / headcount);
+      const receptionShare = round2(headcount * RECEPTION_PER_PRESENT);
+      const systemShare = round2(headcount * SYSTEM_PER_PRESENT);
+      const teacherShare = 0;
+      const centerShare = amount;
+      const netCenterShare = round2(centerShare - receptionShare - systemShare);
+      const day = cairoYmd(rental.startsAt);
+      const matches = matchRenter(rental.renterName || '');
+      const bucket =
+        matches.length === 1
+          ? { teacherId: matches[0].id, name: matches[0].name }
+          : {
+              teacherId: `room:${normAr(rental.renterName || rental.id)}`,
+              name: (rental.renterName || 'حجز قاعة').trim(),
+            };
+      const row = byTeacher.get(bucket.teacherId) || {
+        teacherId: bucket.teacherId,
+        name: bucket.name,
+        sessionsCount: 0,
+        presentCount: 0,
+        registeredCount: 0,
+        collected: 0,
+        teacherShare: 0,
+        centerShare: 0,
+        receptionShare: 0,
+        systemShare: 0,
+        netCenterShare: 0,
+        sessions: [],
+        prices: [],
+      };
+      row.sessionsCount += 1;
+      row.presentCount += headcount;
+      row.registeredCount += headcount;
+      row.collected = round2(row.collected + amount);
+      row.teacherShare = round2(row.teacherShare + teacherShare);
+      row.centerShare = round2(row.centerShare + centerShare);
+      row.receptionShare = round2(row.receptionShare + receptionShare);
+      row.systemShare = round2(row.systemShare + systemShare);
+      row.netCenterShare = round2(row.netCenterShare + netCenterShare);
+      row.sessions.push({
+        id: rental.id,
+        sessionDate: day,
+        title: rental.classroom?.name || null,
+        subject: rental.title?.trim()
+          ? `حجز قاعة · ${rental.title.trim()}`
+          : 'حجز قاعة',
+        status: rental.status,
+        feeAmount: perStudent,
+        centerAmount: perStudent,
+        teacherAmount: 0,
+        teacherPercent: 0,
+        centerPercent: perStudent > 0 ? 100 : 0,
+        registered: headcount,
+        present: headcount,
+        collected: amount,
+        teacherShare,
+        centerShare,
+        receptionShare,
+        systemShare,
+        netCenterShare,
+        grades: [],
+        attendees: [],
+      });
+      byTeacher.set(bucket.teacherId, row);
+      roomBookings += 1;
+      totalPresent += headcount;
+      totalRegistered += headcount;
+      totalCollected += amount;
+      totalCenterShare += centerShare;
+      totalReceptionShare += receptionShare;
+      totalSystemShare += systemShare;
+      totalNetCenterShare += netCenterShare;
+    }
+
+    for (const row of byTeacher.values()) {
+      row.sessions.sort((a, b) => b.sessionDate.localeCompare(a.sessionDate));
+    }
+
     const teachers = Array.from(byTeacher.values()).sort(
       (a, b) =>
         b.sessionsCount - a.sessionsCount ||
@@ -521,7 +696,7 @@ export class ReportsService {
       },
       summary: {
         teachers: teachers.length,
-        sessions: sessions.length,
+        sessions: sessions.length + roomBookings,
         present: totalPresent,
         registered: totalRegistered,
         collected: round2(totalCollected),
