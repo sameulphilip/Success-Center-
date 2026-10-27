@@ -2135,12 +2135,12 @@ export class CashService {
     }
 
     const fig = await this.dayFigures(ymd);
-    if (
-      ymd !== today &&
-      fig.collectedTotal < 0.009 &&
-      fig.drawerExpenses < 0.009
-    ) {
-      throw new BadRequestException('مفيش تحصيل أو مصروف في اليوم ده');
+    if (fig.collectedTotal < 0.009 && fig.drawerExpenses < 0.009) {
+      throw new BadRequestException(
+        ymd === today
+          ? 'مفيش تحصيل أو مصروف النهارده لسه. لو بتقفل درج امبارح اختار تاريخه'
+          : 'مفيش تحصيل أو مصروف في اليوم ده',
+      );
     }
     if (fig.expected < -0.009) {
       throw new BadRequestException('مصروفات الدرج أكبر من التحصيل');
