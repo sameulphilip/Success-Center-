@@ -52,6 +52,7 @@ export default function ReportsPage() {
   const [pnl, setPnl] = useState<any>(null);
   const [bookings, setBookings] = useState<any>(null);
   const [codes, setCodes] = useState<any>(null);
+  const [rooms, setRooms] = useState<any>(null);
   const [tab, setTab] = useState<Tab>('pnl');
   const [error, setError] = useState('');
   const [excelBusy, setExcelBusy] = useState(false);
@@ -119,13 +120,14 @@ export default function ReportsPage() {
   async function load() {
     setError('');
     try {
-      const [f, t, p, b, n, c] = await Promise.all([
+      const [f, t, p, b, n, c, roomsReport] = await Promise.all([
         api<any>(`/reports/finance?from=${from}&to=${to}`),
         api<any>(`/reports/teachers?from=${from}&to=${to}`),
         api<any>(`/reports/profit?from=${from}&to=${to}`),
         api<any>(`/reports/bookings?from=${from}&to=${to}`),
         api<any>(`/reports/pnl?from=${from}&to=${to}`),
         api<any>(`/reports/codes-handouts?from=${from}&to=${to}`),
+        api<any>(`/reports/rooms?from=${from}&to=${to}`),
       ]);
       setFinance(f);
       setTeachers(t);
@@ -133,6 +135,7 @@ export default function ReportsPage() {
       setBookings(b);
       setPnl(n);
       setCodes(c);
+      setRooms(roomsReport);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'فشل تحميل التقارير');
     }
@@ -203,6 +206,9 @@ export default function ReportsPage() {
     `sh:${from}:${to}`,
   );
   const pSafeEntries = usePaged(codes?.safeEntries || [], `se:${from}:${to}`);
+  const pRoomHalls = usePaged(rooms?.byRoom || [], `rh:${from}:${to}`);
+  const pRoomRenters = usePaged(rooms?.byRenter || [], `rr:${from}:${to}`);
+  const pRoomRows = usePaged(rooms?.rentals || [], `rl:${from}:${to}`);
 
   function formatAt(iso?: string | null) {
     if (!iso) return '—';
@@ -278,11 +284,12 @@ export default function ReportsPage() {
                 (tab === 'finance' && !finance) ||
                 (tab === 'codes' && !codes) ||
                 tab === 'bookings' ||
-                tab === 'teachers'
+                tab === 'teachers' ||
+                tab === 'rooms'
               }
               onClick={() => void exportExcel()}
               title={
-                tab === 'bookings' || tab === 'teachers'
+                tab === 'bookings' || tab === 'teachers' || tab === 'rooms'
                   ? 'Excel متاح لأرباح ومصروفات · ربحية · مالي · أكواد وملازم'
                   : 'تحميل Excel'
               }
@@ -336,6 +343,7 @@ export default function ReportsPage() {
             ['finance', 'مالي'],
             ['bookings', 'استمارات'],
             ['teachers', 'مدرسين'],
+            ['rooms', 'تأجير القاعات'],
             ['codes', 'أكواد وملازم'],
           ] as const
         ).map(([id, label]) => (
@@ -1145,7 +1153,7 @@ export default function ReportsPage() {
             <KpiCard
               label="حضور"
               value={teachers.summary.present}
-              hint={`مسجّل ${teachers.summary.registered}`}
+              hint={`قاعات ${teachers.summary.roomPresent || 0} · مسجّل ${teachers.summary.registered}`}
               accent="green"
             />
             <KpiCard
@@ -1210,6 +1218,7 @@ export default function ReportsPage() {
                       <th>المدرس</th>
                       <th>جلسات</th>
                       <th>حضور</th>
+                      <th>حضور القاعات</th>
                       <th>نصيب المدرس</th>
                       <th>نصيب السنتر</th>
                       <th>الاستقبال</th>
@@ -1223,6 +1232,7 @@ export default function ReportsPage() {
                         <td className="font-extrabold text-navy">{t.name}</td>
                         <td className="tabular-nums">{t.sessionsCount}</td>
                         <td className="tabular-nums font-bold">{t.presentCount}</td>
+                        <td className="tabular-nums">{t.roomPresent || 0}</td>
                         <td className="tabular-nums">{money(t.teacherShare)}</td>
                         <td className="tabular-nums text-emerald-800">
                           {money(t.centerShare)}
@@ -1248,6 +1258,9 @@ export default function ReportsPage() {
                         </td>
                         <td className="tabular-nums">
                           {teachers.summary.present}
+                        </td>
+                        <td className="tabular-nums">
+                          {teachers.summary.roomPresent || 0}
                         </td>
                         <td className="tabular-nums">
                           {money(teachers.summary.teacherShare)}
@@ -1403,7 +1416,8 @@ export default function ReportsPage() {
                           <div>
                             <p className="font-extrabold text-navy">{t.name}</p>
                             <p className="text-[12px] text-navy/50 mt-0.5">
-                              {t.sessionsCount} جلسة · حضور {t.presentCount} ·
+                              {t.sessionsCount} جلسة · حضور {t.presentCount} · قاعات{' '}
+                              {t.roomPresent || 0} ·
                               مسجّل {t.registeredCount}
                               {(t.prices || []).length
                                 ? ` · ${(t.prices || []).length} سعر`
@@ -1515,6 +1529,236 @@ export default function ReportsPage() {
                 from={pTeacherSessions.from}
                 to={pTeacherSessions.to}
                 onPage={pTeacherSessions.setPage}
+              />
+            </SectionCard>
+          </div>
+        </>
+      ) : null}
+
+      {tab === 'rooms' && rooms ? (
+        <>
+          <div className="mb-2 flex justify-end">
+            <button
+              type="button"
+              className="btn-ghost text-xs"
+              onClick={() => openPrintPicker('rooms', ['summary'])}
+            >
+              طباعة الملخص
+            </button>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <KpiCard label="حجوزات" value={rooms.summary.bookings} accent="gold" />
+            <KpiCard
+              label="إجمالي التأجير"
+              value={money(rooms.summary.amount)}
+              accent="green"
+            />
+            <KpiCard
+              label="طلاب حجز القاعة"
+              value={rooms.summary.headcount}
+              hint={`${rooms.summary.perStudentBookings} حجز بالطالب`}
+            />
+            <KpiCard
+              label="إيجار ثابت"
+              value={money(rooms.summary.flatAmount)}
+              hint={`${rooms.summary.flatBookings} حجز`}
+            />
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <KpiCard
+              label="نصيب الاستقبال"
+              value={money(rooms.summary.receptionShare)}
+              hint={`${rooms.rates?.receptionPerPresent ?? 7} ج × طالب القاعة`}
+            />
+            <KpiCard
+              label="نصيب السيستم"
+              value={money(rooms.summary.systemShare)}
+              hint={`${rooms.rates?.systemPerPresent ?? 2} ج × طالب القاعة`}
+            />
+            <KpiCard
+              label="صافي السنتر"
+              value={money(rooms.summary.netCenter)}
+              accent="gold"
+              hint="الإجمالي − استقبال − سيستم"
+            />
+          </div>
+          <p className="mt-3 text-[12px] text-navy/50">
+            الحجوزات المدفوعة في الفترة. الاستقبال{' '}
+            {rooms.rates?.receptionPerPresent ?? 7} ج والسيستم{' '}
+            {rooms.rates?.systemPerPresent ?? 2} ج على كل طالب في حجز القاعة
+            بالطالب. الإيجار الثابت كله للسنتر.
+          </p>
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <SectionCard
+              title="حسب القاعة"
+              action={
+                <button
+                  type="button"
+                  className="btn-ghost text-xs"
+                  onClick={() => openPrintPicker('rooms', ['by-room'])}
+                >
+                  طباعة
+                </button>
+              }
+            >
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>القاعة</th>
+                      <th>حجوزات</th>
+                      <th>طلاب</th>
+                      <th>المبلغ</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pRoomHalls.slice.map((row: any) => (
+                      <tr key={row.classroomId}>
+                        <td className="font-medium">{row.name}</td>
+                        <td className="tabular-nums">{row.bookings}</td>
+                        <td className="tabular-nums">{row.headcount}</td>
+                        <td className="tabular-nums font-bold">
+                          {money(row.amount)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!rooms.byRoom.length ? (
+                  <EmptyState>لا يوجد تأجير قاعات في الفترة</EmptyState>
+                ) : null}
+              </div>
+              <TablePager
+                page={pRoomHalls.page}
+                pages={pRoomHalls.pages}
+                total={pRoomHalls.total}
+                size={pRoomHalls.size}
+                from={pRoomHalls.from}
+                to={pRoomHalls.to}
+                onPage={pRoomHalls.setPage}
+              />
+            </SectionCard>
+
+            <SectionCard
+              title="حسب المستأجر"
+              action={
+                <button
+                  type="button"
+                  className="btn-ghost text-xs"
+                  onClick={() => openPrintPicker('rooms', ['by-renter'])}
+                >
+                  طباعة
+                </button>
+              }
+            >
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>المستأجر</th>
+                      <th>حجوزات</th>
+                      <th>طلاب</th>
+                      <th>المبلغ</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pRoomRenters.slice.map((row: any) => (
+                      <tr key={row.name}>
+                        <td className="font-medium">{row.name}</td>
+                        <td className="tabular-nums">{row.bookings}</td>
+                        <td className="tabular-nums">{row.headcount}</td>
+                        <td className="tabular-nums font-bold">
+                          {money(row.amount)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!rooms.byRenter.length ? (
+                  <EmptyState>لا يوجد مستأجرون في الفترة</EmptyState>
+                ) : null}
+              </div>
+              <TablePager
+                page={pRoomRenters.page}
+                pages={pRoomRenters.pages}
+                total={pRoomRenters.total}
+                size={pRoomRenters.size}
+                from={pRoomRenters.from}
+                to={pRoomRenters.to}
+                onPage={pRoomRenters.setPage}
+              />
+            </SectionCard>
+          </div>
+
+          <div className="mt-4">
+            <SectionCard
+              title="تفاصيل الحجوزات"
+              action={
+                <button
+                  type="button"
+                  className="btn-ghost text-xs"
+                  onClick={() => openPrintPicker('rooms', ['rooms-list'])}
+                >
+                  طباعة
+                </button>
+              }
+            >
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>التاريخ</th>
+                      <th>القاعة</th>
+                      <th>المستأجر</th>
+                      <th>النوع</th>
+                      <th>طلاب</th>
+                      <th>المبلغ</th>
+                      <th>الدفع</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pRoomRows.slice.map((row: any) => (
+                      <tr key={row.id}>
+                        <td className="tabular-nums">{row.date}</td>
+                        <td>{row.classroom}</td>
+                        <td>
+                          <span className="font-medium">{row.renterName}</span>
+                          {row.title ? (
+                            <span className="block text-[11px] text-navy/45">
+                              {row.title}
+                            </span>
+                          ) : null}
+                          {row.renterPhone ? (
+                            <span className="block text-[11px] text-navy/45">
+                              {row.renterPhone}
+                            </span>
+                          ) : null}
+                        </td>
+                        <td>{row.billingLabel}</td>
+                        <td className="tabular-nums">
+                          {row.billingMode === 'PER_STUDENT' ? row.headcount : '—'}
+                        </td>
+                        <td className="tabular-nums font-bold">
+                          {money(row.amount)}
+                        </td>
+                        <td>{row.methodLabel}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!rooms.rentals.length ? (
+                  <EmptyState>لا يوجد تأجير قاعات في الفترة</EmptyState>
+                ) : null}
+              </div>
+              <TablePager
+                page={pRoomRows.page}
+                pages={pRoomRows.pages}
+                total={pRoomRows.total}
+                size={pRoomRows.size}
+                from={pRoomRows.from}
+                to={pRoomRows.to}
+                onPage={pRoomRows.setPage}
               />
             </SectionCard>
           </div>

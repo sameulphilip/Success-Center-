@@ -67,6 +67,11 @@ export class ReportsController {
     return this.reports.codesHandouts(from, to);
   }
 
+  @Get('rooms')
+  rooms(@Query('from') from?: string, @Query('to') to?: string) {
+    return this.reports.rooms(from, to);
+  }
+
   @Get('finance/pdf')
   async financePdf(
     @Res() res: Response,

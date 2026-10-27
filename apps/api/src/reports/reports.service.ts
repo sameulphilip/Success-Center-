@@ -298,6 +298,7 @@ export class ReportsService {
       name: string;
       sessionsCount: number;
       presentCount: number;
+      roomPresent: number;
       registeredCount: number;
       collected: number;
       teacherShare: number;
@@ -322,6 +323,7 @@ export class ReportsService {
       >
     >();
     let totalPresent = 0;
+    let totalRoomPresent = 0;
     let totalRegistered = 0;
     let totalCollected = 0;
     let totalTeacherShare = 0;
@@ -424,6 +426,7 @@ export class ReportsService {
         name,
         sessionsCount: 0,
         presentCount: 0,
+        roomPresent: 0,
         registeredCount: 0,
         collected: 0,
         teacherShare: 0,
@@ -622,6 +625,7 @@ export class ReportsService {
         name: bucket.name,
         sessionsCount: 0,
         presentCount: 0,
+        roomPresent: 0,
         registeredCount: 0,
         collected: 0,
         teacherShare: 0,
@@ -634,6 +638,7 @@ export class ReportsService {
       };
       row.sessionsCount += 1;
       row.presentCount += headcount;
+      row.roomPresent += headcount;
       row.registeredCount += headcount;
       row.collected = round2(row.collected + amount);
       row.teacherShare = round2(row.teacherShare + teacherShare);
@@ -668,6 +673,7 @@ export class ReportsService {
       byTeacher.set(bucket.teacherId, row);
       roomBookings += 1;
       totalPresent += headcount;
+      totalRoomPresent += headcount;
       totalRegistered += headcount;
       totalCollected += amount;
       totalCenterShare += centerShare;
@@ -698,6 +704,7 @@ export class ReportsService {
         teachers: teachers.length,
         sessions: sessions.length + roomBookings,
         present: totalPresent,
+        roomPresent: totalRoomPresent,
         registered: totalRegistered,
         collected: round2(totalCollected),
         teacherShare: round2(totalTeacherShare),
@@ -1936,6 +1943,173 @@ export class ReportsService {
       safeEntries,
       onlineSales: onlineLines,
       handoutSales: handoutLines,
+    };
+  }
+
+  /** Confirmed hall rentals in the Cairo day window, flat and per student. */
+  async rooms(from?: string, to?: string) {
+    const fromDate = from
+      ? new Date(from)
+      : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+    const toDate = to ? new Date(to) : new Date();
+    const fromYmd = /^\d{4}-\d{2}-\d{2}/.test(from || '')
+      ? String(from).slice(0, 10)
+      : cairoYmd(fromDate);
+    const toYmd = /^\d{4}-\d{2}-\d{2}/.test(to || '')
+      ? String(to).slice(0, 10)
+      : cairoYmd(toDate);
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    const RECEPTION_PER_PRESENT = 7;
+    const SYSTEM_PER_PRESENT = 2;
+    const methodAr: Record<string, string> = {
+      CASH: 'كاش',
+      VODAFONE_CASH: 'فودافون',
+      INSTAPAY: 'إنستاباي',
+      OTHER: 'أخرى',
+    };
+
+    const rentals = await this.prisma.roomRental.findMany({
+      where: {
+        status: { not: RentalStatus.CANCELLED },
+        payStatus: {
+          in: [SessionPayStatus.CONFIRMED, SessionPayStatus.PARTIALLY_REFUNDED],
+        },
+        startsAt: {
+          gte: new Date(`${fromYmd}T00:00:00+03:00`),
+          lte: new Date(`${toYmd}T23:59:59.999+03:00`),
+        },
+      },
+      include: { classroom: { select: { id: true, name: true } } },
+      orderBy: { startsAt: 'desc' },
+    });
+
+    type RoomAgg = {
+      classroomId: string;
+      name: string;
+      bookings: number;
+      headcount: number;
+      amount: number;
+      flatAmount: number;
+      perStudentAmount: number;
+    };
+    type RenterAgg = {
+      name: string;
+      bookings: number;
+      headcount: number;
+      amount: number;
+    };
+    const byRoom = new Map<string, RoomAgg>();
+    const byRenter = new Map<string, RenterAgg>();
+    let amount = 0;
+    let headcount = 0;
+    let flatBookings = 0;
+    let flatAmount = 0;
+    let perStudentBookings = 0;
+    let perStudentAmount = 0;
+    let receptionShare = 0;
+    let systemShare = 0;
+
+    const rows = rentals.map((rental) => {
+      const perStudent = rental.billingMode === RoomRentalBillingMode.PER_STUDENT;
+      const students = perStudent
+        ? Math.max(0, Math.floor(Number(rental.headcount) || 0))
+        : 0;
+      const total = round2(Number(rental.amount) || 0);
+      const perHead =
+        rental.centerPerStudent != null
+          ? round2(Number(rental.centerPerStudent))
+          : students > 0
+            ? round2(total / students)
+            : 0;
+      const reception = round2(students * RECEPTION_PER_PRESENT);
+      const system = round2(students * SYSTEM_PER_PRESENT);
+      const roomName = rental.classroom?.name?.trim() || 'قاعة';
+      const renter = rental.renterName?.trim() || '—';
+      const room = byRoom.get(rental.classroomId) || {
+        classroomId: rental.classroomId,
+        name: roomName,
+        bookings: 0,
+        headcount: 0,
+        amount: 0,
+        flatAmount: 0,
+        perStudentAmount: 0,
+      };
+      room.bookings += 1;
+      room.headcount += students;
+      room.amount = round2(room.amount + total);
+      if (perStudent) room.perStudentAmount = round2(room.perStudentAmount + total);
+      else room.flatAmount = round2(room.flatAmount + total);
+      byRoom.set(rental.classroomId, room);
+
+      const who = byRenter.get(renter) || {
+        name: renter,
+        bookings: 0,
+        headcount: 0,
+        amount: 0,
+      };
+      who.bookings += 1;
+      who.headcount += students;
+      who.amount = round2(who.amount + total);
+      byRenter.set(renter, who);
+
+      amount = round2(amount + total);
+      headcount += students;
+      receptionShare = round2(receptionShare + reception);
+      systemShare = round2(systemShare + system);
+      if (perStudent) {
+        perStudentBookings += 1;
+        perStudentAmount = round2(perStudentAmount + total);
+      } else {
+        flatBookings += 1;
+        flatAmount = round2(flatAmount + total);
+      }
+
+      return {
+        id: rental.id,
+        date: cairoYmd(rental.startsAt),
+        classroom: roomName,
+        renterName: renter,
+        renterPhone: rental.renterPhone || null,
+        title: rental.title?.trim() || null,
+        billingMode: rental.billingMode,
+        billingLabel: perStudent ? 'حجز بالطالب' : 'إيجار ثابت',
+        headcount: students,
+        centerPerStudent: perStudent ? perHead : null,
+        amount: total,
+        method: rental.method,
+        methodLabel: methodAr[rental.method] || rental.method,
+        receptionShare: reception,
+        systemShare: system,
+        netCenter: round2(total - reception - system),
+      };
+    });
+
+    return {
+      from: fromYmd,
+      to: toYmd,
+      rates: {
+        receptionPerPresent: RECEPTION_PER_PRESENT,
+        systemPerPresent: SYSTEM_PER_PRESENT,
+      },
+      summary: {
+        bookings: rows.length,
+        amount,
+        headcount,
+        flatBookings,
+        flatAmount,
+        perStudentBookings,
+        perStudentAmount,
+        receptionShare,
+        systemShare,
+        netCenter: round2(amount - receptionShare - systemShare),
+      },
+      byRoom: Array.from(byRoom.values()).sort(
+        (a, b) => b.amount - a.amount || b.bookings - a.bookings,
+      ),
+      byRenter: Array.from(byRenter.values()).sort(
+        (a, b) => b.amount - a.amount || b.bookings - a.bookings,
+      ),
+      rentals: rows,
     };
   }
 }

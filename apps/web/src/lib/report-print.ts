@@ -4,7 +4,8 @@ export type ReportTab =
   | 'finance'
   | 'bookings'
   | 'teachers'
-  | 'codes';
+  | 'codes'
+  | 'rooms';
 
 export type ReportSection =
   | 'summary'
@@ -27,7 +28,9 @@ export type ReportSection =
   | 'by-offer'
   | 'by-product'
   | 'stock'
-  | 'safe-entries';
+  | 'safe-entries'
+  | 'by-renter'
+  | 'rooms-list';
 
 export const TAB_LABELS: Record<ReportTab, string> = {
   pnl: 'أرباح ومصروفات',
@@ -36,6 +39,7 @@ export const TAB_LABELS: Record<ReportTab, string> = {
   bookings: 'تقرير الاستمارات',
   teachers: 'تقرير المدرسين',
   codes: 'أكواد وملازم',
+  rooms: 'تأجير القاعات',
 };
 
 export const SECTION_LABELS: Record<ReportSection, string> = {
@@ -60,6 +64,8 @@ export const SECTION_LABELS: Record<ReportSection, string> = {
   'by-product': 'حسب الملزمة',
   stock: 'المخزون المتبقي',
   'safe-entries': 'دخول الخزنة',
+  'by-renter': 'حسب المستأجر',
+  'rooms-list': 'تفاصيل الحجوزات',
 };
 
 /** أقسام كل تبويب — للتحكم في الطباعة */
@@ -85,6 +91,7 @@ export const TAB_SECTIONS: Record<ReportTab, ReportSection[]> = {
     'online-sales',
     'handout-sales',
   ],
+  rooms: ['summary', 'by-room', 'by-renter', 'rooms-list'],
 };
 
 export function reportPrintHref(
@@ -111,7 +118,8 @@ export function parseReportTab(value: string | null): ReportTab | null {
     value === 'finance' ||
     value === 'bookings' ||
     value === 'teachers' ||
-    value === 'codes'
+    value === 'codes' ||
+    value === 'rooms'
   ) {
     return value;
   }

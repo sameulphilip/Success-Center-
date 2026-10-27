@@ -112,7 +112,9 @@ function ReportsPrintContent() {
               ? `/reports/bookings?from=${from}&to=${to}`
               : tab === 'codes'
                 ? `/reports/codes-handouts?from=${from}&to=${to}`
-                : `/reports/teachers?from=${from}&to=${to}`;
+                : tab === 'rooms'
+                  ? `/reports/rooms?from=${from}&to=${to}`
+                  : `/reports/teachers?from=${from}&to=${to}`;
     api<any>(path)
       .then(setData)
       .catch((e) =>
@@ -189,6 +191,9 @@ function ReportsPrintContent() {
         ) : null}
         {tab === 'codes' ? (
           <CodesHandoutsReport data={data} selected={selected} />
+        ) : null}
+        {tab === 'rooms' ? (
+          <RoomsReport data={data} selected={selected} />
         ) : null}
 
         <ReportPrintFooter docNo={number} printedAt={printedAt} />
@@ -586,6 +591,10 @@ function TeachersReport({
               value={String(s.present)}
               tone="emerald"
             />
+            <ReportStat
+              label="حضور القاعات"
+              value={String(s.roomPresent || 0)}
+            />
             {!hideCollected ? (
               <ReportStat label="تحصيل الجلسات" value={money(s.collected)} />
             ) : (
@@ -630,6 +639,7 @@ function TeachersReport({
               'المدرس',
               'جلسات',
               'حضور',
+              'حضور القاعات',
               'نصيب المدرس',
               'نصيب السنتر',
               'الاستقبال',
@@ -640,6 +650,7 @@ function TeachersReport({
               t.name,
               String(t.sessionsCount),
               String(t.presentCount),
+              String(t.roomPresent || 0),
               money(t.teacherShare),
               money(t.centerShare),
               money(t.receptionShare),
@@ -650,7 +661,8 @@ function TeachersReport({
           />
           {(data.byTeacher || []).length ? (
             <p className="mt-2 text-[11px] text-[#0B2545]/55">
-              الإجمالي · جلسات {s.sessions} · حضور {s.present} · مدرسين{' '}
+              الإجمالي · جلسات {s.sessions} · حضور {s.present} · قاعات{' '}
+              {s.roomPresent || 0} · مدرسين{' '}
               {money(s.teacherShare)} · سنتر {money(s.centerShare)} · استقبال{' '}
               {money(s.receptionShare)} · سيستم {money(s.systemShare)} · صافي{' '}
               {money(s.netCenterShare)}
@@ -710,7 +722,7 @@ function TeachersReport({
           {(data.byTeacher || []).map((t: any) => (
             <ReportPrintBlock
               key={t.teacherId}
-              title={`${t.name} · ${t.sessionsCount} جلسة · حضور ${t.presentCount}`}
+              title={`${t.name} · ${t.sessionsCount} جلسة · حضور ${t.presentCount} · قاعات ${t.roomPresent || 0}`}
             >
               <p className="mb-2 text-[11px] text-[#0B2545]/55">
                 مسجّل {t.registeredCount}
@@ -1033,6 +1045,94 @@ function CodesHandoutsReport({
               row.settled ? 'اتصفت' : 'مفتوحة',
             ])}
             empty="لا مبيعات ملازم"
+          />
+        </ReportPrintBlock>
+      ) : null}
+    </>
+  );
+}
+
+function RoomsReport({
+  data,
+  selected,
+}: {
+  data: any;
+  selected: ReportSection[] | null;
+}) {
+  const s = data.summary || {};
+  return (
+    <>
+      {showSection(selected, 'summary') ? (
+        <ReportPrintBlock title="ملخص تأجير القاعات">
+          <ReportStatsGrid>
+            <ReportStat label="حجوزات" value={String(s.bookings || 0)} />
+            <ReportStat label="إجمالي التأجير" value={money(s.amount)} tone="gold" />
+            <ReportStat
+              label="طلاب حجز القاعة"
+              value={String(s.headcount || 0)}
+              tone="emerald"
+            />
+            <ReportStat label="إيجار ثابت" value={money(s.flatAmount)} />
+            <ReportStat label="حجز بالطالب" value={money(s.perStudentAmount)} />
+            <ReportStat label="نصيب الاستقبال" value={money(s.receptionShare)} />
+            <ReportStat label="نصيب السيستم" value={money(s.systemShare)} />
+            <ReportStat label="صافي السنتر" value={money(s.netCenter)} tone="emerald" />
+          </ReportStatsGrid>
+        </ReportPrintBlock>
+      ) : null}
+
+      {showSection(selected, 'by-room') ? (
+        <ReportPrintBlock title="حسب القاعة">
+          <ReportTable
+            headers={['القاعة', 'حجوزات', 'طلاب', 'المبلغ']}
+            rows={(data.byRoom || []).map((row: any) => [
+              row.name,
+              String(row.bookings),
+              String(row.headcount),
+              money(row.amount),
+            ])}
+            empty="لا يوجد تأجير قاعات في الفترة"
+          />
+        </ReportPrintBlock>
+      ) : null}
+
+      {showSection(selected, 'by-renter') ? (
+        <ReportPrintBlock title="حسب المستأجر">
+          <ReportTable
+            headers={['المستأجر', 'حجوزات', 'طلاب', 'المبلغ']}
+            rows={(data.byRenter || []).map((row: any) => [
+              row.name,
+              String(row.bookings),
+              String(row.headcount),
+              money(row.amount),
+            ])}
+            empty="لا يوجد مستأجرون في الفترة"
+          />
+        </ReportPrintBlock>
+      ) : null}
+
+      {showSection(selected, 'rooms-list') ? (
+        <ReportPrintBlock title={`تفاصيل الحجوزات · ${(data.rentals || []).length}`}>
+          <ReportTable
+            headers={[
+              'التاريخ',
+              'القاعة',
+              'المستأجر',
+              'النوع',
+              'طلاب',
+              'المبلغ',
+              'الدفع',
+            ]}
+            rows={(data.rentals || []).map((row: any) => [
+              row.date || '',
+              row.classroom || '',
+              row.title ? `${row.renterName} · ${row.title}` : row.renterName,
+              row.billingLabel || '',
+              row.billingMode === 'PER_STUDENT' ? String(row.headcount || 0) : '—',
+              money(row.amount),
+              row.methodLabel || '',
+            ])}
+            empty="لا يوجد تأجير قاعات في الفترة"
           />
         </ReportPrintBlock>
       ) : null}

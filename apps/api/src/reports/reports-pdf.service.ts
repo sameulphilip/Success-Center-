@@ -193,7 +193,7 @@ export class ReportsPdfService {
         .fillColor('#0B2545')
         .fontSize(12)
         .text(
-          `${t.name}  ·  ${t.sessionsCount} sessions  ·  present ${t.presentCount}  ·  registered ${t.registeredCount}`,
+          `${t.name}  ·  ${t.sessionsCount} sessions  ·  present ${t.presentCount}  ·  rooms ${t.roomPresent || 0}  ·  registered ${t.registeredCount}`,
         );
       doc.fillColor('#64748B').fontSize(9);
       for (const sess of t.sessions) {
