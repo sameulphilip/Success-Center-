@@ -160,6 +160,48 @@ export class OpsController {
     return this.ops.collectPayment(id, body, user?.userId);
   }
 
+  @Post('sessions/:id/exceptions')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER, RoleCode.RECEPTION)
+  requestException(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      studentId?: string;
+      phone?: string;
+      studentUid?: string;
+      studentName?: string;
+      parentPhone?: string;
+      gradeLevelId?: string;
+      method: SessionPayMethod;
+      vodafoneTxn?: string;
+      amount?: number;
+      discountReason?: string;
+      centerKeepsAll?: boolean;
+      note?: string;
+    },
+    @CurrentUser() user: { userId: string },
+  ) {
+    return this.ops.requestException(id, body, user?.userId);
+  }
+
+  @Post('exceptions/:id/approve')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  approveException(
+    @Param('id') id: string,
+    @CurrentUser() user: { userId: string },
+  ) {
+    return this.ops.reviewException(id, 'approve', user?.userId);
+  }
+
+  @Post('exceptions/:id/reject')
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER)
+  rejectException(
+    @Param('id') id: string,
+    @CurrentUser() user: { userId: string },
+  ) {
+    return this.ops.reviewException(id, 'reject', user?.userId);
+  }
+
   @Post('entries/:id/confirm')
   @Roles(RoleCode.SUPER_ADMIN, RoleCode.CENTER_MANAGER, RoleCode.RECEPTION)
   confirm(

@@ -13,6 +13,7 @@ import {
   Prisma,
   RefundReason,
   RoleCode,
+  SessionExceptionStatus,
   SessionPayMethod,
   SessionPayStatus,
 } from '@prisma/client';
@@ -235,6 +236,19 @@ export class OpsService {
         subject: true,
         entries: {
           include: { student: true, refunds: true },
+          orderBy: { createdAt: 'desc' },
+        },
+        exceptionRequests: {
+          include: {
+            student: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                phone: true,
+              },
+            },
+          },
           orderBy: { createdAt: 'desc' },
         },
         refunds: true,
@@ -591,16 +605,17 @@ export class OpsService {
    * Secondary students: one free attendance per teacher without a PAID form,
    * then form required — unless teacher is exempt (Palestine) or this session
    * was marked allowWithoutForm by admin.
+   * Returns the block message, or null when attendance is allowed.
    */
-  private async assertSecondaryFormGate(args: {
+  private async secondaryFormBlockMessage(args: {
     studentId: string;
     studentPhone?: string | null;
     gradeLevelId?: string | null;
     teacherId: string;
     sessionId?: string;
     allowWithoutForm?: boolean;
-  }) {
-    if (args.allowWithoutForm) return;
+  }): Promise<string | null> {
+    if (args.allowWithoutForm) return null;
 
     const teacher = await this.prisma.teacher.findUnique({
       where: { id: args.teacherId },
@@ -611,14 +626,14 @@ export class OpsService {
       },
     });
     if (!teacher) throw new NotFoundException('المدرس غير موجود');
-    if (teacher.allowWalkInWithoutForm) return;
+    if (teacher.allowWalkInWithoutForm) return null;
 
-    if (!args.gradeLevelId) return;
+    if (!args.gradeLevelId) return null;
     const grade = await this.prisma.gradeLevel.findUnique({
       where: { id: args.gradeLevelId },
       select: { nameAr: true },
     });
-    if (!grade || !FORM_REQUIRED_SECONDARY_GRADES.has(grade.nameAr)) return;
+    if (!grade || !FORM_REQUIRED_SECONDARY_GRADES.has(grade.nameAr)) return null;
 
     const phoneVariants = args.studentPhone
       ? phoneLookupVariants(args.studentPhone)
@@ -635,7 +650,7 @@ export class OpsService {
       },
       select: { id: true },
     });
-    if (paidForm) return;
+    if (paidForm) return null;
 
     const priorVisits = await this.prisma.sessionEntry.count({
       where: {
@@ -650,13 +665,23 @@ export class OpsService {
         session: { teacherId: args.teacherId },
       },
     });
-    if (priorVisits < 1) return;
+    if (priorVisits < 1) return null;
 
     const teacherName =
       `${teacher.firstName} ${teacher.lastName === '-' ? '' : teacher.lastName}`.trim();
-    throw new BadRequestException(
-      `طالب ثانوي حضر قبل كده عند ${teacherName} من غير استمارة مدفوعة. سجّل الاستمارة وادفعها الأول، أو استخدم مدرس مستثنى (فلسطين)، أو فعّل «سماح بدون استمارة» على الجلسة دي (أدمن).`,
-    );
+    return `طالب ثانوي حضر قبل كده عند ${teacherName} من غير استمارة مدفوعة. سجّله طلب استثناء، والجلسة مش هتتقفل غير لما مدير السنتر أو الأدمن يوافق.`;
+  }
+
+  private async assertSecondaryFormGate(args: {
+    studentId: string;
+    studentPhone?: string | null;
+    gradeLevelId?: string | null;
+    teacherId: string;
+    sessionId?: string;
+    allowWithoutForm?: boolean;
+  }) {
+    const message = await this.secondaryFormBlockMessage(args);
+    if (message) throw new BadRequestException(message);
   }
 
   async findStudent(query: {
@@ -828,6 +853,7 @@ export class OpsService {
       note?: string;
     },
     userId?: string,
+    opts?: { skipFormGate?: boolean },
   ) {
     const session = await this.prisma.classSession.findUnique({
       where: { id: sessionId },
@@ -895,14 +921,16 @@ export class OpsService {
       }
 
       await this.assertNotBlocked(student.id, session.teacherId);
-      await this.assertSecondaryFormGate({
-        studentId: student.id,
-        studentPhone: student.phone,
-        gradeLevelId: student.gradeLevelId,
-        teacherId: session.teacherId,
-        sessionId,
-        allowWithoutForm,
-      });
+      if (!opts?.skipFormGate) {
+        await this.assertSecondaryFormGate({
+          studentId: student.id,
+          studentPhone: student.phone,
+          gradeLevelId: student.gradeLevelId,
+          teacherId: session.teacherId,
+          sessionId,
+          allowWithoutForm,
+        });
+      }
 
       const existing = await this.prisma.sessionEntry.findUnique({
         where: {
@@ -1225,9 +1253,214 @@ export class OpsService {
     };
   }
 
+  async requestException(
+    sessionId: string,
+    data: {
+      studentId?: string;
+      phone?: string;
+      studentUid?: string;
+      studentName?: string;
+      parentPhone?: string;
+      gradeLevelId?: string;
+      method: SessionPayMethod;
+      vodafoneTxn?: string;
+      amount?: number;
+      discountReason?: string;
+      centerKeepsAll?: boolean;
+      note?: string;
+    },
+    userId?: string,
+  ) {
+    const session = await this.prisma.classSession.findUnique({
+      where: { id: sessionId },
+      select: {
+        id: true,
+        status: true,
+        feeAmount: true,
+        teacherId: true,
+        allowWithoutForm: true,
+      },
+    });
+    if (!session) throw new NotFoundException('الجلسة غير موجودة');
+    if (session.status !== ClassSessionStatus.OPEN) {
+      throw new BadRequestException('الجلسة مقفولة');
+    }
+
+    let student =
+      (await this.findStudent({
+        id: data.studentId,
+        phone: data.phone,
+        studentUid: data.studentUid,
+        name: data.studentName,
+      })) || null;
+    if (!student) {
+      student = await this.ensureWalkInStudent({
+        nameRaw: data.studentName || '',
+        phoneRaw: data.phone || '',
+        parentPhoneRaw: data.parentPhone || '',
+        gradeLevelId: data.gradeLevelId || '',
+      });
+    }
+    if (!student.isActive) {
+      throw new BadRequestException('حساب الطالب غير نشط');
+    }
+    await this.assertNotBlocked(student.id, session.teacherId);
+
+    const block = await this.secondaryFormBlockMessage({
+      studentId: student.id,
+      studentPhone: student.phone,
+      gradeLevelId: student.gradeLevelId,
+      teacherId: session.teacherId,
+      sessionId,
+      allowWithoutForm: Boolean(session.allowWithoutForm),
+    });
+    if (!block) {
+      throw new BadRequestException(
+        'الطالب ده مش محتاج استثناء — سجّله حضور عادي',
+      );
+    }
+
+    const listedFee = Number(session.feeAmount);
+    const amount =
+      data.amount != null && !Number.isNaN(Number(data.amount))
+        ? Number(data.amount)
+        : listedFee;
+    if (amount < 0 || amount > listedFee + 0.001) {
+      throw new BadRequestException('المبلغ غير صالح');
+    }
+    const discountReason = (data.discountReason || '').trim();
+    if (amount < listedFee - 0.001 && !discountReason) {
+      throw new BadRequestException('سبب الخصم مطلوب');
+    }
+    if (
+      data.method === SessionPayMethod.VODAFONE_CASH &&
+      !data.vodafoneTxn?.trim()
+    ) {
+      throw new BadRequestException('رقم عملية فودافون كاش مطلوب');
+    }
+
+    const existingEntry = await this.prisma.sessionEntry.findUnique({
+      where: { sessionId_studentId: { sessionId, studentId: student.id } },
+    });
+    if (
+      existingEntry &&
+      existingEntry.payStatus !== SessionPayStatus.REFUNDED
+    ) {
+      throw new BadRequestException('الطالب مسجّل في الجلسة بالفعل');
+    }
+
+    const payload = {
+      status: SessionExceptionStatus.PENDING,
+      amount,
+      method: data.method,
+      vodafoneTxn: data.vodafoneTxn?.trim() || null,
+      discountReason: amount < listedFee - 0.001 ? discountReason : null,
+      centerKeepsAll:
+        amount < listedFee - 0.001 && Boolean(data.centerKeepsAll),
+      note: data.note?.trim() || null,
+      requestedByUserId: userId || null,
+      reviewedByUserId: null,
+      reviewedAt: null,
+      entryId: null,
+    };
+
+    const saved = await this.prisma.sessionExceptionRequest.upsert({
+      where: { sessionId_studentId: { sessionId, studentId: student.id } },
+      create: { sessionId, studentId: student.id, ...payload },
+      update: payload,
+      include: {
+        student: {
+          select: { id: true, firstName: true, lastName: true, phone: true },
+        },
+      },
+    });
+    return saved;
+  }
+
+  async reviewException(
+    id: string,
+    decision: 'approve' | 'reject',
+    userId?: string,
+  ) {
+    const request = await this.prisma.sessionExceptionRequest.findUnique({
+      where: { id },
+      include: { session: true, student: true },
+    });
+    if (!request) throw new NotFoundException('طلب الاستثناء غير موجود');
+    if (request.status !== SessionExceptionStatus.PENDING) {
+      throw new BadRequestException('الطلب ده اتراجع قبل كده');
+    }
+    if (request.session.status !== ClassSessionStatus.OPEN) {
+      throw new BadRequestException('الجلسة مقفولة');
+    }
+
+    if (decision === 'reject') {
+      return this.prisma.sessionExceptionRequest.update({
+        where: { id },
+        data: {
+          status: SessionExceptionStatus.REJECTED,
+          reviewedByUserId: userId || null,
+          reviewedAt: new Date(),
+        },
+        include: {
+          student: {
+            select: { id: true, firstName: true, lastName: true, phone: true },
+          },
+        },
+      });
+    }
+
+    const entry = await this.collectPayment(
+      request.sessionId,
+      {
+        studentId: request.studentId,
+        method: request.method,
+        vodafoneTxn: request.vodafoneTxn || undefined,
+        amount: Number(request.amount),
+        discountReason: request.discountReason || undefined,
+        centerKeepsAll: request.centerKeepsAll,
+        note: request.note || undefined,
+      },
+      userId,
+      { skipFormGate: true },
+    );
+
+    return this.prisma.sessionExceptionRequest.update({
+      where: { id },
+      data: {
+        status: SessionExceptionStatus.APPROVED,
+        reviewedByUserId: userId || null,
+        reviewedAt: new Date(),
+        entryId: entry.id,
+      },
+      include: {
+        student: {
+          select: { id: true, firstName: true, lastName: true, phone: true },
+        },
+      },
+    });
+  }
+
   async closeSession(sessionId: string, userId?: string) {
     const session = await this.getSession(sessionId);
     if (session.status === ClassSessionStatus.CLOSED) return session;
+
+    const pending = await this.prisma.sessionExceptionRequest.findMany({
+      where: { sessionId, status: SessionExceptionStatus.PENDING },
+      include: {
+        student: { select: { firstName: true, lastName: true } },
+      },
+    });
+    if (pending.length) {
+      const names = pending
+        .map((r) =>
+          `${r.student.firstName} ${r.student.lastName === '-' ? '' : r.student.lastName}`.trim(),
+        )
+        .join('، ');
+      throw new BadRequestException(
+        `الجلسة مش هتتقفل. فيه ${pending.length} طلب استثناء مستني موافقة مدير السنتر أو الأدمن: ${names}`,
+      );
+    }
 
     const confirmed = session.entries.filter(
       (e) =>

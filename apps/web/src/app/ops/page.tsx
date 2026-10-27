@@ -57,6 +57,20 @@ type Session = {
   entriesTotal?: number;
   entriesNet?: number;
   entries?: Entry[];
+  exceptionRequests?: ExceptionRequest[];
+};
+
+type ExceptionRequest = {
+  id: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  amount: string | number;
+  method: string;
+  student: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    phone?: string | null;
+  };
 };
 
 function centerCutOf(s: {
@@ -202,6 +216,10 @@ export default function OpsPage() {
   >('all');
   const [selectedId, setSelectedId] = useState('');
   const [detail, setDetail] = useState<Session | null>(null);
+  const [exceptionOffer, setExceptionOffer] = useState<null | {
+    message: string;
+    body: Record<string, unknown>;
+  }>(null);
   const editLocked = detail?.status === 'CLOSED' && !!detail?.teacherPaidAt;
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [grades, setGrades] = useState<GradeLevel[]>([]);
@@ -434,10 +452,12 @@ export default function OpsPage() {
         });
         return;
       }
+      let lookedUp: Student | null = null;
       try {
         const student = await api<Student>(
           `/ops/students/lookup?qr=${encodeURIComponent(raw.trim())}`,
         );
+        lookedUp = student;
         const name =
           `${student.firstName} ${student.lastName === '-' ? '' : student.lastName}`.trim();
         const teacherName = detail?.teacher
@@ -492,7 +512,19 @@ export default function OpsPage() {
         setScanOpen(false);
         const msg = String(err?.message || 'QR غير معروف');
         const formGate =
-          msg.includes('استمارة') || msg.includes('طالب ثانوي');
+          msg.includes('استمارة') ||
+          msg.includes('طالب ثانوي') ||
+          msg.includes('طلب استثناء');
+        if (formGate && lookedUp) {
+          setExceptionOffer({
+            message: msg,
+            body: {
+              studentId: lookedUp.id,
+              studentUid: lookedUp.studentUid,
+              method: 'CASH',
+            },
+          });
+        }
         setScanNotice({
           tone: 'error',
           title: formGate ? 'الاستمارة مطلوبة' : 'مرفوض',
@@ -710,19 +742,105 @@ export default function OpsPage() {
         centerKeepsAll: false,
       });
       setScanned(null);
+      setExceptionOffer(null);
       await refreshAfterEntry(selectedId);
       setMsg('تم تسجيل الدفع والحضور');
     } catch (err: any) {
       const msg = String(err?.message || 'تعذّر تسجيل الدفع');
-      if (msg.includes('استمارة') || msg.includes('طالب ثانوي')) {
+      if (
+        msg.includes('استمارة') ||
+        msg.includes('طالب ثانوي') ||
+        msg.includes('طلب استثناء')
+      ) {
+        const listedFee = sessionListedFee(detail);
+        const amount = resolvePayAmount(
+          listedFee,
+          payForm.payMode,
+          payForm.customAmount,
+        );
+        const needsReason = amount < listedFee - 0.001;
+        setExceptionOffer({
+          message: msg,
+          body: {
+            studentId:
+              scanned?.id ||
+              (payMatch.status === 'found' ? payMatch.student?.id : undefined),
+            phone: scanned ? undefined : payForm.phone.trim() || undefined,
+            studentUid: scanned?.studentUid,
+            studentName: scanned
+              ? undefined
+              : payForm.studentName.trim() || undefined,
+            parentPhone:
+              !scanned &&
+              payMatch.status === 'missing' &&
+              !detail?.allowWithoutForm
+                ? payForm.parentPhone.trim() || undefined
+                : undefined,
+            gradeLevelId:
+              !scanned &&
+              payMatch.status === 'missing' &&
+              !detail?.allowWithoutForm
+                ? payForm.gradeLevelId || undefined
+                : undefined,
+            method: payForm.method,
+            vodafoneTxn:
+              payForm.method === 'VODAFONE_CASH'
+                ? payForm.vodafoneTxn
+                : undefined,
+            amount,
+            discountReason: needsReason
+              ? payForm.discountReason.trim()
+              : undefined,
+            centerKeepsAll: needsReason ? payForm.centerKeepsAll : undefined,
+          },
+        });
         setScanNotice({
           tone: 'error',
           title: 'الاستمارة مطلوبة',
           message: msg,
         });
       } else {
+        setExceptionOffer(null);
         setError(msg);
       }
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function submitException() {
+    if (!selectedId || !exceptionOffer) return;
+    setBusy('exception');
+    setError('');
+    try {
+      await api(`/ops/sessions/${selectedId}/exceptions`, {
+        method: 'POST',
+        body: JSON.stringify(exceptionOffer.body),
+      });
+      setExceptionOffer(null);
+      await refreshAfterEntry(selectedId);
+      setMsg('اتسجل طلب الاستثناء. الجلسة مش هتتقفل غير بعد موافقة المدير');
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function reviewException(id: string, decision: 'approve' | 'reject') {
+    if (!selectedId) return;
+    setBusy(`ex-${id}`);
+    setError('');
+    try {
+      await api(`/ops/exceptions/${id}/${decision}`, { method: 'POST' });
+      await refreshAfterEntry(selectedId);
+      setMsg(
+        decision === 'approve'
+          ? 'اتوافق على الاستثناء واتسجل الحضور'
+          : 'اترفض طلب الاستثناء',
+      );
+    } catch (err: any) {
+      setError(err.message);
     } finally {
       setBusy('');
     }
@@ -1222,7 +1340,10 @@ export default function OpsPage() {
                 <li key={s.id}>
                   <button
                     type="button"
-                    onClick={() => setSelectedId(s.id)}
+                    onClick={() => {
+                      setExceptionOffer(null);
+                      setSelectedId(s.id);
+                    }}
                     className={`w-full min-h-11 rounded-xl px-3 py-2.5 text-right text-sm transition ${
                       selectedId === s.id
                         ? 'bg-[#0B2545] text-white'
@@ -1409,10 +1530,19 @@ export default function OpsPage() {
                       <button
                         type="button"
                         className="btn-ghost w-full min-[480px]:w-auto"
-                        disabled={busy === 'close'}
+                        disabled={
+                          busy === 'close' ||
+                          (detail.exceptionRequests || []).some(
+                            (r) => r.status === 'PENDING',
+                          )
+                        }
                         onClick={closeSession}
                       >
-                        قفل وتسوية
+                        {(detail.exceptionRequests || []).some(
+                          (r) => r.status === 'PENDING',
+                        )
+                          ? 'مستنية موافقة الاستثناء'
+                          : 'قفل وتسوية'}
                       </button>
                     ) : (
                       <div className="flex flex-col min-[480px]:flex-row min-[480px]:flex-wrap items-stretch min-[480px]:items-center gap-2">
@@ -1937,6 +2067,21 @@ export default function OpsPage() {
                         />
                       </FieldLabel>
                     ) : null}
+                    {exceptionOffer ? (
+                      <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 space-y-2">
+                        <p className="text-xs text-amber-950 leading-5">
+                          {exceptionOffer.message}
+                        </p>
+                        <button
+                          type="button"
+                          className="btn-primary w-full text-xs"
+                          disabled={busy === 'exception'}
+                          onClick={() => void submitException()}
+                        >
+                          سجّل طلب استثناء
+                        </button>
+                      </div>
+                    ) : null}
                     <button
                       type="submit"
                       className="btn-accent w-full"
@@ -1963,6 +2108,65 @@ export default function OpsPage() {
                       تأكيد الدفع ودخول الجلسة
                     </button>
                   </form>
+                ) : null}
+
+                {(detail.exceptionRequests || []).some(
+                  (r) => r.status === 'PENDING',
+                ) ? (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 space-y-2">
+                    <p className="text-xs font-bold text-amber-950">
+                      طلبات استثناء — الجلسة مش هتتقفل غير بعد الموافقة
+                    </p>
+                    {(detail.exceptionRequests || [])
+                      .filter((r) => r.status === 'PENDING')
+                      .map((r) => (
+                        <div
+                          key={r.id}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white px-2 py-2"
+                        >
+                          <div>
+                            <p className="text-sm font-semibold text-navy">
+                              {r.student.firstName}{' '}
+                              {r.student.lastName === '-'
+                                ? ''
+                                : r.student.lastName}
+                            </p>
+                            <p className="text-[11px] text-navy/45">
+                              {r.student.phone || '—'} ·{' '}
+                              {Number(r.amount).toLocaleString('en-EG')} ج.م
+                            </p>
+                          </div>
+                          {isManager ? (
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                className="btn-primary text-xs !py-1 !px-2"
+                                disabled={busy === `ex-${r.id}`}
+                                onClick={() =>
+                                  void reviewException(r.id, 'approve')
+                                }
+                              >
+                                موافقة
+                              </button>
+                              <button
+                                type="button"
+                                className="btn-ghost text-xs text-rose-700"
+                                disabled={busy === `ex-${r.id}`}
+                                onClick={() =>
+                                  void reviewException(r.id, 'reject')
+                                }
+                              >
+                                رفض
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-[11px] font-semibold text-amber-800">
+                              مستني موافقة المدير
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                  </div>
                 ) : null}
 
                 <div className="overflow-auto">

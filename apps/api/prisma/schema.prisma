@@ -111,6 +111,12 @@ enum RentalStatus {
   COMPLETED
 }
 
+enum SessionExceptionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 /** Flat fee vs center cut × student headcount (no student names). */
 enum RoomRentalBillingMode {
   FLAT
@@ -231,6 +237,7 @@ model Student {
   invoices          Invoice[]
   payments          Payment[]
   sessionEntries    SessionEntry[]
+  exceptionRequests SessionExceptionRequest[]
   blocks            StudentBlock[]
   onlineCodeSales   OnlineCodeSale[]
   handoutSales      HandoutSale[]
@@ -620,6 +627,7 @@ model ClassSession {
    */
   allowWithoutForm     Boolean            @default(false)
   entries              SessionEntry[]
+  exceptionRequests    SessionExceptionRequest[]
   refunds              SessionRefund[]
   handoutSales         HandoutSale[]
   createdAt            DateTime           @default(now())
@@ -627,6 +635,31 @@ model ClassSession {
 
   @@index([status, sessionDate])
   @@index([teacherId, sessionDate])
+}
+
+/// Repeat visit without a paid form. Session cannot close while any row is PENDING.
+model SessionExceptionRequest {
+  id                String                 @id @default(cuid())
+  sessionId         String
+  session           ClassSession           @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  studentId         String
+  student           Student                @relation(fields: [studentId], references: [id])
+  status            SessionExceptionStatus @default(PENDING)
+  amount            Decimal                @db.Decimal(12, 2)
+  method            SessionPayMethod       @default(CASH)
+  vodafoneTxn       String?
+  discountReason    String?
+  centerKeepsAll    Boolean                @default(false)
+  note              String?
+  requestedByUserId String?
+  reviewedByUserId  String?
+  reviewedAt        DateTime?
+  entryId           String?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  @@unique([sessionId, studentId])
+  @@index([sessionId, status])
 }
 
 model SessionEntry {
